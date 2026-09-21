@@ -1,0 +1,65 @@
+{
+  "capture": {
+    "monitor": 0,
+    "fps": 10,
+    "mmap_roi": [
+      45,
+      1009,
+      336,
+      277
+    ]
+  },
+  "locator": {
+    "local_radius": 450,
+    "radius_growth": 1.6,
+    "global_max_features": 100000,
+    "ratio": 0.8,
+    "min_inl": 4,
+    "min_inl_rate": 0.0,
+    "track_radius": 900,
+    "ratio_local": 0.99,
+    "min_inl_local": 2,
+    "min_inl_rate_local": 0.0,
+    "ratio_global": 0.9,
+    "min_inl_global": 5,
+    "min_inl_rate_global": 0.0,
+    "vote_need": 3,
+    "vote_frames": 5,
+    "vote_radius_px": 300,
+    "jump_gate_px": 3000,
+    "heading_gate_deg": 0,
+    "vote_inl_skip": 40,
+    "hold_frames": 5
+  },
+  "map": {
+    "name": "zestafona",
+    "file": "zestafona_map.png",
+    "thumb_factor": 8,
+    "size": 32768,
+    "gray_conv": "luma",
+    "gray_gamma": 1.0,
+    "mini_scale": 2.6544
+  },
+  "navigator": {
+    "key_source": "arduino",
+    "port": "COM6",
+    "arrive_r": 25.0,
+    "slow_r": 350.0,
+    "dead": 3.0,
+    "speed_cap_kmh": 79.0,
+    "xte_m": 4.0,
+    "poll": 0.033,
+    "brake_d": 260.0,
+    "dead_off": null,
+    "debug": false,
+    "last_preset": "test"
+  },
+  "window": {
+    "geometry": "1030x932+3374+396",
+    "zoomed": false
+  },
+  "debug": {
+    "collect_fail_logs": false
+  },
+  "_cfg_path": "config.json"
+}

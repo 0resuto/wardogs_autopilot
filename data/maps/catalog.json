@@ -1,0 +1,49 @@
+{
+  "repo": "owner/wardogs-autopilot",
+  "tag": "v1.0.0",
+  "base_url": "https://github.com/{repo}/releases/download/{tag}",
+  "maps": {
+    "zestafona": {
+      "display_name": "Zestafona",
+      "size": [
+        32768,
+        32768
+      ],
+      "mini_scale": 2.6544,
+      "files": {
+        "zestafona_map.png": {
+          "size": 604442507,
+          "sha256": "d8c20f1048609d76a897ea7d10368533f4ad1416b82679c8b340ab7a72e2c4e6"
+        }
+      }
+    },
+    "bakurani": {
+      "display_name": "Bakurani",
+      "size": [
+        16384,
+        16384
+      ],
+      "mini_scale": 2.6544,
+      "files": {
+        "bakurani_map.png": {
+          "size": 179380156,
+          "sha256": "d8bea1f309bcc36e8a1578d1c35cbfdb57b3ec28f31fc773b7d7a9c229f67d74"
+        }
+      }
+    },
+    "ozeti": {
+      "display_name": "Ozeti",
+      "size": [
+        32768,
+        32768
+      ],
+      "mini_scale": 2.6544,
+      "files": {
+        "ozeti_map.png": {
+          "size": 612385645,
+          "sha256": "dee6749f96845224f5100710c97089e73f31c752fc11186be8d2839dd80079ca"
+        }
+      }
+    }
+  }
+}
