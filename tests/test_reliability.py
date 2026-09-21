@@ -5,6 +5,7 @@
 4. HotkeyManager vk dispatch.
 5. ArduinoKeyDriver serial input drain.
 """
+
 import json
 import os
 import sys
@@ -26,7 +27,6 @@ from autopilot.vision import locator
 
 
 class TestReliabilityFixes(unittest.TestCase):
-
     def test_atomic_config_save(self):
         """Verify atomic config saving writes valid json and cleans up .tmp."""
         test_path = os.path.join(ROOT, "output", "test_config_atomic.json")

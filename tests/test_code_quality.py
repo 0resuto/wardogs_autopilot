@@ -1,4 +1,5 @@
 """Unit tests for input validation, boundary checking, and preset path sanitization."""
+
 import json
 import os
 import sys
@@ -20,7 +21,6 @@ def load_test_cfg():
 
 
 class TestCodeQuality(unittest.TestCase):
-
     def test_tune_range_validation(self):
         """_apply_tune() must reject out-of-range parameters and accept valid ones."""
         cfg = load_test_cfg()

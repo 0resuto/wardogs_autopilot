@@ -32,8 +32,8 @@ def build_debug_collage(
     diag: dict[str, Any],
 ) -> np.ndarray:
     """Build a 3x2 snapshot collage:
-        COLOR minimap  | RAW minimap  | PROCESSED minimap (UI-fill + pct 2..98)
-        COLOR map crop | RAW map crop | PROCESSED map crop (pct 2..98 + box)
+    COLOR minimap  | RAW minimap  | PROCESSED minimap (UI-fill + pct 2..98)
+    COLOR map crop | RAW map crop | PROCESSED map crop (pct 2..98 + box)
     """
     hh = 300
 
@@ -127,7 +127,9 @@ def build_debug_collage(
         _cap(blank, "map: no pose — cannot show the area", (0, 0, 255))
         p_map_color = p_map_raw = p_map_sys = blank
 
-    cells = [fit(p, hh) for p in (p_mm_color, p_mm_raw, p_mm_sys, p_map_color, p_map_raw, p_map_sys)]
+    cells = [
+        fit(p, hh) for p in (p_mm_color, p_mm_raw, p_mm_sys, p_map_color, p_map_raw, p_map_sys)
+    ]
     width = max(c.shape[1] for c in cells)
     cells = [pad(c, width) for c in cells]
     sep = np.full((4, 3 * width, 3), 40, np.uint8)

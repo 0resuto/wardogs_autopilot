@@ -37,13 +37,13 @@ class SteeringController:
         self.turn_deg = float(turn_deg)
         self.hold_max = float(hold_max)
 
-        self.steer = 0               # -1=A, 0=neutral, +1=D
-        self.steer_ph = 0            # micro-pulse tick counter
-        self.micro = False           # micro-tap mode
-        self.hold = False            # continuous steering on large errors
-        self.hold_err0 = 0.0         # |err| at hold-mode engagement
-        self.big_n = 0               # consecutive big-error ticks (debounce)
-        self.ang = 0.0               # heading angular velocity (deg/s)
+        self.steer = 0  # -1=A, 0=neutral, +1=D
+        self.steer_ph = 0  # micro-pulse tick counter
+        self.micro = False  # micro-tap mode
+        self.hold = False  # continuous steering on large errors
+        self.hold_err0 = 0.0  # |err| at hold-mode engagement
+        self.big_n = 0  # consecutive big-error ticks (debounce)
+        self.ang = 0.0  # heading angular velocity (deg/s)
         self.last_hd: float | None = None
         self.last_hd_t = 0.0
         self.settle_until = 0.0
@@ -106,11 +106,7 @@ class SteeringController:
         # flicker) must not engage continuous steering.
         self.big_n = self.big_n + 1 if abs(err) >= self.turn_deg else 0
 
-        fresh = (
-            mh is None
-            or mh_t > self.settle_mh
-            or now > self.settle_until + 0.5
-        )
+        fresh = mh is None or mh_t > self.settle_mh or now > self.settle_until + 0.5
 
         if self.steer == 0:
             if now > self.settle_until and fresh:
@@ -120,8 +116,7 @@ class SteeringController:
                     self.hold = self.big_n >= 2
                     self.hold_err0 = abs(err)
                     self.imp_end = now + (
-                        self.hold_max if self.hold
-                        else min(self.calc_impulse(abs(err)), self.t_max)
+                        self.hold_max if self.hold else min(self.calc_impulse(abs(err)), self.t_max)
                     )
                     self.press_t0 = now
                     self.press_h0 = heading
@@ -132,8 +127,7 @@ class SteeringController:
                     self.hold = self.big_n >= 2
                     self.hold_err0 = abs(err)
                     self.imp_end = now + (
-                        self.hold_max if self.hold
-                        else min(self.calc_impulse(abs(err)), self.t_max)
+                        self.hold_max if self.hold else min(self.calc_impulse(abs(err)), self.t_max)
                     )
                     self.press_t0 = now
                     self.press_h0 = heading
@@ -147,9 +141,7 @@ class SteeringController:
 
             rotated = abs(wrap180(heading - self.press_h0))
             press_age = now - self.press_t0
-            small = (
-                err < self.dead_off if self.steer == 1 else err > -self.dead_off
-            )
+            small = err < self.dead_off if self.steer == 1 else err > -self.dead_off
             if self.hold:
                 # Continuous steering: keep turning until the heading really
                 # aligns with the bearing (not an impulse timeout).

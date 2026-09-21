@@ -49,31 +49,20 @@ class RoutesTab(ttk.Frame):
         self.p_name = tk.StringVar()
         ttk.Entry(bar, textvariable=self.p_name, width=16).pack(side="left", padx=4)
         ttk.Button(bar, text="Save", command=self.preset_save).pack(side="left", padx=2)
-        ttk.Button(bar, text="Update", command=self.preset_overwrite).pack(
-            side="left", padx=2
-        )
+        ttk.Button(bar, text="Update", command=self.preset_overwrite).pack(side="left", padx=2)
         self.p_sel = ttk.Combobox(bar, state="readonly", width=16)
         self.p_sel.pack(side="left", padx=(10, 2))
-        ttk.Button(bar, text="Load", command=self.preset_load_sel).pack(
-            side="left", padx=2
-        )
-        ttk.Button(bar, text="Delete", command=self.preset_delete).pack(
-            side="left", padx=2
-        )
+        ttk.Button(bar, text="Load", command=self.preset_load_sel).pack(side="left", padx=2)
+        ttk.Button(bar, text="Delete", command=self.preset_delete).pack(side="left", padx=2)
 
         # Hint toolbar
         hint = ttk.Frame(self)
         hint.pack(fill="x", padx=6)
         ttk.Label(
             hint,
-            text=(
-                "LMB — add a point, drag — move, RMB — delete nearest, "
-                "wheel — zoom, MMB — pan"
-            ),
+            text=("LMB — add a point, drag — move, RMB — delete nearest, wheel — zoom, MMB — pan"),
         ).pack(side="left")
-        ttk.Button(hint, text="Clear all", command=self.routes_clear).pack(
-            side="right"
-        )
+        ttk.Button(hint, text="Clear all", command=self.routes_clear).pack(side="right")
 
         # Interactive Map Canvas
         self.canvas_widget = InteractiveMapCanvas(
@@ -92,21 +81,15 @@ class RoutesTab(ttk.Frame):
         # Bottom control bar
         ctl = ttk.Frame(self)
         ctl.pack(fill="x", padx=6, pady=(2, 6))
-        self.follow_btn = ttk.Button(
-            ctl, text="Follow route", command=self.follow_toggle
-        )
+        self.follow_btn = ttk.Button(ctl, text="Follow route", command=self.follow_toggle)
         self.follow_btn.pack(side="left")
         self.invert_var = tk.BooleanVar(value=False)
         self.invert_ck = ttk.Checkbutton(
             ctl, text="Invert", variable=self.invert_var, command=self.routes_invert
         )
         self.invert_ck.pack(side="left", padx=6)
-        self.dbg_var = tk.BooleanVar(
-            value=bool(self.app_cfg.navigator.debug)
-        )
-        self.dbg_ck = ttk.Checkbutton(
-            ctl, text="Nav log", variable=self.dbg_var
-        )
+        self.dbg_var = tk.BooleanVar(value=bool(self.app_cfg.navigator.debug))
+        self.dbg_ck = ttk.Checkbutton(ctl, text="Nav log", variable=self.dbg_var)
         self.dbg_ck.pack(side="left", padx=2)
         self.routes_status = ttk.Label(ctl, text="", foreground="#7cc4ff")
         self.routes_status.pack(side="left", padx=10, fill="x", expand=True)
@@ -131,7 +114,7 @@ class RoutesTab(ttk.Frame):
         path = self.preset_mgr.preset_path(name)
         if os.path.exists(path):
             messagebox.showinfo(
-                "Presets", f"Preset \"{name}\" already exists. Use \"Update\" to overwrite."
+                "Presets", f'Preset "{name}" already exists. Use "Update" to overwrite.'
             )
             return
         try:
@@ -164,7 +147,7 @@ class RoutesTab(ttk.Frame):
         try:
             pts = self.preset_mgr.load_preset(name)
         except Exception as exc:
-            messagebox.showerror("Presets", f"Failed to read preset \"{name}\": {exc}")
+            messagebox.showerror("Presets", f'Failed to read preset "{name}": {exc}')
             return
         self.route_pts = pts
         self.p_name.set(name)
@@ -175,7 +158,7 @@ class RoutesTab(ttk.Frame):
         name = self.p_sel.get().strip()
         if not name:
             return
-        if not messagebox.askyesno("Presets", f"Delete preset \"{name}\"?"):
+        if not messagebox.askyesno("Presets", f'Delete preset "{name}"?'):
             return
         self.preset_mgr.delete_preset(name)
         self.preset_reload()
@@ -208,7 +191,8 @@ class RoutesTab(ttk.Frame):
         nx, ny = self.canvas_widget.to_native(e.x, e.y)
         max_coord = float(self.canvas_widget._map_size)
         self.route_pts[self._drag_idx] = [
-            max(0.0, min(max_coord, nx)), max(0.0, min(max_coord, ny))
+            max(0.0, min(max_coord, nx)),
+            max(0.0, min(max_coord, ny)),
         ]
         self.routes_refresh()
 
@@ -243,9 +227,7 @@ class RoutesTab(ttk.Frame):
             p0, p1 = self.route_pts[i - 1], self.route_pts[i]
             d_px = math.hypot(p1[0] - p0[0], p1[1] - p0[1])
             length_m += d_px / 1.7
-        self.routes_status.config(
-            text=f"route: {len(self.route_pts)} pts, ~{int(length_m)} m"
-        )
+        self.routes_status.config(text=f"route: {len(self.route_pts)} pts, ~{int(length_m)} m")
 
     # Autopilot control
     def follow_toggle(self) -> None:
@@ -254,9 +236,7 @@ class RoutesTab(ttk.Frame):
             self.driver.stop()
             self.driver = None
             self.follow_btn.config(text="Follow route")
-            self.routes_status.config(
-                text="autopilot stopped", foreground="#7cc4ff"
-            )
+            self.routes_status.config(text="autopilot stopped", foreground="#7cc4ff")
             return
         if len(self.route_pts) < 2:
             messagebox.showerror("Routes", "Route not set (at least 2 points)")
@@ -267,9 +247,7 @@ class RoutesTab(ttk.Frame):
         try:
             kb = self._make_kb(nav_cfg.port)
         except (OSError, RuntimeError) as exc:
-            messagebox.showerror(
-                "Autopilot", f"Failed to create key driver:\n{exc}"
-            )
+            messagebox.showerror("Autopilot", f"Failed to create key driver:\n{exc}")
             return
 
         self.driver = FollowDriver(
@@ -281,9 +259,7 @@ class RoutesTab(ttk.Frame):
         )
         self.driver.start()
         self.follow_btn.config(text="Stop")
-        self.routes_status.config(
-            text="autopilot enabled", foreground="#8ae234"
-        )
+        self.routes_status.config(text="autopilot enabled", foreground="#8ae234")
 
     def _make_kb(self, port: str) -> Any:
         from ...hardware.arduino_keyboard import ArduinoKeyDriver
@@ -299,9 +275,7 @@ class RoutesTab(ttk.Frame):
             self.driver.stop()
             self.driver = None
             self.follow_btn.config(text="Follow route")
-            self.routes_status.config(
-                text="EMERGENCY STOP", foreground="#ff3b3b"
-            )
+            self.routes_status.config(text="EMERGENCY STOP", foreground="#ff3b3b")
 
     def sync_driver_state(self) -> None:
         """Main-thread poll: finalize the UI when the driver finished the route itself."""
@@ -309,13 +283,9 @@ class RoutesTab(ttk.Frame):
         if d is not None and d.state == "finished":
             self.driver = None
             self.follow_btn.config(text="Follow route")
-            self.routes_status.config(
-                text="route finished — autopilot off", foreground="#7cc4ff"
-            )
+            self.routes_status.config(text="route finished — autopilot off", foreground="#7cc4ff")
 
-    def _draw_overlay(
-        self, canvas: tk.Canvas, disp: tuple[float, float, float] | None
-    ) -> None:
+    def _draw_overlay(self, canvas: tk.Canvas, disp: tuple[float, float, float] | None) -> None:
         if disp is None:
             return
 
@@ -327,7 +297,14 @@ class RoutesTab(ttk.Frame):
             canvas.create_line(*flat, fill="#7ce06a", width=3, tags="route")
         for i, (cx, cy) in enumerate(pts):
             canvas.create_oval(
-                cx - 7, cy - 7, cx + 7, cy + 7, outline="#7ce06a", width=2, fill="#242424", tags="route"
+                cx - 7,
+                cy - 7,
+                cx + 7,
+                cy + 7,
+                outline="#7ce06a",
+                width=2,
+                fill="#242424",
+                tags="route",
             )
             canvas.create_text(
                 cx, cy, text=str(i + 1), fill="#ffffff", font=("Segoe UI", 9, "bold"), tags="route"
@@ -350,9 +327,14 @@ class RoutesTab(ttk.Frame):
         rad = math.radians(heading)
         alen = 28.0
         canvas.create_line(
-            x, y, x + alen * math.sin(rad), y - alen * math.cos(rad),
-            fill="#ff3b3b", width=3, arrow="last", arrowshape=(7, 9, 3), tags="rvmarker"
+            x,
+            y,
+            x + alen * math.sin(rad),
+            y - alen * math.cos(rad),
+            fill="#ff3b3b",
+            width=3,
+            arrow="last",
+            arrowshape=(7, 9, 3),
+            tags="rvmarker",
         )
-        canvas.create_oval(
-            x - 5, y - 5, x + 5, y + 5, outline="#ffdd00", width=2, tags="rvmarker"
-        )
+        canvas.create_oval(x - 5, y - 5, x + 5, y + 5, outline="#ffdd00", width=2, tags="rvmarker")

@@ -1,4 +1,5 @@
 """Unit test for SIFT minimap localization and cold start dark frame."""
+
 import os
 import sys
 import unittest
@@ -16,7 +17,6 @@ from autopilot.vision import locator
 
 
 class TestLocalization(unittest.TestCase):
-
     def setUp(self):
         locator.set_map("zestafona")
 
@@ -32,12 +32,20 @@ class TestLocalization(unittest.TestCase):
 
         mask = locator.make_mask()
         if mask.shape[:2] != mm.shape[:2]:
-            mask = cv2.resize(mask.astype(np.uint8), (mm.shape[1], mm.shape[0]),
-                              interpolation=cv2.INTER_NEAREST) > 0
+            mask = (
+                cv2.resize(
+                    mask.astype(np.uint8),
+                    (mm.shape[1], mm.shape[0]),
+                    interpolation=cv2.INTER_NEAREST,
+                )
+                > 0
+            )
 
         pose, diag = locator.global_pose(mm, mask, prev_xy=None, debug=True)
 
-        self.assertIsNotNone(pose, f"Localization failed: {diag.get('reject')} - {diag.get('detail')}")
+        self.assertIsNotNone(
+            pose, f"Localization failed: {diag.get('reject')} - {diag.get('detail')}"
+        )
         assert pose is not None
         self.assertGreaterEqual(pose.get("inl", 0), 10, "Inlier count below expected threshold")
 
@@ -56,8 +64,14 @@ class TestLocalization(unittest.TestCase):
         win, _ = locator._crop_win(mu, cy, cx, rh, rw)
         mask = locator.make_mask()
         if mask.shape[:2] != win.shape[:2]:
-            mask = cv2.resize(mask.astype(np.uint8), (win.shape[1], win.shape[0]),
-                              interpolation=cv2.INTER_NEAREST) > 0
+            mask = (
+                cv2.resize(
+                    mask.astype(np.uint8),
+                    (win.shape[1], win.shape[0]),
+                    interpolation=cv2.INTER_NEAREST,
+                )
+                > 0
+            )
 
         pose, diag = locator.global_pose(win, mask, prev_xy=None, debug=True)
         self.assertIsNotNone(pose, f"Synthetic localization failed: {diag.get('reject')}")

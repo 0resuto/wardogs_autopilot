@@ -64,7 +64,7 @@ def _sibling_info(path):
     cands = [stem + ".json", stem + ".txt"]
     for pre in ("debug_mm_", "debug_raw_", "debug_sheet_", "debug_collage_"):
         if base.startswith(pre):
-            ts = stem[len(pre):]
+            ts = stem[len(pre) :]
             cands += ["debug_info_" + ts + ".json", "debug_info_" + ts + ".txt"]
     for name in cands:
         p = os.path.join(d, name)
@@ -116,20 +116,17 @@ def _fit_h(panel, hh):
     if h == hh:
         return panel
     k = hh / float(h)
-    return cv2.resize(panel, (max(1, int(round(w * k))), hh),
-                      interpolation=cv2.INTER_AREA)
+    return cv2.resize(panel, (max(1, int(round(w * k))), hh), interpolation=cv2.INTER_AREA)
 
 
 def _pad_w(img, w):
     if img.shape[1] >= w:
         return img
-    return cv2.copyMakeBorder(img, 0, 0, 0, w - img.shape[1],
-                              cv2.BORDER_CONSTANT, value=30)
+    return cv2.copyMakeBorder(img, 0, 0, 0, w - img.shape[1], cv2.BORDER_CONSTANT, value=30)
 
 
 def _caption(img, text, color=(255, 255, 0)):
-    cv2.putText(img, text, (6, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color,
-                2, cv2.LINE_AA)
+    cv2.putText(img, text, (6, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2, cv2.LINE_AA)
 
 
 def _overview_marker(mu, cx_mu, cy_mu, title):
@@ -150,8 +147,7 @@ def _overview_marker(mu, cx_mu, cy_mu, title):
         cv2.circle(img, (px, py), 12, (0, 0, 255), 2)
         cv2.line(img, (px - 22, py), (px + 22, py), (0, 0, 255), 2)
         cv2.line(img, (px, py - 22), (px, py + 22), (0, 0, 255), 2)
-    cv2.putText(img, title, (6, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
-                (0, 255, 255), 2, cv2.LINE_AA)
+    cv2.putText(img, title, (6, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2, cv2.LINE_AA)
     return img
 
 
@@ -192,7 +188,7 @@ def compare_gray_sheet(gray, mask, pose, ms, open_sheet):
     y0 = max(0, int(round(cy * k)) - rc)
     x0 = max(0, int(round(cx * k)) - rc)
     side = min(2 * rc, cmap.shape[0] - y0, cmap.shape[1] - x0)
-    crop = cmap[y0:y0 + side, x0:x0 + side]
+    crop = cmap[y0 : y0 + side, x0 : x0 + side]
     c = np.cos(np.radians(th))
     t = np.sin(np.radians(th))
     cc, ss_ = c / s, t / s
@@ -213,28 +209,38 @@ def compare_gray_sheet(gray, mask, pose, ms, open_sheet):
     results.sort(key=lambda x: x[2], reverse=True)
     print("  gray conversion score (NCC vs real minimap, higher = closer):")
     for conv, gamma, ncc, _ in results:
-        print("    %-6s g=%.2f  NCC=%.3f%s" % (
-            conv, gamma, ncc, "*" if (conv, gamma) == results[0][:2] else ""))
+        print(
+            "    %-6s g=%.2f  NCC=%.3f%s"
+            % (conv, gamma, ncc, "*" if (conv, gamma) == results[0][:2] else "")
+        )
 
     panels = []
     for conv, gamma, ncc, pn in results:
         p = cv2.cvtColor(pn, cv2.COLOR_GRAY2BGR)
-        _caption(p, "%s g=%.2f  NCC=%.3f" % (conv, gamma, ncc),
-                 (0, 255, 255) if (conv, gamma) == results[0][:2] else (255, 255, 0))
+        _caption(
+            p,
+            "%s g=%.2f  NCC=%.3f" % (conv, gamma, ncc),
+            (0, 255, 255) if (conv, gamma) == results[0][:2] else (255, 255, 0),
+        )
         panels.append(_fit_h(p, hh))
     p_mm = cv2.cvtColor(mm_sys, cv2.COLOR_GRAY2BGR)
     _caption(p_mm, "real minimap (captured)", (0, 0, 255))
     row = np.hstack([p_mm] + panels)
     sheet = np.vstack([_pad_w(row, row.shape[1])])
-    sheet = np.vstack([_pad_w(row, row.shape[1]),
-                       np.full((28, row.shape[1], 3), 0, np.uint8)])
-    cv2.putText(sheet[-28:], "pose x=%.0f y=%.0f s=%.2f th=%.1f inl=%d  — "
-                "projected map under each gray conv vs captured minimap"
-                % (pose["map_x"], pose["map_y"], pose["s"], pose["th"],
-                   pose["inl"]), (8, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
-                (0, 255, 255), 1, cv2.LINE_AA)
-    out_path = os.path.join(OUT, "graycmp_%s.png"
-                            % time.strftime("%H%M%S"))
+    sheet = np.vstack([_pad_w(row, row.shape[1]), np.full((28, row.shape[1], 3), 0, np.uint8)])
+    cv2.putText(
+        sheet[-28:],
+        "pose x=%.0f y=%.0f s=%.2f th=%.1f inl=%d  — "
+        "projected map under each gray conv vs captured minimap"
+        % (pose["map_x"], pose["map_y"], pose["s"], pose["th"], pose["inl"]),
+        (8, 20),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.55,
+        (0, 255, 255),
+        1,
+        cv2.LINE_AA,
+    )
+    out_path = os.path.join(OUT, "graycmp_%s.png" % time.strftime("%H%M%S"))
     cv2.imwrite(out_path, sheet)
     print("  wrote %s" % out_path)
     if open_sheet:
@@ -261,36 +267,60 @@ def process(path, map_name, prev_xy, open_sheet, skip_gray_cmp=False):
     except OSError:
         mask = np.zeros_like(gray, bool)
     if mask.shape[:2] != gray.shape:
-        mask = cv2.resize(mask.astype(np.uint8), (gray.shape[1], gray.shape[0]),
-                          interpolation=cv2.INTER_NEAREST) > 0
+        mask = (
+            cv2.resize(
+                mask.astype(np.uint8),
+                (gray.shape[1], gray.shape[0]),
+                interpolation=cv2.INTER_NEAREST,
+            )
+            > 0
+        )
 
     t0 = time.time()
-    pose, diag = locator.global_pose(gray, mask, prev_xy=prev_xy, debug=True,
-                                     budget=None)
+    pose, diag = locator.global_pose(gray, mask, prev_xy=prev_xy, debug=True, budget=None)
     secs = time.time() - t0
 
     print("\n%s  (%dx%d  map=%s)" % (base, gray.shape[1], gray.shape[0], map_name))
     if ctx is not None:
         lmp = "live pose (%.0f,%.0f) good=%s mode=%s reject=%s prev=%s" % (
-            float(ctx.get("map_x") or 0), float(ctx.get("map_y") or 0),
-            ctx.get("good"), ctx.get("mode"), ctx.get("reject"),
-            ctx.get("prev"))
+            float(ctx.get("map_x") or 0),
+            float(ctx.get("map_y") or 0),
+            ctx.get("good"),
+            ctx.get("mode"),
+            ctx.get("reject"),
+            ctx.get("prev"),
+        )
         print("  live snapshot context: %s" % lmp)
     if pose is not None:
-        print("  pose: x=%.0f y=%.0f s=%.2f th=%.1f inl=%d n_match=%d  "
-              "mode=%s  (%.2fs)" % (pose["map_x"], pose["map_y"], pose["s"],
-                                    pose["th"], pose["inl"], pose["n_match"],
-                                    diag.get("mode"), secs))
+        print(
+            "  pose: x=%.0f y=%.0f s=%.2f th=%.1f inl=%d n_match=%d  "
+            "mode=%s  (%.2fs)"
+            % (
+                pose["map_x"],
+                pose["map_y"],
+                pose["s"],
+                pose["th"],
+                pose["inl"],
+                pose["n_match"],
+                diag.get("mode"),
+                secs,
+            )
+        )
         cx, cy = pose["map_x"] / ms, pose["map_y"] / ms
         s = pose["s"]
     else:
         cx = cy = None
         s = 1.0
-        print("  NO pose: reject=%s  %s" % (diag.get("reject"),
-                                            diag.get("detail")))
-    print("  mm_mean=%.0f mm_std=%.0f kp_mm=%d mask=%d%%"
-          % (diag.get("mm_mean") or 0, diag.get("mm_std") or 0,
-             diag.get("kp_mm") or 0, int(100 * (diag.get("mm_mask_frac") or 0))))
+        print("  NO pose: reject=%s  %s" % (diag.get("reject"), diag.get("detail")))
+    print(
+        "  mm_mean=%.0f mm_std=%.0f kp_mm=%d mask=%d%%"
+        % (
+            diag.get("mm_mean") or 0,
+            diag.get("mm_std") or 0,
+            diag.get("kp_mm") or 0,
+            int(100 * (diag.get("mm_mask_frac") or 0)),
+        )
+    )
 
     if pose is not None and pose.get("inl", 0) > 0 and not skip_gray_cmp:
         compare_gray_sheet(gray, mask, pose, ms, open_sheet)
@@ -305,8 +335,7 @@ def process(path, map_name, prev_xy, open_sheet, skip_gray_cmp=False):
     _caption(p_mm_proc, "minimap: PROCESSED (as SIFT sees it)")
 
     # --- map side: the target window and the same normalize it gets
-    blank = np.full((max(60, gray.shape[0]), max(60, gray.shape[1]), 3),
-                    30, np.uint8)
+    blank = np.full((max(60, gray.shape[0]), max(60, gray.shape[1]), 3), 30, np.uint8)
     _caption(blank, "map: no pose — cannot show the area", (0, 0, 255))
     if cx is not None:
         rw = int(round(max(gray.shape[1], gray.shape[0]) / 2.0 * s)) + 20
@@ -317,16 +346,27 @@ def process(path, map_name, prev_xy, open_sheet, skip_gray_cmp=False):
         th_r = np.radians(pose["th"]) if pose is not None else 0.0
         a, b = s * np.cos(th_r), s * np.sin(th_r)
         ccx, ccy = p_map_norm.shape[1] / 2.0, p_map_norm.shape[0] / 2.0
-        box = np.array([
-            (ccx + a * (-gray.shape[1] / 2) - b * (-gray.shape[0] / 2),
-             ccy + b * (-gray.shape[1] / 2) + a * (-gray.shape[0] / 2)),
-            (ccx + a * (gray.shape[1] / 2) - b * (-gray.shape[0] / 2),
-             ccy + b * (gray.shape[1] / 2) + a * (-gray.shape[0] / 2)),
-            (ccx + a * (gray.shape[1] / 2) - b * (gray.shape[0] / 2),
-             ccy + b * (gray.shape[1] / 2) + a * (gray.shape[0] / 2)),
-            (ccx + a * (-gray.shape[1] / 2) - b * (gray.shape[0] / 2),
-             ccy + b * (-gray.shape[1] / 2) + a * (gray.shape[0] / 2)),
-        ], np.float32).reshape(-1, 1, 2)
+        box = np.array(
+            [
+                (
+                    ccx + a * (-gray.shape[1] / 2) - b * (-gray.shape[0] / 2),
+                    ccy + b * (-gray.shape[1] / 2) + a * (-gray.shape[0] / 2),
+                ),
+                (
+                    ccx + a * (gray.shape[1] / 2) - b * (-gray.shape[0] / 2),
+                    ccy + b * (gray.shape[1] / 2) + a * (-gray.shape[0] / 2),
+                ),
+                (
+                    ccx + a * (gray.shape[1] / 2) - b * (gray.shape[0] / 2),
+                    ccy + b * (gray.shape[1] / 2) + a * (gray.shape[0] / 2),
+                ),
+                (
+                    ccx + a * (-gray.shape[1] / 2) - b * (gray.shape[0] / 2),
+                    ccy + b * (-gray.shape[1] / 2) + a * (gray.shape[0] / 2),
+                ),
+            ],
+            np.float32,
+        ).reshape(-1, 1, 2)
         cv2.polylines(p_map_norm, [np.int32(box)], True, (0, 255, 0), 2)
         cv2.circle(p_map_norm, (int(ccx), int(ccy)), 5, (0, 0, 255), -1)
         _caption(p_map_norm, "map: PROCESSED crop + mm box")
@@ -337,7 +377,7 @@ def process(path, map_name, prev_xy, open_sheet, skip_gray_cmp=False):
             x0 = max(0, int(round((cx - rw) * k)))
             r = int(round(2 * rw * k))
             r = min(r, cmap.shape[0] - y0, cmap.shape[1] - x0)
-            p_map_color = cmap[y0:y0 + r, x0:x0 + r].copy()
+            p_map_color = cmap[y0 : y0 + r, x0 : x0 + r].copy()
             cv2.circle(p_map_color, (r // 2, r // 2), 5, (0, 0, 255), -1)
             _caption(p_map_color, "map: RAW color crop", (0, 255, 255))
         except Exception as exc:  # noqa: BLE001
@@ -362,35 +402,43 @@ def process(path, map_name, prev_xy, open_sheet, skip_gray_cmp=False):
     sheet = np.vstack(rows)
 
     info = "mode=%s reject=%s detail=%s  prev=%s  (%.2fs)" % (
-        diag.get("mode"), diag.get("reject"), diag.get("detail"),
-        prev_xy if prev_xy else "-", secs)
+        diag.get("mode"),
+        diag.get("reject"),
+        diag.get("detail"),
+        prev_xy if prev_xy else "-",
+        secs,
+    )
     bar = np.full((28, sheet.shape[1], 3), 0, np.uint8)
-    cv2.putText(bar, info[:min(len(info), 150)],
-                (8, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 1,
-                cv2.LINE_AA)
+    cv2.putText(
+        bar,
+        info[: min(len(info), 150)],
+        (8, 20),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.55,
+        (0, 255, 255),
+        1,
+        cv2.LINE_AA,
+    )
     sheet = np.vstack([bar, sheet])
 
     os.makedirs(OUT, exist_ok=True)
-    out_path = os.path.join(OUT, "map_match_%s.png"
-                            % time.strftime("%H%M%S"))
+    out_path = os.path.join(OUT, "map_match_%s.png" % time.strftime("%H%M%S"))
     cv2.imwrite(out_path, sheet)
     print("wrote %s" % out_path)
     if open_sheet:
-        os.startfile(out_path)   # Windows only — fine for this machine
+        os.startfile(out_path)  # Windows only — fine for this machine
     return out_path
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("frames", nargs="+",
-                    help="saved raw minimap frame(s) to localize")
+    ap.add_argument("frames", nargs="+", help="saved raw minimap frame(s) to localize")
     ap.add_argument("--map", default=_map_name())
-    ap.add_argument("--prev", default=None,
-                    help="prev position 'x,y' in native map px (hot start)")
-    ap.add_argument("--no-open", action="store_true",
-                    help="do not open the result sheet")
-    ap.add_argument("--no-gray-cmp", action="store_true",
-                    help="skip the gray-conversion NCC comparison sheet")
+    ap.add_argument("--prev", default=None, help="prev position 'x,y' in native map px (hot start)")
+    ap.add_argument("--no-open", action="store_true", help="do not open the result sheet")
+    ap.add_argument(
+        "--no-gray-cmp", action="store_true", help="skip the gray-conversion NCC comparison sheet"
+    )
     a = ap.parse_args()
     prev = None
     if a.prev:

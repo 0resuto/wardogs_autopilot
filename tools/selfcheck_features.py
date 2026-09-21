@@ -37,7 +37,7 @@ def _check(name, cond, extra=""):
 
 
 def _crop(mu, cx, cy):
-    return mu[cy - H // 2:cy - H // 2 + H, cx - W // 2:cx - W // 2 + W]
+    return mu[cy - H // 2 : cy - H // 2 + H, cx - W // 2 : cx - W // 2 + W]
 
 
 def _pick_center(mu):
@@ -64,48 +64,55 @@ def _synthetic_mm(mu, cx, cy):
     """337x278 minimap of the map around (cx,cy), rotated 35deg, scaled 1.15."""
     crop = _crop(mu, cx, cy)
     R = cv2.getRotationMatrix2D((W / 2.0, H / 2.0), -ANGLE, 1.0)
-    rot = cv2.warpAffine(crop, R, (W, H), flags=cv2.INTER_LINEAR,
-                         borderMode=cv2.BORDER_REPLICATE)
-    mm = cv2.resize(rot, (int(round(W * SCALE)), int(round(H * SCALE))),
-                    interpolation=cv2.INTER_LINEAR)
+    rot = cv2.warpAffine(crop, R, (W, H), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+    mm = cv2.resize(
+        rot, (int(round(W * SCALE)), int(round(H * SCALE))), interpolation=cv2.INTER_LINEAR
+    )
     return mm
 
 
 def _pose_ok(pose, diag, expected):
     if pose is None:
-        return False, "pose is None (reject=%s %s)" % (
-            diag.get("reject"), diag.get("detail"))
+        return False, "pose is None (reject=%s %s)" % (diag.get("reject"), diag.get("detail"))
     if pose["inl"] < 4:
         return False, "inl=%d < 4" % pose["inl"]
     err = math.hypot(pose["map_x"] - expected[0], pose["map_y"] - expected[1])
     if err >= TOL_NATIVE_PX:
         return False, "pos err %.0f px (tol %.0f)" % (err, TOL_NATIVE_PX)
-    return True, "err=%.0fpx inl=%d mode=%s" % (
-        err, pose["inl"], diag.get("mode"))
+    return True, "err=%.0fpx inl=%d mode=%s" % (err, pose["inl"], diag.get("mode"))
 
 
 def _run_mode(mu, cx, cy, mm, expected):
     print("--- feature-index run ---")
-    locator._loc_cfg = lambda: dict(local_radius=450.0,
-                                    radius_growth=1.6, global_max_features=60000,
-                                    ratio=0.80, min_inl=4, min_inl_rate=0.0)
+    locator._loc_cfg = lambda: dict(
+        local_radius=450.0,
+        radius_growth=1.6,
+        global_max_features=60000,
+        ratio=0.80,
+        min_inl=4,
+        min_inl_rate=0.0,
+    )
     ui = np.zeros(mm.shape[:2], bool)
 
-    pose, diag = locator.global_pose(mm, ui, prev_xy=None, debug=True,
-                                     budget=30.0)
+    pose, diag = locator.global_pose(mm, ui, prev_xy=None, debug=True, budget=30.0)
     ok, info = _pose_ok(pose, diag, expected)
     _check("cold start found pose", ok, info)
     if ok:
-        _check("cold start used the feature index", diag.get("mode") == "index",
-               "mode=%s (expected index)" % diag.get("mode"))
+        _check(
+            "cold start used the feature index",
+            diag.get("mode") == "index",
+            "mode=%s (expected index)" % diag.get("mode"),
+        )
 
-    pose, diag = locator.global_pose(mm, ui, prev_xy=expected, debug=True,
-                                     budget=30.0)
+    pose, diag = locator.global_pose(mm, ui, prev_xy=expected, debug=True, budget=30.0)
     ok, info = _pose_ok(pose, diag, expected)
     _check("hot start found pose", ok, info)
     if ok:
-        _check("hot start used the feature index", diag.get("mode") == "index",
-               "mode=%s (expected index)" % diag.get("mode"))
+        _check(
+            "hot start used the feature index",
+            diag.get("mode") == "index",
+            "mode=%s (expected index)" % diag.get("mode"),
+        )
 
 
 def _test_vote():
@@ -115,16 +122,18 @@ def _test_vote():
 
     dbuf = tracker._vote_decide
     cases = [
-        ([], 3, 300.0, (1000, 1000), False),                       # lone candidate
-        ([(1000, 1000), (1010, 998)], 3, 300.0, (1005, 1003), True),   # 3 agree
-        ([(0, 0), (5000, 0), (0, 5000)], 3, 300.0, (3, 2), False),   # scattered
-        ([(0, 0), (5000, 0)], 3, 300.0, (1004, 1000), False),        # 2+1 far apart
+        ([], 3, 300.0, (1000, 1000), False),  # lone candidate
+        ([(1000, 1000), (1010, 998)], 3, 300.0, (1005, 1003), True),  # 3 agree
+        ([(0, 0), (5000, 0), (0, 5000)], 3, 300.0, (3, 2), False),  # scattered
+        ([(0, 0), (5000, 0)], 3, 300.0, (1004, 1000), False),  # 2+1 far apart
     ]
     for buf, need, rad, new, want in cases:
         got = dbuf(list(buf), need, rad, new)
-        _check("vote_decide cluster=%s want=%s" % (new, "accept" if want else "reject"),
-               (got is not None) == want,
-               "got=%s" % got)
+        _check(
+            "vote_decide cluster=%s want=%s" % (new, "accept" if want else "reject"),
+            (got is not None) == want,
+            "got=%s" % got,
+        )
 
 
 def main():
@@ -135,27 +144,31 @@ def main():
     if idx is not None:
         print("index: %s features=%d" % (idx.name, idx.total_features()))
     else:
-        print("WARNING: no feature index — build it first: "
-              "python -m autopilot.vision.featureindex --build zestafona")
+        print(
+            "WARNING: no feature index — build it first: "
+            "python -m autopilot.vision.featureindex --build zestafona"
+        )
 
     center = _pick_center(mu)
-    print("test center (mu): %s  native: %s" % (center,
-                                                 (center[0] * ms, center[1] * ms)))
+    print("test center (mu): %s  native: %s" % (center, (center[0] * ms, center[1] * ms)))
     if center is None:
         _check("textured center found", False, "no good-textured window")
         sys.exit(1)
     cx, cy = center
     mm = _synthetic_mm(mu, cx, cy)
     expected = (cx * ms, cy * ms)
-    print("synthetic minimap: %s (s=%.2f) expected=(%.0f,%.0f)"
-          % (mm.shape, SCALE, expected[0], expected[1]))
+    print(
+        "synthetic minimap: %s (s=%.2f) expected=(%.0f,%.0f)"
+        % (mm.shape, SCALE, expected[0], expected[1])
+    )
 
     _run_mode(mu, cx, cy, mm, expected)
 
     _test_vote()
 
-    print("---- %d check(s) failed ----" % len(_FAILED) if _FAILED
-          else "---- all checks passed ----")
+    print(
+        "---- %d check(s) failed ----" % len(_FAILED) if _FAILED else "---- all checks passed ----"
+    )
     sys.exit(1 if _FAILED else 0)
 
 

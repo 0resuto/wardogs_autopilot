@@ -1,4 +1,5 @@
 """Unit tests for debug log pruning and map cache status."""
+
 import json
 import os
 import sys
@@ -19,7 +20,6 @@ def load_test_cfg():
 
 
 class TestPruningAndCache(unittest.TestCase):
-
     def test_config_defaults(self):
         """collect_fail_logs must be False by default in config.json."""
         cfg = load_test_cfg()
@@ -58,8 +58,11 @@ class TestPruningAndCache(unittest.TestCase):
                 f.write("{}\n")
 
         try:
-            old_logs = sorted(p for p in os.listdir(out_dir)
-                              if p.startswith("nav_dbg_unit_") and p.endswith(".jsonl"))
+            old_logs = sorted(
+                p
+                for p in os.listdir(out_dir)
+                if p.startswith("nav_dbg_unit_") and p.endswith(".jsonl")
+            )
             while len(old_logs) >= 10:
                 os.remove(os.path.join(out_dir, old_logs[0]))
                 old_logs.pop(0)

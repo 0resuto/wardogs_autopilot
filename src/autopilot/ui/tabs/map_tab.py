@@ -57,22 +57,18 @@ class MapTab(ttk.Frame):
         )
         self.map_status = ttk.Label(top, text="", foreground="#7cc4ff")
         self.map_status.pack(side="left", fill="x", expand=True)
-        ttk.Label(
-            top, text="wheel - zoom, MMB - pan", foreground="#8a8a8a"
-        ).pack(side="right", padx=(8, 0))
+        ttk.Label(top, text="wheel - zoom, MMB - pan", foreground="#8a8a8a").pack(
+            side="right", padx=(8, 0)
+        )
 
         # Locator tuning bar
         tune = ttk.Frame(self)
         tune.pack(fill="x", padx=8, pady=(0, 2))
-        ttk.Label(tune, text="locator tune:", foreground="#8a8a8a").pack(
-            side="left"
-        )
+        ttk.Label(tune, text="locator tune:", foreground="#8a8a8a").pack(side="left")
 
         trk = ttk.Frame(tune)
         trk.pack(side="left", padx=(4, 0))
-        ttk.Label(trk, text="TRACK", foreground="#7cc4ff").pack(
-            side="left", padx=(0, 4)
-        )
+        ttk.Label(trk, text="TRACK", foreground="#7cc4ff").pack(side="left", padx=(0, 4))
         ttk.Label(trk, text="ratio", foreground="#8a8a8a").pack(side="left")
         self.tune_vars["ratio_local"] = tk.StringVar(
             value=str(self._loc_tune_cur("ratio_local", 0.85))
@@ -84,29 +80,27 @@ class MapTab(ttk.Frame):
         self.tune_vars["min_inl_local"] = tk.StringVar(
             value=str(int(self._loc_tune_cur("min_inl_local", 3)))
         )
-        ttk.Entry(
-            trk, width=3, textvariable=self.tune_vars["min_inl_local"]
-        ).pack(side="left", padx=2)
+        ttk.Entry(trk, width=3, textvariable=self.tune_vars["min_inl_local"]).pack(
+            side="left", padx=2
+        )
         ttk.Label(trk, text="inl%", foreground="#8a8a8a").pack(side="left")
         self.tune_vars["min_inl_rate_local"] = tk.StringVar(
             value=str(self._loc_tune_cur("min_inl_rate_local", 0.0))
         )
-        ttk.Entry(
-            trk, width=4, textvariable=self.tune_vars["min_inl_rate_local"]
-        ).pack(side="left", padx=2)
+        ttk.Entry(trk, width=4, textvariable=self.tune_vars["min_inl_rate_local"]).pack(
+            side="left", padx=2
+        )
         ttk.Label(trk, text="rad", foreground="#8a8a8a").pack(side="left")
         self.tune_vars["track_radius"] = tk.StringVar(
             value=str(int(self._loc_tune_cur("track_radius", 900)))
         )
-        ttk.Entry(
-            trk, width=5, textvariable=self.tune_vars["track_radius"]
-        ).pack(side="left", padx=2)
+        ttk.Entry(trk, width=5, textvariable=self.tune_vars["track_radius"]).pack(
+            side="left", padx=2
+        )
 
         acq = ttk.Frame(tune)
         acq.pack(side="left", padx=(10, 0))
-        ttk.Label(acq, text="RE-ACQ", foreground="#ff7c7c").pack(
-            side="left", padx=(0, 4)
-        )
+        ttk.Label(acq, text="RE-ACQ", foreground="#ff7c7c").pack(side="left", padx=(0, 4))
         ttk.Label(acq, text="ratio", foreground="#8a8a8a").pack(side="left")
         self.tune_vars["ratio_global"] = tk.StringVar(
             value=str(self._loc_tune_cur("ratio_global", 0.72))
@@ -118,16 +112,16 @@ class MapTab(ttk.Frame):
         self.tune_vars["min_inl_global"] = tk.StringVar(
             value=str(int(self._loc_tune_cur("min_inl_global", 15)))
         )
-        ttk.Entry(
-            acq, width=3, textvariable=self.tune_vars["min_inl_global"]
-        ).pack(side="left", padx=2)
+        ttk.Entry(acq, width=3, textvariable=self.tune_vars["min_inl_global"]).pack(
+            side="left", padx=2
+        )
         ttk.Label(acq, text="inl%", foreground="#8a8a8a").pack(side="left")
         self.tune_vars["min_inl_rate_global"] = tk.StringVar(
             value=str(self._loc_tune_cur("min_inl_rate_global", 0.45))
         )
-        ttk.Entry(
-            acq, width=4, textvariable=self.tune_vars["min_inl_rate_global"]
-        ).pack(side="left", padx=2)
+        ttk.Entry(acq, width=4, textvariable=self.tune_vars["min_inl_rate_global"]).pack(
+            side="left", padx=2
+        )
 
         misc = ttk.Frame(tune)
         misc.pack(side="left", padx=(10, 0))
@@ -135,52 +129,38 @@ class MapTab(ttk.Frame):
         self.tune_vars["vote_need"] = tk.StringVar(
             value=str(int(self._loc_tune_cur("vote_need", 3)))
         )
-        ttk.Entry(misc, width=3, textvariable=self.tune_vars["vote_need"]).pack(
-            side="left", padx=2
-        )
-        ttk.Label(misc, text="head", foreground="#8a8a8a").pack(
-            side="left", padx=(6, 0)
-        )
+        ttk.Entry(misc, width=3, textvariable=self.tune_vars["vote_need"]).pack(side="left", padx=2)
+        ttk.Label(misc, text="head", foreground="#8a8a8a").pack(side="left", padx=(6, 0))
         self.tune_vars["heading_gate_deg"] = tk.StringVar(
             value=str(int(self._loc_tune_cur("heading_gate_deg", 0)))
         )
-        ttk.Entry(
-            misc, width=4, textvariable=self.tune_vars["heading_gate_deg"]
-        ).pack(side="left", padx=2)
-        ttk.Label(misc, text="skip", foreground="#8a8a8a").pack(
-            side="left", padx=(6, 0)
+        ttk.Entry(misc, width=4, textvariable=self.tune_vars["heading_gate_deg"]).pack(
+            side="left", padx=2
         )
+        ttk.Label(misc, text="skip", foreground="#8a8a8a").pack(side="left", padx=(6, 0))
         self.tune_vars["vote_inl_skip"] = tk.StringVar(
             value=str(int(self._loc_tune_cur("vote_inl_skip", 40)))
         )
-        ttk.Entry(
-            misc, width=3, textvariable=self.tune_vars["vote_inl_skip"]
-        ).pack(side="left", padx=2)
-        ttk.Label(misc, text="hold", foreground="#8a8a8a").pack(
-            side="left", padx=(6, 0)
+        ttk.Entry(misc, width=3, textvariable=self.tune_vars["vote_inl_skip"]).pack(
+            side="left", padx=2
         )
+        ttk.Label(misc, text="hold", foreground="#8a8a8a").pack(side="left", padx=(6, 0))
         self.tune_vars["hold_frames"] = tk.StringVar(
             value=str(int(self._loc_tune_cur("hold_frames", 5)))
         )
-        ttk.Entry(
-            misc, width=3, textvariable=self.tune_vars["hold_frames"]
-        ).pack(side="left", padx=2)
+        ttk.Entry(misc, width=3, textvariable=self.tune_vars["hold_frames"]).pack(
+            side="left", padx=2
+        )
 
-        ttk.Button(tune, text="Apply", command=self.apply_tune).pack(
-            side="left", padx=(10, 0)
-        )
-        ttk.Button(tune, text="Reset", command=self.reset_tune).pack(
-            side="left", padx=(4, 0)
-        )
+        ttk.Button(tune, text="Apply", command=self.apply_tune).pack(side="left", padx=(10, 0))
+        ttk.Button(tune, text="Reset", command=self.reset_tune).pack(side="left", padx=(4, 0))
         self.tune_status = ttk.Label(tune, text="", foreground="#8ae234")
         self.tune_status.pack(side="left", padx=(8, 0))
 
         # Diagnostics bar
         dbg_bar = ttk.Frame(self)
         dbg_bar.pack(fill="x", padx=8, pady=(0, 2))
-        collect = bool(
-            self.cfg.setdefault("debug", {}).get("collect_fail_logs", True)
-        )
+        collect = bool(self.cfg.setdefault("debug", {}).get("collect_fail_logs", True))
         self._collect_ck = tk.BooleanVar(value=collect)
         ttk.Checkbutton(
             dbg_bar,
@@ -201,9 +181,7 @@ class MapTab(ttk.Frame):
             highlightthickness=0,
         )
         self.dbg_text.pack(side="left", fill="x", expand=True)
-        ttk.Button(dbg_bar, text="Copy", command=self.copy_debug).pack(
-            side="left", padx=(6, 0)
-        )
+        ttk.Button(dbg_bar, text="Copy", command=self.copy_debug).pack(side="left", padx=(6, 0))
 
         # Interactive Map Canvas
         self.canvas_widget = InteractiveMapCanvas(
@@ -212,9 +190,7 @@ class MapTab(ttk.Frame):
             on_status=self._on_canvas_status,
         )
         self.canvas_widget.pack(fill="both", expand=True, padx=6, pady=6)
-        self.canvas_widget.canvas.bind(
-            "<Double-Button-1>", self._on_double_click
-        )
+        self.canvas_widget.canvas.bind("<Double-Button-1>", self._on_double_click)
 
     def _on_canvas_status(self, zoom_txt: str) -> None:
         self.map_status.config(text=f"map: {self.map_name}  {zoom_txt}")
@@ -252,14 +228,10 @@ class MapTab(ttk.Frame):
             try:
                 v = typ(float(s) if typ is float else int(s))
             except ValueError:
-                self.tune_status.config(
-                    text=f"Invalid {desc}", foreground="#ff7c7c"
-                )
+                self.tune_status.config(text=f"Invalid {desc}", foreground="#ff7c7c")
                 return
             if not (lo <= v <= hi):
-                self.tune_status.config(
-                    text=f"Invalid {desc}", foreground="#ff7c7c"
-                )
+                self.tune_status.config(text=f"Invalid {desc}", foreground="#ff7c7c")
                 return
             parsed[name] = v
 
@@ -327,9 +299,7 @@ class MapTab(ttk.Frame):
         if self.canvas_widget.disp is not None:
             self._draw_overlay(self.canvas_widget.canvas, self.canvas_widget.disp)
 
-    def _draw_overlay(
-        self, canvas: tk.Canvas, disp: tuple[float, float, float] | None
-    ) -> None:
+    def _draw_overlay(self, canvas: tk.Canvas, disp: tuple[float, float, float] | None) -> None:
         item = self._last_loc
         if disp is None or item is None:
             return
@@ -344,21 +314,15 @@ class MapTab(ttk.Frame):
             x0, y0 = self.canvas_widget.to_canvas(win[0], win[1])
             x1, y1 = self.canvas_widget.to_canvas(win[2], win[3])
             canvas.delete("chunkbox")
-            canvas.create_rectangle(
-                x0, y0, x1, y1, outline="#2e8bff", dash=(4, 3), tags="chunkbox"
-            )
+            canvas.create_rectangle(x0, y0, x1, y1, outline="#2e8bff", dash=(4, 3), tags="chunkbox")
 
         if pose is None or mp is None:
             loc = self.get_loc()
             phase = getattr(loc, "phase", "") if loc else ""
-            self.map_status.config(
-                text=(phase if phase else "searching...") + delay_txt
-            )
+            self.map_status.config(text=(phase if phase else "searching...") + delay_txt)
             for t in ("marker", "arrow", "chunkbox"):
                 canvas.delete(t)
-            self._search_zone_draw(
-                canvas, getattr(loc, "search_now", None), "searchzone"
-            )
+            self._search_zone_draw(canvas, getattr(loc, "search_now", None), "searchzone")
             return
 
         x, y = self.canvas_widget.to_canvas(mp[0], mp[1])
@@ -381,9 +345,7 @@ class MapTab(ttk.Frame):
             x, y, ax, ay, fill="#ff3b3b", width=3, arrow="last", arrowshape=(8, 10, 3), tags="arrow"
         )
         r = 6
-        canvas.create_oval(
-            x - r, y - r, x + r, y + r, outline="#ffdd00", width=2, tags="marker"
-        )
+        canvas.create_oval(x - r, y - r, x + r, y + r, outline="#ffdd00", width=2, tags="marker")
         canvas.create_line(x - r - 4, y, x + r + 4, y, fill="#ffdd00", width=1, tags="marker")
         canvas.create_line(x, y - r - 4, x, y + r + 4, fill="#ffdd00", width=1, tags="marker")
 
@@ -392,9 +354,7 @@ class MapTab(ttk.Frame):
             f"s={pose['s']:.3f} inl={pose.get('inl', 0)}{delay_txt}"
         )
 
-    def _search_zone_draw(
-        self, canvas: tk.Canvas, region: Any, tags: str
-    ) -> None:
+    def _search_zone_draw(self, canvas: tk.Canvas, region: Any, tags: str) -> None:
         canvas.delete(tags)
         if region is None or self.canvas_widget.disp is None:
             return

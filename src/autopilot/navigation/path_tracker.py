@@ -194,15 +194,25 @@ class PathTracker:
     def calc_road_turn(self, heading: float) -> tuple[float, float]:
         """Compute immediate turn angle and lookahead road turn curvature."""
         if self.idx + 1 < len(self.pts):
-            out_h = math.degrees(math.atan2(
-                self.pts[self.idx + 1][0] - self.pts[self.idx][0],
-                -(self.pts[self.idx + 1][1] - self.pts[self.idx][1]),
-            )) % 360.0
+            out_h = (
+                math.degrees(
+                    math.atan2(
+                        self.pts[self.idx + 1][0] - self.pts[self.idx][0],
+                        -(self.pts[self.idx + 1][1] - self.pts[self.idx][1]),
+                    )
+                )
+                % 360.0
+            )
             if self.idx > 0:
-                in_h = math.degrees(math.atan2(
-                    self.pts[self.idx][0] - self.pts[self.idx - 1][0],
-                    -(self.pts[self.idx][1] - self.pts[self.idx - 1][1]),
-                )) % 360.0
+                in_h = (
+                    math.degrees(
+                        math.atan2(
+                            self.pts[self.idx][0] - self.pts[self.idx - 1][0],
+                            -(self.pts[self.idx][1] - self.pts[self.idx - 1][1]),
+                        )
+                    )
+                    % 360.0
+                )
             else:
                 in_h = heading
             turn_angle = abs(wrap180(out_h - in_h))
@@ -214,10 +224,15 @@ class PathTracker:
         acc = 0.0
         h_prev = in_h
         for i in range(self.idx + 1, len(self.pts)):
-            h_next = math.degrees(math.atan2(
-                self.pts[i][0] - self.pts[i - 1][0],
-                -(self.pts[i][1] - self.pts[i - 1][1]),
-            )) % 360.0
+            h_next = (
+                math.degrees(
+                    math.atan2(
+                        self.pts[i][0] - self.pts[i - 1][0],
+                        -(self.pts[i][1] - self.pts[i - 1][1]),
+                    )
+                )
+                % 360.0
+            )
             ahead_t = max(ahead_t, abs(wrap180(h_next - h_prev)))
             h_prev = h_next
             acc += math.hypot(

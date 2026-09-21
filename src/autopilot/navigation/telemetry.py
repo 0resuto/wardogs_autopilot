@@ -45,7 +45,8 @@ class NavTelemetryLogger:
             os.makedirs(out_dir, exist_ok=True)
             try:
                 old_logs = sorted(
-                    p for p in os.listdir(out_dir)
+                    p
+                    for p in os.listdir(out_dir)
                     if p.startswith("nav_dbg_") and p.endswith(".jsonl")
                 )
                 while len(old_logs) >= 10:
@@ -56,9 +57,7 @@ class NavTelemetryLogger:
                     old_logs.pop(0)
             except Exception:
                 pass
-            path = os.path.join(
-                out_dir, "nav_dbg_" + time.strftime("%Y%m%d_%H%M%S") + ".jsonl"
-            )
+            path = os.path.join(out_dir, "nav_dbg_" + time.strftime("%Y%m%d_%H%M%S") + ".jsonl")
 
         self._dbg_name = path
         try:

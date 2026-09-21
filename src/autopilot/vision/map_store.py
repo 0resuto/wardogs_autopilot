@@ -72,9 +72,7 @@ class MapStore:
         if not os.path.isdir(self.data_maps_dir):
             return []
         maps: set[str] = {
-            f[:-len("_map.png")]
-            for f in os.listdir(self.data_maps_dir)
-            if f.endswith("_map.png")
+            f[: -len("_map.png")] for f in os.listdir(self.data_maps_dir) if f.endswith("_map.png")
         }
         if not maps:
             catalog_path = os.path.join(self.data_maps_dir, "catalog.json")

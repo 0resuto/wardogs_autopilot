@@ -60,11 +60,7 @@ class SpeedController:
         """Refine speed cap and pixel-per-meter scale on the fly from pose motion."""
         if mv > self._vmax_px:
             self._vmax_px = mv
-        self._px_per_m = (
-            self._vmax_px * 3.6 / self.speed_cap_kmh
-            if self.speed_cap_kmh > 0
-            else 0.0
-        )
+        self._px_per_m = self._vmax_px * 3.6 / self.speed_cap_kmh if self.speed_cap_kmh > 0 else 0.0
         if mv > 40.0:
             self._saw_motion = True
 
@@ -99,26 +95,17 @@ class SpeedController:
         Returns (gas_w, brake_space).
         """
         turn_scale = 1.0 + turn_angle / 90.0
-        required_brake_d = turn_scale * (
-            mv * mv / (2.0 * self.brake_d) + 12.0
-        )
+        required_brake_d = turn_scale * (mv * mv / (2.0 * self.brake_d) + 12.0)
 
         # Runaway / heading loss tracking
-        if (
-            self._saw_motion
-            and mv < 40.0
-            and abs(err) > 60.0
-            and abs(xte) <= xte_lim
-        ):
+        if self._saw_motion and mv < 40.0 and abs(err) > 60.0 and abs(xte) <= xte_lim:
             self._runaway = True
         elif abs(err) < 12.0 or abs(xte) > xte_lim:
             self._runaway = False
 
         # Braking hysteresis
         overspd = mv > tgt_spd * 1.25
-        if self._braking and (
-            mv <= tgt_spd or dist <= arrive_r + 10 or steer != 0
-        ):
+        if self._braking and (mv <= tgt_spd or dist <= arrive_r + 10 or steer != 0):
             self._braking = False
         if not self._braking and overspd and dist > arrive_r + 10:
             self._braking = True

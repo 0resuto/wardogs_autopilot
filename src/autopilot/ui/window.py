@@ -9,12 +9,11 @@ import re
 import tkinter as tk
 from ctypes import wintypes
 
-_GEO_RE = re.compile(
-    r"^(\d+)x(\d+)([+-]\d+|[+]-\d+)([+-]\d+|[+]-\d+)$")
+_GEO_RE = re.compile(r"^(\d+)x(\d+)([+-]\d+|[+]-\d+)([+-]\d+|[+]-\d+)$")
 
 
 def _offset(s: str) -> int:
-    """"+3060" -> 3060, "-100" -> -100; old Tk could write "+-100"."""
+    """ "+3060" -> 3060, "-100" -> -100; old Tk could write "+-100"."""
     if s.startswith("+-"):
         s = "-" + s[2:]
     return int(s)
@@ -22,6 +21,7 @@ def _offset(s: str) -> int:
 
 class _MonitorInfo(ctypes.Structure):
     """MONITORINFO (winuser.h): monitor and work areas."""
+
     _fields_ = [
         ("cbSize", wintypes.DWORD),
         ("rcMonitor", wintypes.RECT),
@@ -49,8 +49,12 @@ def monitor_workareas():
         return True
 
     enum_cb = ctypes.WINFUNCTYPE(
-        ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p,
-        ctypes.POINTER(wintypes.RECT), ctypes.c_void_p)(_cb)
+        ctypes.c_int,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.POINTER(wintypes.RECT),
+        ctypes.c_void_p,
+    )(_cb)
     try:
         if not user32.EnumDisplayMonitors(None, None, enum_cb, None):
             return []
@@ -73,12 +77,11 @@ def clamp_to_visible_monitor(x: int, y: int, w: int, h: int):
         ox0, oy0 = max(ax0, x), max(ay0, y)
         ox1, oy1 = min(ax1, x + w), min(ay1, y + h)
         if ox1 - ox0 >= 120 and oy1 - oy0 >= 40:
-            return x, y   # enough is visible - keep as-is
+            return x, y  # enough is visible - keep as-is
     cx, cy = x + w / 2.0, y + h / 2.0
     nearest = min(
-        areas,
-        key=lambda a: ((a[0] + a[2]) / 2.0 - cx) ** 2
-                      + ((a[1] + a[3]) / 2.0 - cy) ** 2)
+        areas, key=lambda a: ((a[0] + a[2]) / 2.0 - cx) ** 2 + ((a[1] + a[3]) / 2.0 - cy) ** 2
+    )
     return (nearest[0] + nearest[2] - w) // 2, (nearest[1] + nearest[3] - h) // 2
 
 
@@ -97,7 +100,7 @@ class WindowState:
         self._root = root
         self._cfg = cfg
         self._persist = persist
-        self._normal_geometry: str | None = None   # last "normal" (non-zoomed) geometry
+        self._normal_geometry: str | None = None  # last "normal" (non-zoomed) geometry
         self._zoomed = False
         self._save_job: str | None = None
 
@@ -181,7 +184,7 @@ class WindowState:
         new_geo = self._normal_geometry or self._root.geometry() or None
         new_zoom = bool(self._zoomed)
         if old_geo == new_geo and bool(old_zoom) == new_zoom:
-            return   # nothing changed - don't touch the disk
+            return  # nothing changed - don't touch the disk
         if new_geo:
             win["geometry"] = new_geo
         win["zoomed"] = new_zoom

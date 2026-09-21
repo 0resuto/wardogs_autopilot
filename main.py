@@ -36,7 +36,6 @@ def main() -> None:
     logger = get_logger("main")
     logger.info("Starting WARDOGS autopilot...")
 
-
     ap = argparse.ArgumentParser(
         prog="wardogs-autopilot",
         description="WARDOGS supply delivery autopilot over the WARDOGS minimap.",
@@ -61,9 +60,7 @@ def main() -> None:
         try:
             from tkinter import messagebox
 
-            messagebox.showerror(
-                "WARDOGS Studio",
-                "Application error.\nDetails: output/crash.log")
+            messagebox.showerror("WARDOGS Studio", "Application error.\nDetails: output/crash.log")
         except Exception:  # noqa: BLE001
             pass
 

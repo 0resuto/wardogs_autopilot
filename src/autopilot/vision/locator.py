@@ -75,7 +75,9 @@ def _over(t0: float, budget: float | None) -> bool:
     return budget is not None and (time.time() - t0) > budget
 
 
-def _mark_search(diag: dict[str, Any], discs: list[tuple[float, float, float]], global_pass: bool) -> None:
+def _mark_search(
+    diag: dict[str, Any], discs: list[tuple[float, float, float]], global_pass: bool
+) -> None:
     """Publish the search region(s) of this frame into the diagnostics."""
     diag["search_discs"] = [[float(v) for v in d] for d in discs]
     diag["search_global"] = bool(global_pass)
@@ -91,9 +93,7 @@ class MapLocator:
         self.ratio = 0.80
         self.clahe = cv2.createCLAHE(2.0, (8, 8))
 
-    def _clahe_preprocess(
-        self, mm: np.ndarray, ui_mask: np.ndarray | None
-    ) -> np.ndarray:
+    def _clahe_preprocess(self, mm: np.ndarray, ui_mask: np.ndarray | None) -> np.ndarray:
         """Fill UI pixels with the background median, then local-contrast (CLAHE).
 
         Yields fewer, more structural keypoints than the percentile stretch, so
@@ -109,9 +109,7 @@ class MapLocator:
         """Player's heading on the map: 0 deg = north, 90 deg = east (clockwise)."""
         return float(pose["th"])
 
-    def _detect(
-        self, mmf: np.ndarray, max_kp: int
-    ) -> tuple[list[cv2.KeyPoint], np.ndarray | None]:
+    def _detect(self, mmf: np.ndarray, max_kp: int) -> tuple[list[cv2.KeyPoint], np.ndarray | None]:
         """SIFT keypoints/descriptors of one frame, capped by descending response.
 
         Tree canopy and other repetitive texture can yield thousands of weak,
@@ -281,7 +279,10 @@ class MapLocator:
         t0: float | None = None,
         progress: Callable[[tuple[Any, ...]], None] | None = None,
         feats: tuple[list[cv2.KeyPoint], np.ndarray | None] | None = None,
-    ) -> tuple[dict[str, Any] | None, dict[str, Any], float, float, float] | tuple[None, dict[str, Any]]:
+    ) -> (
+        tuple[dict[str, Any] | None, dict[str, Any], float, float, float]
+        | tuple[None, dict[str, Any]]
+    ):
         """Index-based pose: growing radius around (cx, cy), then whole map."""
         start_t = t0 if t0 is not None else time.time()
         cfg = self.store.loc_cfg()
@@ -320,8 +321,16 @@ class MapLocator:
                 cands = idx.radius_candidates(qx, qy, rad)
                 thr = global_thr if rad > track_radius else local_thr
                 res, dd = self._pose_via_index(
-                    mm, ui_mask, idx, qx, qy, rad, thr=thr, budget=budget,
-                    t0=start_t, feats=feats,
+                    mm,
+                    ui_mask,
+                    idx,
+                    qx,
+                    qy,
+                    rad,
+                    thr=thr,
+                    budget=budget,
+                    t0=start_t,
+                    feats=feats,
                 )
                 last_diag = dd
                 if res is not None:
@@ -339,8 +348,16 @@ class MapLocator:
             if progress is not None:
                 progress(("global",))
             res, dd = self._pose_via_index(
-                mm, ui_mask, idx, 0.0, 0.0, None, thr=global_thr, budget=budget,
-                t0=start_t, feats=feats,
+                mm,
+                ui_mask,
+                idx,
+                0.0,
+                0.0,
+                None,
+                thr=global_thr,
+                budget=budget,
+                t0=start_t,
+                feats=feats,
             )
             last_diag = dd
             if res is not None:
@@ -482,8 +499,16 @@ class MapLocator:
             if nfeat < 4:
                 continue
             fp = self._index_find(
-                mm, ui_mask, idx, cx, cy, min_inl=min_inl, budget=sub_budget,
-                t0=t0, progress=progress, feats=(_kf, _df),
+                mm,
+                ui_mask,
+                idx,
+                cx,
+                cy,
+                min_inl=min_inl,
+                budget=sub_budget,
+                t0=t0,
+                progress=progress,
+                feats=(_kf, _df),
             )
             if fp is not None and len(fp) == 5 and fp[0] is not None:
                 break

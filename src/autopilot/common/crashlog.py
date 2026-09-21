@@ -30,8 +30,10 @@ def init() -> object:
     os.makedirs("output", exist_ok=True)
     path = os.path.join("output", "crash.log")
     _LOG = open(path, "a", encoding="utf-8")
-    _LOG.write("\n===== startup %s (python %s) =====\n"
-               % (time.strftime("%Y-%m-%d %H:%M:%S"), sys.version.split()[0]))
+    _LOG.write(
+        "\n===== startup %s (python %s) =====\n"
+        % (time.strftime("%Y-%m-%d %H:%M:%S"), sys.version.split()[0])
+    )
     _LOG.flush()
     sys.excepthook = _excepthook
     try:
@@ -59,9 +61,9 @@ def write(tp=None, val=None, tb=None) -> None:
         try:
             if _LOG is None:
                 return
-            _LOG.write("\n--- %s  %s ---\n"
-                       % (time.strftime("%H:%M:%S"),
-                          threading.current_thread().name))
+            _LOG.write(
+                "\n--- %s  %s ---\n" % (time.strftime("%H:%M:%S"), threading.current_thread().name)
+            )
             if tb is not None:
                 traceback.print_exception(tp, val, tb, file=_LOG)
             elif val is not None:

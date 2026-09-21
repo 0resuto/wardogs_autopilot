@@ -1,1 +1,1 @@
-"""Hardware-facing drivers: screen capture and key input. """
+"""Hardware-facing drivers: screen capture and key input."""

@@ -45,13 +45,15 @@ class LocatorConfig(BaseModel):
     radius_growth: float = Field(default=1.6, ge=1.0, le=5.0)
     global_max_features: int = Field(default=100000, ge=1000)
     max_kp_frame: int = Field(
-        default=1200, ge=100, le=6000,
+        default=1200,
+        ge=100,
+        le=6000,
         description="Max SIFT keypoints kept from a captured frame (response-ranked)",
     )
     fast_clahe: bool = Field(
         default=False,
         description="Try a CLAHE-preprocessed fast pass first, fall back to the "
-                    "default normalization when it finds no pose",
+        "default normalization when it finds no pose",
     )
     ratio: float = Field(default=0.8, ge=0.1, le=1.0)
     min_inl: int = Field(default=4, ge=1)
@@ -99,11 +101,13 @@ class NavigatorConfig(BaseModel):
     slow_r: float = Field(default=350.0, ge=1.0, description="Deceleration radius (px)")
     dead: float = Field(default=3.0, ge=0.0, description="Steering dead-zone (deg)")
     turn_deg: float = Field(
-        default=25.0, ge=1.0,
+        default=25.0,
+        ge=1.0,
         description="Heading error threshold for continuous steering (deg)",
     )
     hold_max: float = Field(
-        default=8.0, ge=0.5,
+        default=8.0,
+        ge=0.5,
         description="Safety timeout for continuous steering (s)",
     )
     speed_cap_kmh: float = Field(default=79.0, ge=1.0, description="Maximum driving speed in km/h")
@@ -112,15 +116,18 @@ class NavigatorConfig(BaseModel):
     brake_d: float = Field(default=260.0, ge=1.0, description="Braking distance threshold (px)")
     dead_off: float | None = Field(default=None, description="Steering release dead-zone (deg)")
     stop_speed_kmh: float = Field(
-        default=2.0, ge=0.5,
+        default=2.0,
+        ge=0.5,
         description="Final-waypoint full-stop speed threshold (km/h, px floor applies)",
     )
     stop_hold: float = Field(
-        default=0.8, ge=0.1,
+        default=0.8,
+        ge=0.1,
         description="Seconds below stop speed before the autopilot disables itself",
     )
     stop_timeout: float = Field(
-        default=5.0, ge=1.0,
+        default=5.0,
+        ge=1.0,
         description="Hard timeout for final-waypoint braking before autopilot off (s)",
     )
     debug: bool = Field(default=False, description="Enable verbose nav logging")
@@ -176,4 +183,3 @@ class AppConfig(BaseModel):
         target_path = Path(path or self.cfg_path)
         with open(target_path, "w", encoding="utf-8") as f:
             json.dump(self.to_dict(), f, indent=2)
-

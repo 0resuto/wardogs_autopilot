@@ -58,7 +58,9 @@ class RoiSelector(tk.Toplevel):
             x, y = min(self._x0, e.x), min(self._y0, e.y)
             w, h = abs(e.x - self._x0), abs(e.y - self._y0)
             if w > 5 and h > 5:
-                self._rect = self.canvas.create_rectangle(x, y, x + w, y + h, outline="lime", width=2)
+                self._rect = self.canvas.create_rectangle(
+                    x, y, x + w, y + h, outline="lime", width=2
+                )
                 self._pending = (x, y, w, h)
 
     def _confirm(self, e=None) -> None:

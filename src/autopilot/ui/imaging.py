@@ -8,6 +8,7 @@ import numpy as np
 
 try:
     from PIL import Image, ImageTk
+
     _HAS_PIL = True
 except ImportError:
     _HAS_PIL = False

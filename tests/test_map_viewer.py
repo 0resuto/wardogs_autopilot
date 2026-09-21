@@ -1,4 +1,5 @@
 """Unit tests for map viewer performance, crop geometry, tag preservation, and zoom."""
+
 import json
 import os
 import sys
@@ -34,7 +35,6 @@ def wait_for_map(app, timeout=5.0):
 
 
 class TestMapViewer(unittest.TestCase):
-
     def test_photo_image_perf(self):
         """to_photo() must convert a 1000x800 image in under 35 ms."""
         root = tk.Tk()
@@ -50,7 +50,6 @@ class TestMapViewer(unittest.TestCase):
             elapsed = (time.perf_counter() - t0) / iters * 1000.0
             self.assertLess(elapsed, 45.0, f"to_photo() took {elapsed:.2f} ms (expected <45 ms)")
         finally:
-
             root.destroy()
 
     def test_bg_crop_and_bounds(self):
@@ -140,7 +139,7 @@ class TestMapViewer(unittest.TestCase):
 
             self.assertGreater(s2, s1)
             self.assertGreater(s3, s2)
-            expected = 0.2 * (1.2 ** 3)
+            expected = 0.2 * (1.2**3)
             self.assertAlmostEqual(s3, expected, places=4)
 
             app._map_flush_view()

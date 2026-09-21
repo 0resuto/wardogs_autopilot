@@ -4,6 +4,7 @@
 Downloads high-resolution game maps from GitHub Releases into data/maps/,
 verifies SHA-256 integrity, and optionally generates SIFT index and mipmaps.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -38,7 +39,9 @@ def format_bytes(size: float) -> str:
 
 def list_maps(catalog: dict) -> None:
     maps = catalog.get("maps", {})
-    print(f"\n{'Map Name':<12} {'Display Name':<14} {'Resolution':<14} {'Status':<14} {'File Size'}")
+    print(
+        f"\n{'Map Name':<12} {'Display Name':<14} {'Resolution':<14} {'Status':<14} {'File Size'}"
+    )
     print("-" * 72)
     for name, info in maps.items():
         disp = info.get("display_name", name)
@@ -56,7 +59,9 @@ def list_maps(catalog: dict) -> None:
     print()
 
 
-def download_file(url: str, dest_path: str, expected_size: int | None, expected_sha256: str | None) -> bool:
+def download_file(
+    url: str, dest_path: str, expected_size: int | None, expected_sha256: str | None
+) -> bool:
     tmp_path = dest_path + ".tmp"
     os.makedirs(os.path.dirname(dest_path), exist_ok=True)
 
@@ -96,7 +101,9 @@ def download_file(url: str, dest_path: str, expected_size: int | None, expected_
                                 f"| {format_bytes(speed)}/s | ETA {eta:4.0f}s"
                             )
                         else:
-                            msg = f"\rDownloaded {format_bytes(downloaded)} | {format_bytes(speed)}/s"
+                            msg = (
+                                f"\rDownloaded {format_bytes(downloaded)} | {format_bytes(speed)}/s"
+                            )
                         sys.stdout.write(msg)
                         sys.stdout.flush()
                         last_print = now
@@ -127,7 +134,9 @@ def download_file(url: str, dest_path: str, expected_size: int | None, expected_
         return False
 
 
-def download_map(name: str, catalog: dict, repo: str, tag: str, force: bool = False, rebuild: bool = False) -> bool:
+def download_map(
+    name: str, catalog: dict, repo: str, tag: str, force: bool = False, rebuild: bool = False
+) -> bool:
     maps = catalog.get("maps", {})
     if name not in maps:
         print(f"Error: Unknown map '{name}'. Available maps: {list(maps.keys())}", file=sys.stderr)
@@ -166,17 +175,29 @@ def download_map(name: str, catalog: dict, repo: str, tag: str, force: bool = Fa
 
 def main() -> None:
     catalog = load_catalog()
-    default_repo = os.environ.get("WARDOGS_ASSET_REPO", catalog.get("repo", "owner/wardogs-autopilot"))
+    default_repo = os.environ.get(
+        "WARDOGS_ASSET_REPO", catalog.get("repo", "owner/wardogs-autopilot")
+    )
     default_tag = os.environ.get("WARDOGS_ASSET_TAG", catalog.get("tag", "v1.0.0"))
 
     parser = argparse.ArgumentParser(description="Download game map assets for WARDOGS Autopilot.")
-    parser.add_argument("map", nargs="?", help="Map name to download (e.g. zestafona, bakurani, ozeti)")
+    parser.add_argument(
+        "map", nargs="?", help="Map name to download (e.g. zestafona, bakurani, ozeti)"
+    )
     parser.add_argument("--all", action="store_true", help="Download all available maps")
     parser.add_argument("--list", action="store_true", help="List maps and their local status")
-    parser.add_argument("--repo", default=default_repo, help=f"GitHub repository (default: {default_repo})")
+    parser.add_argument(
+        "--repo", default=default_repo, help=f"GitHub repository (default: {default_repo})"
+    )
     parser.add_argument("--tag", default=default_tag, help=f"Release tag (default: {default_tag})")
-    parser.add_argument("--force", action="store_true", help="Re-download files even if they already exist")
-    parser.add_argument("--rebuild", action="store_true", help="Automatically build mipmaps & SIFT index after download")
+    parser.add_argument(
+        "--force", action="store_true", help="Re-download files even if they already exist"
+    )
+    parser.add_argument(
+        "--rebuild",
+        action="store_true",
+        help="Automatically build mipmaps & SIFT index after download",
+    )
 
     args = parser.parse_args()
 
@@ -191,7 +212,9 @@ def main() -> None:
 
     success_count = 0
     for target in targets:
-        if download_map(target, catalog, args.repo, args.tag, force=args.force, rebuild=args.rebuild):
+        if download_map(
+            target, catalog, args.repo, args.tag, force=args.force, rebuild=args.rebuild
+        ):
             success_count += 1
 
     if success_count == len(targets):

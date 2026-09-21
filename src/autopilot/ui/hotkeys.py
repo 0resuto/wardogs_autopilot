@@ -108,5 +108,6 @@ class HotkeyManager:
         if t is None:
             return
         ctypes.windll.user32.PostThreadMessageW(
-            t.ident, 0x0012, 0, 0)  # WM_QUIT — wake up GetMessageW
+            t.ident, 0x0012, 0, 0
+        )  # WM_QUIT — wake up GetMessageW
         t.join(timeout=1.0)

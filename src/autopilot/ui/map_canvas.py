@@ -151,9 +151,7 @@ class InteractiveMapCanvas(tk.Frame):
         rw = vis_wu * (1 + 2 * m)
         rh = vis_hu * (1 + 2 * m)
         pyr = self._map_pyr or {self._map8.shape[0]: self._map8}
-        img = crop_map_viewport(
-            s, ru, rv, rw, rh, pyr, self._map_size, self._thumb, RGB_CANVAS
-        )
+        img = crop_map_viewport(s, ru, rv, rw, rh, pyr, self._map_size, self._thumb, RGB_CANVAS)
         self._bg_photo = to_photo(img)
         self._bg_state = (s, ru, rv, rw, rh)
         self.canvas.delete("bg")

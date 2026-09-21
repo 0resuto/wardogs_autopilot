@@ -82,30 +82,20 @@ class FollowDriver(threading.Thread):
         self.stop_speed_kmh = float(
             stop_speed_kmh if stop_speed_kmh is not None else self.nav_cfg.stop_speed_kmh
         )
-        self.stop_hold = float(
-            stop_hold if stop_hold is not None else self.nav_cfg.stop_hold
-        )
+        self.stop_hold = float(stop_hold if stop_hold is not None else self.nav_cfg.stop_hold)
         self.stop_timeout = float(
             stop_timeout if stop_timeout is not None else self.nav_cfg.stop_timeout
         )
         self.kb = kb
 
         # Sub-controllers
-        self.path = PathTracker(
-            self.pts, arrive_r=self.arrive_r, xte_m=self.xte_m
-        )
-        self.speed_ctrl = SpeedController(
-            speed_cap_kmh=self.speed_cap_kmh, brake_d=self.brake_d
-        )
+        self.path = PathTracker(self.pts, arrive_r=self.arrive_r, xte_m=self.xte_m)
+        self.speed_ctrl = SpeedController(speed_cap_kmh=self.speed_cap_kmh, brake_d=self.brake_d)
         self.steer_ctrl = SteeringController(
             dead=self.dead,
             dead_off=self.dead_off,
-            turn_deg=(
-                turn_deg if turn_deg is not None else self.nav_cfg.turn_deg
-            ),
-            hold_max=(
-                hold_max if hold_max is not None else self.nav_cfg.hold_max
-            ),
+            turn_deg=(turn_deg if turn_deg is not None else self.nav_cfg.turn_deg),
+            hold_max=(hold_max if hold_max is not None else self.nav_cfg.hold_max),
         )
         self.telemetry = NavTelemetryLogger(dbg_target=self.dbg)
 
@@ -331,13 +321,15 @@ class FollowDriver(threading.Thread):
                             d = math.hypot(x - lx, y - ly)
                             if dts > 1e-3 and d / dts > self.path.lost_limit():
                                 self._lost = True
-                                self._dbg_tick(dict(
-                                    kind="lost",
-                                    t=now,
-                                    sa=round(now - lt, 2),
-                                    d=round(self._m(d), 1),
-                                    v_claim=round(d / dts, 1),
-                                ))
+                                self._dbg_tick(
+                                    dict(
+                                        kind="lost",
+                                        t=now,
+                                        sa=round(now - lt, 2),
+                                        d=round(self._m(d), 1),
+                                        v_claim=round(d / dts, 1),
+                                    )
+                                )
                                 self._rel("lost")
                                 self._wait(0.25)
                                 continue
@@ -373,18 +365,17 @@ class FollowDriver(threading.Thread):
 
                 # The last waypoint is the active target: brake with SPACE down to a
                 # full stop, then disable the autopilot (the same as pressing F7).
-                if (
-                    final_seg
-                    and not self._final_stop
-                    and dist < self._final_brake_dist()
-                ):
+                if final_seg and not self._final_stop and dist < self._final_brake_dist():
                     self._final_stop = True
                     self._final_t0 = now
                     self._stop_s_t = None
                     logger.info(
                         "[nav] final waypoint %d in stop range (dist=%.0fm) "
                         "sv=%.0fpx/s mv=%.0fpx/s",
-                        self.path.idx, self._m(dist), self.speed, self.path.mv,
+                        self.path.idx,
+                        self._m(dist),
+                        self.speed,
+                        self.path.mv,
                     )
 
                 if self._final_stop:
@@ -404,31 +395,39 @@ class FollowDriver(threading.Thread):
                     self.steer_ctrl.force_release(now, self.path.mh_t)
                     self.err = None
                     if self.dbg:
-                        self._dbg_tick(dict(
-                            t=round(now, 4),
-                            tick=self._dbg_n,
-                            kind="final_stop",
-                            pose_age=round(now - float(it["ts"]), 3) if it else 0.0,
-                            sample_age=round(now - self.path.samples[-1][0], 3),
-                            new_sample=bool(new_sample),
-                            mode="S",
-                            mv=round(self.path.mv, 1),
-                            heading=round(self._heading or 0.0, 2),
-                            speed=round(self.speed, 1),
-                            dist=round(dist, 1),
-                            keys="SPACE",
-                            idx=self.path.idx,
-                        ))
+                        self._dbg_tick(
+                            dict(
+                                t=round(now, 4),
+                                tick=self._dbg_n,
+                                kind="final_stop",
+                                pose_age=round(now - float(it["ts"]), 3) if it else 0.0,
+                                sample_age=round(now - self.path.samples[-1][0], 3),
+                                new_sample=bool(new_sample),
+                                mode="S",
+                                mv=round(self.path.mv, 1),
+                                heading=round(self._heading or 0.0, 2),
+                                speed=round(self.speed, 1),
+                                dist=round(dist, 1),
+                                keys="SPACE",
+                                idx=self.path.idx,
+                            )
+                        )
                     if self._dbg_n % 5 == 0:
                         logger.info(
-                            "[nav] final-stop braking sv=%.1fpx/s mv=%.1fpx/s "
-                            "dist=%.0fm",
-                            self.speed, self.path.mv, self._m(dist),
+                            "[nav] final-stop braking sv=%.1fpx/s mv=%.1fpx/s dist=%.0fm",
+                            self.speed,
+                            self.path.mv,
+                            self._m(dist),
                         )
                     self._dbg_n += 1
                     self.last = dict(
-                        idx=self.path.idx, dist=dist, bearing=0.0, err=0.0,
-                        heading=self._heading or 0.0, turn=0.0, speed=self.speed,
+                        idx=self.path.idx,
+                        dist=dist,
+                        bearing=0.0,
+                        err=0.0,
+                        heading=self._heading or 0.0,
+                        turn=0.0,
+                        speed=self.speed,
                     )
                     self.state = "final_stop"
                     self._wait(self.poll)
@@ -438,9 +437,7 @@ class FollowDriver(threading.Thread):
                 self._update_speed(now, mp)
 
                 # Cross-track error & pure pursuit bearing
-                xte, xte_lim, bearing = self.path.calc_xte_and_bearing(
-                    mp, self._px_per_m_now()
-                )
+                xte, xte_lim, bearing = self.path.calc_xte_and_bearing(mp, self._px_per_m_now())
 
                 # Heading calculation & smoothing
                 mh_age = now - self.path.mh_t if self.path.mh is not None else 1e9
@@ -465,9 +462,7 @@ class FollowDriver(threading.Thread):
                 tgt_spd = self.speed_ctrl.calc_target_speed(road_turn, xte, xte_lim)
 
                 # Steering state machine
-                steer_action = self.steer_ctrl.step(
-                    now, err, heading, self.path.mh, self.path.mh_t
-                )
+                steer_action = self.steer_ctrl.step(now, err, heading, self.path.mh, self.path.mh_t)
                 keys: dict[str, bool] = {}
                 if steer_action == 1:
                     keys["D"] = True
@@ -505,10 +500,19 @@ class FollowDriver(threading.Thread):
                         "bearing=%.1f heading=%.1f err=%.1f xte=%.1fm "
                         "turn=%.0f tgt=%.0fkm/h spar=%.0fkm/h(%.0f) "
                         "keys=%s th=%s",
-                        mp[0], mp[1], self.path.idx, tx, ty, self._m(dist),
-                        bearing, heading, err, self._m(abs(xte)),
+                        mp[0],
+                        mp[1],
+                        self.path.idx,
+                        tx,
+                        ty,
+                        self._m(dist),
+                        bearing,
+                        heading,
+                        err,
+                        self._m(abs(xte)),
                         turn_angle,
-                        self._kmh(tgt_spd), self._kmh(self.path.mv),
+                        self._kmh(tgt_spd),
+                        self._kmh(self.path.mv),
                         self.path.mv,
                         "".join(k for k in ("W", "A", "D", "SPACE") if keys.get(k)),
                         hmode,
@@ -526,34 +530,36 @@ class FollowDriver(threading.Thread):
 
                 self.err = None
                 if self.dbg:
-                    self._dbg_tick(dict(
-                        t=round(now, 4),
-                        tick=self._dbg_n,
-                        pose_age=round(now - float(it["ts"]), 3) if it else 0.0,
-                        sample_age=round(now - self.path.samples[-1][0], 3),
-                        new_sample=bool(new_sample),
-                        mode="M" if mh_on else "S",
-                        mv=round(self.path.mv, 1),
-                        mh=round(self.path.mh, 1) if self.path.mh is not None else None,
-                        heading=round(heading, 2),
-                        bearing=round(bearing, 2),
-                        err=round(err, 2),
-                        turn=round(turn_angle, 1),
-                        roadT=round(road_turn, 1),
-                        tgt=round(tgt_spd, 1),
-                        dist=round(dist, 1),
-                        xte=round(abs(xte), 1),
-                        xte_m=round(self._m(abs(xte)), 1),
-                        speed=round(self.speed, 1),
-                        v=round(self.path.mv, 1),
-                        runaway=self.speed_ctrl.runaway,
-                        ang=round(self.steer_ctrl.ang, 2),
-                        steer=self.steer_ctrl.steer,
-                        micro=self.steer_ctrl.micro,
-                        braking=bool(brake_space),
-                        keys="".join(k for k in ("W", "A", "D", "SPACE") if keys.get(k)),
-                        idx=self.path.idx,
-                    ))
+                    self._dbg_tick(
+                        dict(
+                            t=round(now, 4),
+                            tick=self._dbg_n,
+                            pose_age=round(now - float(it["ts"]), 3) if it else 0.0,
+                            sample_age=round(now - self.path.samples[-1][0], 3),
+                            new_sample=bool(new_sample),
+                            mode="M" if mh_on else "S",
+                            mv=round(self.path.mv, 1),
+                            mh=round(self.path.mh, 1) if self.path.mh is not None else None,
+                            heading=round(heading, 2),
+                            bearing=round(bearing, 2),
+                            err=round(err, 2),
+                            turn=round(turn_angle, 1),
+                            roadT=round(road_turn, 1),
+                            tgt=round(tgt_spd, 1),
+                            dist=round(dist, 1),
+                            xte=round(abs(xte), 1),
+                            xte_m=round(self._m(abs(xte)), 1),
+                            speed=round(self.speed, 1),
+                            v=round(self.path.mv, 1),
+                            runaway=self.speed_ctrl.runaway,
+                            ang=round(self.steer_ctrl.ang, 2),
+                            steer=self.steer_ctrl.steer,
+                            micro=self.steer_ctrl.micro,
+                            braking=bool(brake_space),
+                            keys="".join(k for k in ("W", "A", "D", "SPACE") if keys.get(k)),
+                            idx=self.path.idx,
+                        )
+                    )
 
                 self.last = dict(
                     idx=self.path.idx,

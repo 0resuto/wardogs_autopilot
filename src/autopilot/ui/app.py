@@ -284,9 +284,7 @@ class App(tk.Tk):
 
     def _bg_crop(self, s: float, ru: float, rv: float, rw: float, rh: float) -> np.ndarray:
         pyr = self._map_pyr or ({self._map8.shape[0]: self._map8} if self._map8 is not None else {})
-        return crop_map_viewport(
-            s, ru, rv, rw, rh, pyr, self._map_size, self._thumb, RGB_CANVAS
-        )
+        return crop_map_viewport(s, ru, rv, rw, rh, pyr, self._map_size, self._thumb, RGB_CANVAS)
 
     def _bg_update(self, name: str, s: float, ox: float, oy: float) -> None:
         if name == "map":
@@ -366,4 +364,3 @@ def main(cfg: dict[str, Any] | AppConfig | None = None) -> None:
         cfg = AppConfig.load("config.json")
     app = App(cfg)
     app.mainloop()
-

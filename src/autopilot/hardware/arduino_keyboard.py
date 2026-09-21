@@ -28,8 +28,7 @@ class ArduinoKeyDriver:
         # block the navigator thread forever — it fails with OSError after the
         # timeout, which the navigator already handles and stops sending keys
         # instead of freezing all of the control logic.
-        self._ser = serial.Serial(
-            port, baud, timeout=timeout, write_timeout=timeout)
+        self._ser = serial.Serial(port, baud, timeout=timeout, write_timeout=timeout)
         self._state: dict[str, bool] = {}
         # the firmware may release all keys left over from the previous run at boot
         try:
@@ -66,8 +65,8 @@ class ArduinoKeyDriver:
         except OSError as exc:
             raise OSError(
                 "ArduinoKeyDriver: COM port %s unavailable — check that the "
-                "arduino is connected and the port is correct" % self._port) from exc
-
+                "arduino is connected and the port is correct" % self._port
+            ) from exc
 
     def close(self) -> None:
         try:

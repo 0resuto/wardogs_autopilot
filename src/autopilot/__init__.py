@@ -9,6 +9,7 @@ Package layout
 - ``autopilot.navigation`` route-following autopilot (FollowDriver)
 - ``autopilot.ui``         Tkinter "studio" GUI
 """
+
 import os
 
 __version__ = "0.1.0"
@@ -19,4 +20,3 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 from .common import crashlog  # noqa: E402
 
 __all__ = ["PROJECT_ROOT", "crashlog"]
-

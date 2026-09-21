@@ -53,7 +53,7 @@ class RoiTab(ttk.Frame):
             self,
             text=(
                 "1. Open the minimap in-game (M key).\n"
-                "2. Press \"Pick zone\" - the whole screen appears, drag a rectangle over the minimap.\n"
+                '2. Press "Pick zone" - the whole screen appears, drag a rectangle over the minimap.\n'
                 "3. Enter to apply, Esc to cancel.\n\n"
                 "Fine tuning (absolute screen pixels):"
             ),
@@ -72,9 +72,7 @@ class RoiTab(ttk.Frame):
         ttk.Button(self, text="Pick zone on screen", command=self.pick_roi).pack(
             anchor="w", padx=8, pady=4
         )
-        ttk.Button(self, text="Apply manually", command=self.apply_roi).pack(
-            anchor="w", padx=8
-        )
+        ttk.Button(self, text="Apply manually", command=self.apply_roi).pack(anchor="w", padx=8)
         self.status_lbl = ttk.Label(self, text="", foreground="green")
         self.status_lbl.pack(anchor="w", padx=8, pady=4)
 
@@ -90,15 +88,11 @@ class RoiTab(ttk.Frame):
         if not all_maps:
             all_maps = ["zestafona", "bakurani", "ozeti"]
 
-        self._cache_map_sel = ttk.Combobox(
-            row_map, values=all_maps, state="readonly", width=12
-        )
+        self._cache_map_sel = ttk.Combobox(row_map, values=all_maps, state="readonly", width=12)
         cur_map = self.cfg.get("map", {}).get("name", "zestafona")
         self._cache_map_sel.set(cur_map if cur_map in all_maps else all_maps[0])
         self._cache_map_sel.pack(side="left", padx=6)
-        self._cache_map_sel.bind(
-            "<<ComboboxSelected>>", lambda _e: self.cache_status_refresh()
-        )
+        self._cache_map_sel.bind("<<ComboboxSelected>>", lambda _e: self.cache_status_refresh())
 
         self._cache_rebuild_btn = ttk.Button(
             row_map,
@@ -131,9 +125,7 @@ class RoiTab(ttk.Frame):
         if self._roi_pick_busy:
             return
         self._roi_pick_busy = True
-        self.status_lbl.config(
-            text="grabbing the screen...", foreground="#8a8a8a"
-        )
+        self.status_lbl.config(text="grabbing the screen...", foreground="#8a8a8a")
         cap = self.get_cap()
         if cap is None:
             self._roi_pick_fail("screen capture unavailable")
@@ -155,9 +147,7 @@ class RoiTab(ttk.Frame):
 
     def _roi_pick_fail(self, exc: str) -> None:
         self._roi_pick_busy = False
-        self.status_lbl.config(
-            text=f"screen grab failed: {exc}", foreground="red"
-        )
+        self.status_lbl.config(text=f"screen grab failed: {exc}", foreground="red")
 
     def _roi_pick_open(self, bgr: np.ndarray, mon: Any) -> None:
         self._roi_pick_busy = False
@@ -182,9 +172,7 @@ class RoiTab(ttk.Frame):
         try:
             roi = [int(self.roi_vars[n].get()) for n in ("x", "y", "w", "h")]
         except ValueError:
-            self.status_lbl.config(
-                text="Error: integers are required", foreground="red"
-            )
+            self.status_lbl.config(text="Error: integers are required", foreground="red")
             return
         x, y, w, h = roi
         if x < 0 or y < 0 or w < 16 or h < 16:
@@ -215,7 +203,8 @@ class RoiTab(ttk.Frame):
         has_mu = os.path.exists(mu_path)
         has_feat = os.path.exists(feat_path)
         missing_previews = [
-            sz for sz in locator.PREVIEW_SIZES
+            sz
+            for sz in locator.PREVIEW_SIZES
             if not os.path.exists(os.path.join(data_dir, f"{name}_preview_{sz}.npy"))
         ]
 
@@ -231,7 +220,10 @@ class RoiTab(ttk.Frame):
         if not has_feat:
             return "Cache incomplete: SIFT feature index missing (press Rebuild)", "#ffaa00"
         if missing_previews:
-            return f"Cache incomplete: missing previews {missing_previews} (press Rebuild)", "#ffaa00"
+            return (
+                f"Cache incomplete: missing previews {missing_previews} (press Rebuild)",
+                "#ffaa00",
+            )
 
         try:
             with np.load(feat_path) as idx:
@@ -257,7 +249,7 @@ class RoiTab(ttk.Frame):
             return
         if not messagebox.askyesno(
             "Map Cache",
-            f"Rebuild map cache and SIFT feature index for \"{name}\"?\n\n"
+            f'Rebuild map cache and SIFT feature index for "{name}"?\n\n'
             "This will regenerate mu.npy, preview mipmaps, and the SIFT descriptor index.\n"
             "This process runs in the background and takes ~1-2 minutes.",
         ):
@@ -265,15 +257,11 @@ class RoiTab(ttk.Frame):
         self._cache_rebuild_busy = True
         self._cache_rebuild_btn.config(state="disabled")
         self._cache_status_lbl.config(text="Starting rebuild...", foreground="#ffaa00")
-        threading.Thread(
-            target=self._cache_rebuild_worker, args=(name,), daemon=True
-        ).start()
+        threading.Thread(target=self._cache_rebuild_worker, args=(name,), daemon=True).start()
 
     def _cache_rebuild_worker(self, name: str) -> None:
         def on_prog(msg: str) -> None:
-            self.after(
-                0, lambda: self._cache_status_lbl.config(text=msg, foreground="#ffaa00")
-            )
+            self.after(0, lambda: self._cache_status_lbl.config(text=msg, foreground="#ffaa00"))
 
         try:
             locator.rebuild_map_cache(name, progress_cb=on_prog)
@@ -287,7 +275,7 @@ class RoiTab(ttk.Frame):
                 self.cache_status_refresh()
                 messagebox.showinfo(
                     "Map Cache",
-                    f"Map cache and SIFT index successfully rebuilt for \"{name}\"!",
+                    f'Map cache and SIFT index successfully rebuilt for "{name}"!',
                 )
 
             self.after(0, done_ui)
@@ -298,9 +286,7 @@ class RoiTab(ttk.Frame):
             def err_ui() -> None:
                 self._cache_rebuild_busy = False
                 self._cache_rebuild_btn.config(state="normal")
-                self._cache_status_lbl.config(
-                    text=f"Rebuild error: {err_msg}", foreground="red"
-                )
+                self._cache_status_lbl.config(text=f"Rebuild error: {err_msg}", foreground="red")
                 messagebox.showerror("Map Cache", f"Rebuild failed: {err_msg}")
 
             self.after(0, err_ui)
@@ -317,7 +303,11 @@ class RoiTab(ttk.Frame):
         if mm_gray is None:
             return
 
-        frame = mm_bgr.copy() if (mm_bgr is not None and mm_bgr.size) else cv2.cvtColor(mm_gray, cv2.COLOR_GRAY2BGR)
+        frame = (
+            mm_bgr.copy()
+            if (mm_bgr is not None and mm_bgr.size)
+            else cv2.cvtColor(mm_gray, cv2.COLOR_GRAY2BGR)
+        )
         h, w = frame.shape[:2]
         if h < 4 or w < 4:
             return
@@ -325,7 +315,9 @@ class RoiTab(ttk.Frame):
         diag = (latest.get("diag") or {}) if latest else {}
 
         def label(img: np.ndarray, text: str, col: tuple[int, int, int] = (0, 255, 255)) -> None:
-            cv2.putText(img, text, (6, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (0, 0, 0), 3, cv2.LINE_AA)
+            cv2.putText(
+                img, text, (6, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (0, 0, 0), 3, cv2.LINE_AA
+            )
             cv2.putText(img, text, (6, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.52, col, 1, cv2.LINE_AA)
 
         # 1. Raw frame
@@ -341,7 +333,9 @@ class RoiTab(ttk.Frame):
             overlay = p2.copy()
             overlay[m] = (0, 30, 220)
             cv2.addWeighted(overlay, 0.45, p2, 0.55, 0, p2)
-            cnts, _ = cv2.findContours(m.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            cnts, _ = cv2.findContours(
+                m.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+            )
             cv2.drawContours(p2, cnts, -1, (0, 160, 255), 1)
             pct = (m.sum() / float(m.size)) * 100.0
             label(p2, f"2. MASK ({pct:.1f}%)", (0, 255, 255))

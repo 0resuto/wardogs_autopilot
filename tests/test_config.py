@@ -86,4 +86,3 @@ def test_map_store_typed_cfg_bridge():
     assert "local_radius" in loc_cfg
     assert isinstance(map_cfg, dict)
     assert "gray_conv" in map_cfg
-
