@@ -44,6 +44,11 @@ class FollowDriver(threading.Thread):
         speed_cap_kmh: float | None = None,
         xte_m: float | None = None,
         debug: bool | None = None,
+        turn_deg: float | None = None,
+        hold_max: float | None = None,
+        stop_speed_kmh: float | None = None,
+        stop_hold: float | None = None,
+        stop_timeout: float | None = None,
         nav_cfg: NavigatorConfig | dict[str, Any] | None = None,
     ) -> None:
         super().__init__(daemon=True)
@@ -74,6 +79,15 @@ class FollowDriver(threading.Thread):
         )
         self.xte_m = float(xte_m if xte_m is not None else self.nav_cfg.xte_m)
         self.dbg = bool(debug if debug is not None else self.nav_cfg.debug)
+        self.stop_speed_kmh = float(
+            stop_speed_kmh if stop_speed_kmh is not None else self.nav_cfg.stop_speed_kmh
+        )
+        self.stop_hold = float(
+            stop_hold if stop_hold is not None else self.nav_cfg.stop_hold
+        )
+        self.stop_timeout = float(
+            stop_timeout if stop_timeout is not None else self.nav_cfg.stop_timeout
+        )
         self.kb = kb
 
         # Sub-controllers
@@ -84,7 +98,14 @@ class FollowDriver(threading.Thread):
             speed_cap_kmh=self.speed_cap_kmh, brake_d=self.brake_d
         )
         self.steer_ctrl = SteeringController(
-            dead=self.dead, dead_off=self.dead_off
+            dead=self.dead,
+            dead_off=self.dead_off,
+            turn_deg=(
+                turn_deg if turn_deg is not None else self.nav_cfg.turn_deg
+            ),
+            hold_max=(
+                hold_max if hold_max is not None else self.nav_cfg.hold_max
+            ),
         )
         self.telemetry = NavTelemetryLogger(dbg_target=self.dbg)
 
@@ -102,6 +123,9 @@ class FollowDriver(threading.Thread):
         self._lost = False
         self._dbg_n = 0
         self._stop_ev = threading.Event()
+        self._final_stop = False
+        self._stop_s_t: float | None = None
+        self._final_t0: float | None = None
 
     @property
     def idx(self) -> int:
@@ -217,6 +241,54 @@ class FollowDriver(threading.Thread):
             pass
         self.state = state
 
+    def _update_speed(self, now: float, mp: tuple[float, float]) -> None:
+        """Smoothed instantaneous speed estimate from successive poses."""
+        prev = self._last_mp
+        self._last_mp = (float(mp[0]), float(mp[1]))
+        if prev is not None and self._last_t:
+            dtp = max(now - self._last_t, 1e-3)
+            inst = math.hypot(mp[0] - prev[0], mp[1] - prev[1]) / dtp
+            self.speed = min(400.0, self.speed * 0.6 + inst * 0.4)
+        else:
+            self.speed = 0.0
+        self._last_t = now
+
+    def _final_brake_dist(self) -> float:
+        """Distance to the final waypoint at which full-stop braking begins."""
+        mv = self.path.mv
+        return (max(mv, 0.0) ** 2 / (2.0 * self.brake_d) + 12.0) * 1.5
+
+    def _stop_thr(self) -> float:
+        """Full-stop speed threshold in px/s (km/h knob, px floor applied)."""
+        pm = self.speed_ctrl.px_per_m_now()
+        if pm > 0:
+            return max(self.stop_speed_kmh * pm / 3.6, 6.0)
+        return 6.0
+
+    def _fully_stopped(self, now: float) -> bool:
+        """True once the vehicle stayed below the stop speed long enough (or timed out)."""
+        thr = self._stop_thr()
+        if max(self.speed, self.path.mv) <= thr:
+            if self._stop_s_t is None:
+                self._stop_s_t = now
+            elif now - self._stop_s_t >= self.stop_hold:
+                return True
+        else:
+            self._stop_s_t = None
+        t0 = self._final_t0
+        return t0 is not None and (now - t0) >= self.stop_timeout
+
+    def _finish(self) -> None:
+        """Full stop at the final waypoint: disable the autopilot (as with F7)."""
+        logger.info("[nav] full stop at final waypoint — disabling autopilot")
+        self.state = "finished"
+        try:
+            if self.kb is not None:
+                self.kb.release_all()
+        except OSError:
+            pass
+        self._stop_ev.set()
+
     def _get_telemetry_params(self) -> dict[str, Any]:
         return dict(
             arrive_r=self.arrive_r,
@@ -230,9 +302,14 @@ class FollowDriver(threading.Thread):
             w_est=self.steer_ctrl.w_est,
             t_min=self.steer_ctrl.t_min,
             t_max=self.steer_ctrl.t_max,
+            turn_deg=self.steer_ctrl.turn_deg,
+            hold_max=self.steer_ctrl.hold_max,
             speed_cap_kmh=self.speed_cap_kmh,
             v_cruise=self.speed_ctrl.v_cruise,
             xte_m=self.xte_m,
+            stop_speed_kmh=self.stop_speed_kmh,
+            stop_hold=self.stop_hold,
+            stop_timeout=self.stop_timeout,
         )
 
     def run(self) -> None:
@@ -287,22 +364,78 @@ class FollowDriver(threading.Thread):
                     continue
 
                 # Advance waypoints
+                final_seg = len(self.pts) > 1 and self.path.idx >= len(self.pts) - 1
                 tx, ty, dist, arrived = self.path.advance_waypoint(mp)
-                if arrived:
+                if arrived and not final_seg:
                     self._rel("arrived")
                     self._wait(0.3)
                     continue
 
+                # The last waypoint is the active target: brake with SPACE down to a
+                # full stop, then disable the autopilot (the same as pressing F7).
+                if (
+                    final_seg
+                    and not self._final_stop
+                    and dist < self._final_brake_dist()
+                ):
+                    self._final_stop = True
+                    self._final_t0 = now
+                    self._stop_s_t = None
+                    logger.info(
+                        "[nav] final waypoint %d in stop range (dist=%.0fm) "
+                        "sv=%.0fpx/s mv=%.0fpx/s",
+                        self.path.idx, self._m(dist), self.speed, self.path.mv,
+                    )
+
+                if self._final_stop:
+                    self._update_speed(now, mp)
+                    if self._fully_stopped(now):
+                        self._finish()
+                        continue
+                    self._rel("final_stop")
+                    try:
+                        if self.kb is not None:
+                            self.kb.set_state({"SPACE": True})
+                    except OSError as exc:
+                        self.err = exc
+                        self.state = "key_error"
+                        self._wait(0.3)
+                        continue
+                    self.steer_ctrl.force_release(now, self.path.mh_t)
+                    self.err = None
+                    if self.dbg:
+                        self._dbg_tick(dict(
+                            t=round(now, 4),
+                            tick=self._dbg_n,
+                            kind="final_stop",
+                            pose_age=round(now - float(it["ts"]), 3) if it else 0.0,
+                            sample_age=round(now - self.path.samples[-1][0], 3),
+                            new_sample=bool(new_sample),
+                            mode="S",
+                            mv=round(self.path.mv, 1),
+                            heading=round(self._heading or 0.0, 2),
+                            speed=round(self.speed, 1),
+                            dist=round(dist, 1),
+                            keys="SPACE",
+                            idx=self.path.idx,
+                        ))
+                    if self._dbg_n % 5 == 0:
+                        logger.info(
+                            "[nav] final-stop braking sv=%.1fpx/s mv=%.1fpx/s "
+                            "dist=%.0fm",
+                            self.speed, self.path.mv, self._m(dist),
+                        )
+                    self._dbg_n += 1
+                    self.last = dict(
+                        idx=self.path.idx, dist=dist, bearing=0.0, err=0.0,
+                        heading=self._heading or 0.0, turn=0.0, speed=self.speed,
+                    )
+                    self.state = "final_stop"
+                    self._wait(self.poll)
+                    continue
+
                 # Speed estimation from successive positions
-                prev = self._last_mp
-                self._last_mp = (float(mp[0]), float(mp[1]))
-                if prev is not None and self._last_t:
-                    dtp = max(now - self._last_t, 1e-3)
-                    inst = math.hypot(mp[0] - prev[0], mp[1] - prev[1]) / dtp
-                    self.speed = min(400.0, self.speed * 0.6 + inst * 0.4)
-                else:
-                    self.speed = 0.0
-                self._last_t = now
+                self._update_speed(now, mp)
 
                 # Cross-track error & pure pursuit bearing
                 xte, xte_lim, bearing = self.path.calc_xte_and_bearing(

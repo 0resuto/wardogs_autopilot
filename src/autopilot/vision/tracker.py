@@ -27,6 +27,13 @@ from . import locator
 
 logger = get_logger("tracker")
 
+FAIL_SAVE_PERIOD_S = 1.0
+FAIL_KEEP_FILES = 200
+FAIL_REASONS = (
+    "no_features_flat", "no_match_global", "budget_timeout", "no_index",
+    "index_no_match", "no_features_frame", "vote_reject",
+)
+
 
 
 def _ang_diff(a, b):
@@ -196,6 +203,7 @@ class LiveLocator(threading.Thread):
         self._disp_hist: collections.deque[tuple[float, float]] = collections.deque(maxlen=5)
         self._good_pose: dict[str, Any] | None = None     # last accepted pose dict (for black-frame hold)
         self._hold_left: int | None = None     # frames of black-frame hold still left
+        self._last_fail_save: float = 0.0      # time of the last fail-frame dump (throttle)
         self._counts: collections.Counter[str] = collections.Counter()   # reject reason tally
         self.search_now: tuple[Any, ...] | str | None = None   # sector being searched right now ('disc'/'global')
 
@@ -210,6 +218,15 @@ class LiveLocator(threading.Thread):
 
     def stop(self) -> None:
         self._stop.set()
+
+    def set_collect_fail_logs(self, enabled: bool) -> None:
+        """Live toggle of the fail-frame collector (Map tab checkbox)."""
+        enabled = bool(enabled)
+        self.app_cfg.debug.collect_fail_logs = enabled
+        if isinstance(self.cfg, dict):
+            self.cfg.setdefault("debug", {})["collect_fail_logs"] = enabled
+        logger.info("[tracker] fail-frame collection %s",
+                    "enabled" if enabled else "disabled")
 
     def _search_progress(self, region):
         """Live callback from the locator: the sector searched at this instant.
@@ -299,17 +316,13 @@ class LiveLocator(threading.Thread):
                 # for post-run analysis; enabled by the "collect fail logs"
                 # checkbox in the app (config 'debug.collect_fail_logs')
                 collect = bool(self.app_cfg.debug.collect_fail_logs)
-                self._fails_since_saved = getattr(
-                    self, "_fails_since_saved", 0)
                 if (collect and pose is None
-                        and diag.get("reject") in (
-                            "no_features_flat", "no_match_global",
-                            "budget_timeout", "no_index", "index_no_match",
-                            "no_features_frame", "vote_reject")):
-                    self._fails_since_saved += 1
-                    if self._fails_since_saved % 8 == 1:
-                        self._save_fail_frame(diag, mm)
-                        self._fails_since_saved = 0
+                        and diag.get("reject") in FAIL_REASONS):
+                    now = time.time()
+                    if now - self._last_fail_save >= FAIL_SAVE_PERIOD_S:
+                        self._last_fail_save = now
+                        self._save_fail_frame(diag, mm, item.get('bgr'),
+                                              item.get('mask'))
                 mp = None
                 good = False
                 cand = None     # pending vote approval: (px, py, heading, inl)
@@ -414,18 +427,61 @@ class LiveLocator(threading.Thread):
             crashlog.log('locator thread exited with an error', exc)
             self.error = str(exc)
 
-    def _save_fail_frame(self, diag: dict, mm) -> None:
-        """Autosave a frame on localization failure (for post-run analysis)."""
+    def _fail_payload(self, diag: dict, mm, mask) -> dict[str, Any]:
+        """Structured context of a failed frame for offline replay/triage."""
+        loc = self.locator_cfg.model_dump()
+        prev = self._prev_xy if self._prev_xy is not None else diag.get("prev")
+        return {
+            "ts": time.time(),
+            "reject": diag.get("reject"),
+            "detail": diag.get("detail"),
+            "mode": diag.get("mode"),
+            "prev": list(prev) if prev is not None else None,
+            "roi": diag.get("roi"),
+            "attempt": self.attempt,
+            "frame_shape": list(mm.shape),
+            "mm_mean": diag.get("mm_mean"),
+            "mm_std": diag.get("mm_std"),
+            "mm_mask_frac": diag.get("mm_mask_frac"),
+            "kp_mm": diag.get("kp_mm"),
+            "kp_chunk": diag.get("kp_chunk"),
+            "good": diag.get("good1"),
+            "inl": diag.get("inl1"),
+            "s": diag.get("s1"),
+            "th": diag.get("th1"),
+            "t": diag.get("t1"),
+            "search_discs": diag.get("search_discs"),
+            "search_global": diag.get("search_global"),
+            "vote": diag.get("vote"),
+            "reject_tally": diag.get("reject_tally"),
+            "mask_px": int(np.asarray(mask).sum()) if mask is not None
+            and getattr(mask, "size", 0) else None,
+            "thr": {k: loc.get(k) for k in (
+                "max_kp_frame", "track_radius", "ratio_local", "min_inl_local",
+                "min_inl_rate_local", "ratio_global", "min_inl_global",
+                "min_inl_rate_global", "vote_need", "vote_inl_skip",
+                "jump_gate_px", "heading_gate_deg") if loc.get(k) is not None},
+        }
+
+    def _save_fail_frame(self, diag: dict, mm, bgr=None, mask=None) -> None:
+        """Autosave a failed frame (gray + color + context) for post-run analysis."""
         try:
             out_dir = os.path.join(PROJECT_ROOT, "output")
             os.makedirs(out_dir, exist_ok=True)
-            base = "debug_fail_%s" % time.strftime("%Y%m%d_%H%M%S")
+            ms = int((time.time() % 1.0) * 1000)
+            base = "debug_fail_%s_%03d" % (time.strftime("%Y%m%d_%H%M%S"), ms)
             cv2.imwrite(os.path.join(out_dir, base + ".png"), mm)
+            if bgr is not None and getattr(bgr, "size", 0):
+                cv2.imwrite(os.path.join(out_dir, base + "_rgb.png"), bgr)
+            payload = self._fail_payload(diag, mm, mask)
+            with open(os.path.join(out_dir, base + ".json"), "w",
+                      encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
             with open(os.path.join(out_dir, base + ".txt"), "w",
                       encoding="utf-8") as f:
                 f.write("reject=%s\n" % diag.get("reject"))
                 f.write("detail=%s\n" % diag.get("detail"))
-                f.write("prev=%s\n" % (diag.get("prev"),))
+                f.write("prev=%s\n" % (payload["prev"],))
                 f.write("roi=%s\n" % (diag.get("roi"),))
                 f.write("kp_mm=%d kp_chunk=%d\n"
                         % (diag.get("kp_mm", 0), diag.get("kp_chunk", 0)))
@@ -436,22 +492,22 @@ class LiveLocator(threading.Thread):
                 if tally:
                     f.write("tally=%s\n" % " ".join(
                         "%s=%d" % (k, v) for k, v in tally.items()))
-                loc = self.locator_cfg.model_dump()
-                f.write("thr=%s\n" % json.dumps(
-                    {k: loc.get(k) for k in (
-                        "track_radius", "ratio_local", "min_inl_local",
-                        "min_inl_rate_local", "ratio_global", "min_inl_global",
-                        "min_inl_rate_global", "vote_need", "vote_inl_skip",
-                        "jump_gate_px", "heading_gate_deg")
-                     if loc.get(k) is not None}, sort_keys=True))
-            # keep at most 20 failure files (~10 failures of png+txt)
-            files = sorted(
-                p for p in os.listdir(out_dir) if p.startswith("debug_fail_"))
-            while len(files) > 20:
-                try:
-                    os.remove(os.path.join(out_dir, files[0]))
-                except OSError:
-                    pass
-                files = files[1:]
+                f.write("thr=%s\n" % json.dumps(payload["thr"], sort_keys=True))
+            self._prune_fail_files(out_dir)
+            logger.info("[tracker] saved fail frame %s (reject=%s kp=%s)",
+                        base, diag.get("reject"), diag.get("kp_mm"))
         except Exception:  # noqa: BLE001
             pass
+
+    @staticmethod
+    def _prune_fail_files(out_dir: str, keep: int = FAIL_KEEP_FILES) -> None:
+        """Keep only the newest `keep` debug_fail_* files (names sort by time)."""
+        files = sorted(
+            p for p in os.listdir(out_dir) if p.startswith("debug_fail_"))
+        while len(files) > keep:
+            try:
+                os.remove(os.path.join(out_dir, files[0]))
+            except OSError:
+                pass
+            files = files[1:]
+

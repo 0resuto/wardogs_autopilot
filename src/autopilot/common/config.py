@@ -44,12 +44,21 @@ class LocatorConfig(BaseModel):
     local_radius: int = Field(default=450, ge=50, description="Tracking search radius (px)")
     radius_growth: float = Field(default=1.6, ge=1.0, le=5.0)
     global_max_features: int = Field(default=100000, ge=1000)
+    max_kp_frame: int = Field(
+        default=1200, ge=100, le=6000,
+        description="Max SIFT keypoints kept from a captured frame (response-ranked)",
+    )
+    fast_clahe: bool = Field(
+        default=False,
+        description="Try a CLAHE-preprocessed fast pass first, fall back to the "
+                    "default normalization when it finds no pose",
+    )
     ratio: float = Field(default=0.8, ge=0.1, le=1.0)
     min_inl: int = Field(default=4, ge=1)
     min_inl_rate: float = Field(default=0.0, ge=0.0, le=1.0)
     track_radius: float = Field(default=900.0, ge=50.0)
     ratio_local: float = Field(default=0.85, ge=0.1, le=1.0)
-    min_inl_local: int = Field(default=2, ge=1)
+    min_inl_local: int = Field(default=4, ge=1)
     min_inl_rate_local: float = Field(default=0.0, ge=0.0, le=1.0)
     ratio_global: float = Field(default=0.9, ge=0.1, le=1.0)
     min_inl_global: int = Field(default=5, ge=1)
@@ -89,11 +98,31 @@ class NavigatorConfig(BaseModel):
     arrive_r: float = Field(default=25.0, ge=1.0, description="Waypoint arrival radius (px)")
     slow_r: float = Field(default=350.0, ge=1.0, description="Deceleration radius (px)")
     dead: float = Field(default=3.0, ge=0.0, description="Steering dead-zone (deg)")
+    turn_deg: float = Field(
+        default=25.0, ge=1.0,
+        description="Heading error threshold for continuous steering (deg)",
+    )
+    hold_max: float = Field(
+        default=8.0, ge=0.5,
+        description="Safety timeout for continuous steering (s)",
+    )
     speed_cap_kmh: float = Field(default=79.0, ge=1.0, description="Maximum driving speed in km/h")
     xte_m: float = Field(default=4.0, ge=0.0, description="Cross-track error limit (meters)")
     poll: float = Field(default=0.033, ge=0.001, description="Navigation tick rate in seconds")
     brake_d: float = Field(default=260.0, ge=1.0, description="Braking distance threshold (px)")
     dead_off: float | None = Field(default=None, description="Steering release dead-zone (deg)")
+    stop_speed_kmh: float = Field(
+        default=2.0, ge=0.5,
+        description="Final-waypoint full-stop speed threshold (km/h, px floor applies)",
+    )
+    stop_hold: float = Field(
+        default=0.8, ge=0.1,
+        description="Seconds below stop speed before the autopilot disables itself",
+    )
+    stop_timeout: float = Field(
+        default=5.0, ge=1.0,
+        description="Hard timeout for final-waypoint braking before autopilot off (s)",
+    )
     debug: bool = Field(default=False, description="Enable verbose nav logging")
     last_preset: str = Field(default="")
 

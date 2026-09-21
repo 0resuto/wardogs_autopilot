@@ -285,10 +285,12 @@ class MapTab(ttk.Frame):
         self.apply_tune()
 
     def apply_collect_logs(self) -> None:
-        self.cfg.setdefault("debug", {})["collect_fail_logs"] = bool(
-            self._collect_ck.get()
-        )
+        enabled = bool(self._collect_ck.get())
+        self.cfg.setdefault("debug", {})["collect_fail_logs"] = enabled
         self.save_cfg()
+        loc = self.get_loc()
+        if loc is not None and hasattr(loc, "set_collect_fail_logs"):
+            loc.set_collect_fail_logs(enabled)
 
     def copy_debug(self) -> None:
         txt = self.dbg_text.get("1.0", "end-1c")

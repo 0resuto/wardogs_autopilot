@@ -37,28 +37,69 @@ from autopilot.vision import locator  # noqa: E402
 OUT = os.path.join(ROOT, "output")
 
 
-def _sibling_info(path):
-    """Live context debug_info_<base>.txt next to a debug_mm_*/debug_raw_* frame."""
-    base = None
-    for pre in ("debug_mm_", "debug_raw_", "debug_sheet_"):
-        if os.path.basename(path).startswith(pre):
-            base = os.path.basename(path)[len(pre):]
-            break
-    if base is None:
-        return None
-    p = os.path.join(os.path.dirname(path), "debug_info_" + base)
-    if not os.path.exists(p):
-        return None
+def _read_kv_txt(path):
+    """Parse a 'key=value' sidecar into a dict, or None when unreadable."""
     ctx = {}
     try:
-        with open(p, encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             for line in f:
                 if "=" in line:
                     k, v = line.strip().split("=", 1)
-                    ctx[k] = v.strip()
+                    ctx[k.strip()] = v.strip()
     except OSError:
         return None
     return ctx
+
+
+def _sibling_info(path):
+    """Context next to a saved frame, or None.
+
+    Handles debug_fail_<ts> frames (sidecars <stem>.json / <stem>.txt) and the
+    live snapshot frames debug_mm_/debug_raw_/debug_sheet_/debug_collage_ whose
+    context lives in debug_info_<ts>.txt / .json.
+    """
+    d = os.path.dirname(path)
+    base = os.path.basename(path)
+    stem = os.path.splitext(base)[0]
+    cands = [stem + ".json", stem + ".txt"]
+    for pre in ("debug_mm_", "debug_raw_", "debug_sheet_", "debug_collage_"):
+        if base.startswith(pre):
+            ts = stem[len(pre):]
+            cands += ["debug_info_" + ts + ".json", "debug_info_" + ts + ".txt"]
+    for name in cands:
+        p = os.path.join(d, name)
+        if not os.path.exists(p):
+            continue
+        if name.endswith(".json"):
+            try:
+                with open(p, encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    return data
+            except (OSError, ValueError):
+                continue
+        ctx = _read_kv_txt(p)
+        if ctx is not None:
+            return ctx
+    return None
+
+
+def _parse_prev(v):
+    """Normalize a sidecar 'prev' value (list or '(x, y)' string) to (x, y)."""
+    if v in (None, "-", "None", "", "[]"):
+        return None
+    if isinstance(v, (list, tuple)) and len(v) == 2:
+        try:
+            return (float(v[0]), float(v[1]))
+        except (TypeError, ValueError):
+            return None
+    try:
+        parts = str(v).strip("()[] ").split(",")
+        if len(parts) != 2:
+            return None
+        return (float(parts[0]), float(parts[1]))
+    except ValueError:
+        return None
 
 
 def _map_name():
@@ -204,11 +245,8 @@ def compare_gray_sheet(gray, mask, pose, ms, open_sheet):
 def process(path, map_name, prev_xy, open_sheet, skip_gray_cmp=False):
     base = os.path.basename(path)
     ctx = _sibling_info(path)
-    if prev_xy is None and ctx is not None and ctx.get("prev") not in (None, "None"):
-        try:
-            prev_xy = tuple(float(v) for v in ctx["prev"].strip("()").split(","))
-        except ValueError:
-            prev_xy = None
+    if prev_xy is None and ctx is not None:
+        prev_xy = _parse_prev(ctx.get("prev"))
     locator.set_map(map_name)
     mu = locator.load_global_map()
     ms = locator._mini_scale()

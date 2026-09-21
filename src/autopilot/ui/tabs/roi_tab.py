@@ -18,6 +18,7 @@ from ..imaging import to_photo
 from ..roi_selector import RoiSelector
 
 DARK_CANVAS = "#1e1e1e"
+MAX_KP_DRAW = 300
 
 
 class RoiTab(ttk.Frame):
@@ -351,7 +352,12 @@ class RoiTab(ttk.Frame):
         p3 = frame.copy()
         kp_pts = diag.get("kp_pts") or []
         inlier_pts = diag.get("inlier_pts") or []
-        for pt in kp_pts:
+        if len(kp_pts) > MAX_KP_DRAW:
+            step = int(np.ceil(len(kp_pts) / float(MAX_KP_DRAW)))
+            kp_draw = kp_pts[::step]
+        else:
+            kp_draw = kp_pts
+        for pt in kp_draw:
             cv2.circle(p3, (int(round(pt[0])), int(round(pt[1]))), 2, (0, 255, 255), -1)
         for pt in inlier_pts:
             cv2.circle(p3, (int(round(pt[0])), int(round(pt[1]))), 4, (0, 255, 0), -1)

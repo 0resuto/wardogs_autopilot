@@ -208,6 +208,7 @@ class App(tk.Tk):
             self.map_tab.update_loc(latest)
             if self.routes_tab.canvas_widget.disp is not None:
                 self.routes_tab.routes_refresh()
+            self.routes_tab.sync_driver_state()
         except Exception as exc:
             logger.debug("Poll exception: %s", exc)
 
@@ -228,6 +229,7 @@ class App(tk.Tk):
             app_cfg.locator = self.cfg.get("locator", app_cfg.locator)
             app_cfg.map = self.cfg.get("map", app_cfg.map)
             app_cfg.navigator = self.cfg.get("navigator", app_cfg.navigator)
+            app_cfg.debug = self.cfg.get("debug", app_cfg.debug)
             app_cfg.save("config.json")
         except Exception:
             import json

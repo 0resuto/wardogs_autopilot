@@ -303,6 +303,16 @@ class RoutesTab(ttk.Frame):
                 text="EMERGENCY STOP", foreground="#ff3b3b"
             )
 
+    def sync_driver_state(self) -> None:
+        """Main-thread poll: finalize the UI when the driver finished the route itself."""
+        d = self.driver
+        if d is not None and d.state == "finished":
+            self.driver = None
+            self.follow_btn.config(text="Follow route")
+            self.routes_status.config(
+                text="route finished — autopilot off", foreground="#7cc4ff"
+            )
+
     def _draw_overlay(
         self, canvas: tk.Canvas, disp: tuple[float, float, float] | None
     ) -> None:

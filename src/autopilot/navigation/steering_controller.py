@@ -22,6 +22,8 @@ class SteeringController:
         t_min: float = 0.10,
         t_max: float = 0.50,
         pulse_on: int = 2,
+        turn_deg: float = 25.0,
+        hold_max: float = 8.0,
     ) -> None:
         self.dead = max(float(dead), 6.0)
         self.dead_off = max(float(dead_off), 2.0)
@@ -32,10 +34,15 @@ class SteeringController:
         self.t_min = float(t_min)
         self.t_max = float(t_max)
         self.pulse_on = int(pulse_on)
+        self.turn_deg = float(turn_deg)
+        self.hold_max = float(hold_max)
 
         self.steer = 0               # -1=A, 0=neutral, +1=D
         self.steer_ph = 0            # micro-pulse tick counter
         self.micro = False           # micro-tap mode
+        self.hold = False            # continuous steering on large errors
+        self.hold_err0 = 0.0         # |err| at hold-mode engagement
+        self.big_n = 0               # consecutive big-error ticks (debounce)
         self.ang = 0.0               # heading angular velocity (deg/s)
         self.last_hd: float | None = None
         self.last_hd_t = 0.0
@@ -51,6 +58,9 @@ class SteeringController:
         self.steer = 0
         self.steer_ph = 0
         self.micro = False
+        self.hold = False
+        self.hold_err0 = 0.0
+        self.big_n = 0
         self.ang = 0.0
         self.last_hd = None
         self.last_hd_t = 0.0
@@ -62,6 +72,8 @@ class SteeringController:
         self.steer = 0
         self.settle_until = now + self.settle_t
         self.settle_mh = mh_t
+        self.hold = False
+        self.hold_err0 = 0.0
 
     def update_angular_velocity(self, now: float, heading: float) -> None:
         """Update estimated yaw rate from successive heading observations."""
@@ -90,6 +102,10 @@ class SteeringController:
         """Evaluate steering state machine and return active key command (-1=A, 0=None, +1=D)."""
         self.update_angular_velocity(now, heading)
 
+        # Consecutive big-error debounce: a single-tick glitch (localization
+        # flicker) must not engage continuous steering.
+        self.big_n = self.big_n + 1 if abs(err) >= self.turn_deg else 0
+
         fresh = (
             mh is None
             or mh_t > self.settle_mh
@@ -101,29 +117,52 @@ class SteeringController:
                 if err > self.dead:
                     self.steer = 1
                     self.micro = False
-                    self.imp_end = now + min(self.calc_impulse(abs(err)), self.t_max)
+                    self.hold = self.big_n >= 2
+                    self.hold_err0 = abs(err)
+                    self.imp_end = now + (
+                        self.hold_max if self.hold
+                        else min(self.calc_impulse(abs(err)), self.t_max)
+                    )
                     self.press_t0 = now
                     self.press_h0 = heading
                     self.hold_t0 = now
                 elif err < -self.dead:
                     self.steer = -1
                     self.micro = False
-                    self.imp_end = now + min(self.calc_impulse(abs(err)), self.t_max)
+                    self.hold = self.big_n >= 2
+                    self.hold_err0 = abs(err)
+                    self.imp_end = now + (
+                        self.hold_max if self.hold
+                        else min(self.calc_impulse(abs(err)), self.t_max)
+                    )
                     self.press_t0 = now
                     self.press_h0 = heading
                     self.hold_t0 = now
         else:
+            # Upgrade an in-progress impulse to continuous steering once a
+            # big error persists across the debounce window (~2 ticks).
+            if not self.hold and self.big_n >= 2:
+                self.hold = True
+                self.imp_end = now + self.hold_max
+
             rotated = abs(wrap180(heading - self.press_h0))
             press_age = now - self.press_t0
             small = (
                 err < self.dead_off if self.steer == 1 else err > -self.dead_off
             )
-            released = (
-                rotated >= abs(err) * 0.85 + self.dead_off
-                or (press_age > 0.45 and rotated < 3.0)
-                or small
-                or now >= self.imp_end
-            )
+            if self.hold:
+                # Continuous steering: keep turning until the heading really
+                # aligns with the bearing (not an impulse timeout).
+                aligned = abs(err) < self.dead
+                turned = rotated >= min(abs(err), self.hold_err0) * 0.8 + self.dead_off
+                released = aligned or turned or now >= self.imp_end
+            else:
+                released = (
+                    rotated >= abs(err) * 0.85 + self.dead_off
+                    or (press_age > 0.45 and rotated < 3.0)
+                    or small
+                    or now >= self.imp_end
+                )
 
             if released:
                 self.force_release(now, mh_t)

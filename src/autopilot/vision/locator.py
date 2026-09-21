@@ -66,6 +66,8 @@ __all__ = [
 
 logger = get_logger("locator")
 
+DEFAULT_MAX_KP = 1200
+FAST_BUDGET_FRAC = 0.4
 
 
 def _over(t0: float, budget: float | None) -> bool:
@@ -87,10 +89,42 @@ class MapLocator:
         self.sift = cv2.SIFT.create(nfeatures=6000, contrastThreshold=0.05, edgeThreshold=12)
         self.bf = cv2.BFMatcher(cv2.NORM_L2)
         self.ratio = 0.80
+        self.clahe = cv2.createCLAHE(2.0, (8, 8))
+
+    def _clahe_preprocess(
+        self, mm: np.ndarray, ui_mask: np.ndarray | None
+    ) -> np.ndarray:
+        """Fill UI pixels with the background median, then local-contrast (CLAHE).
+
+        Yields fewer, more structural keypoints than the percentile stretch, so
+        it is ~2x faster to match; used as an optional first pass with a
+        fallback to `shadow_fill_norm` when it finds no pose.
+        """
+        m = mm.copy()
+        if ui_mask is not None and ui_mask.size:
+            m[ui_mask] = int(np.median(m[~ui_mask]))
+        return self.clahe.apply(m)
 
     def heading_deg(self, pose: dict[str, Any]) -> float:
         """Player's heading on the map: 0 deg = north, 90 deg = east (clockwise)."""
         return float(pose["th"])
+
+    def _detect(
+        self, mmf: np.ndarray, max_kp: int
+    ) -> tuple[list[cv2.KeyPoint], np.ndarray | None]:
+        """SIFT keypoints/descriptors of one frame, capped by descending response.
+
+        Tree canopy and other repetitive texture can yield thousands of weak,
+        non-distinctive keypoints (measured 1400+ on a forest frame) that inflate
+        the BF.knnMatch cost and dilute RANSAC without adding real inliers.
+        Ranking by response and keeping `max_kp` retains the structural points
+        while bounding the per-frame match cost.
+        """
+        kp, desc = self.sift.detectAndCompute(mmf, None)
+        if desc is None or max_kp <= 0 or len(kp) <= max_kp:
+            return kp, desc
+        order = np.argsort([k.response for k in kp])[::-1][:max_kp]
+        return [kp[int(i)] for i in order], desc[order]
 
     def _mm_center_to_map(self, r: dict[str, Any], mm: np.ndarray) -> tuple[float, float]:
         """Minimap center in map (mu) coords from a pose with map-space translation."""
@@ -110,11 +144,16 @@ class MapLocator:
         thr: dict[str, Any] | None = None,
         budget: float | None = None,
         t0: float | None = None,
+        feats: tuple[list[cv2.KeyPoint], np.ndarray | None] | None = None,
     ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
         """SIFT match of the minimap against index descriptors within radius r (or globally)."""
         start_t = t0 if t0 is not None else time.time()
-        mmf = shadow_fill_norm(mm, ui_mask)
-        kp1, d1 = self.sift.detectAndCompute(mmf, None)
+        if feats is not None:
+            kp1, d1 = feats
+        else:
+            mmf = shadow_fill_norm(mm, ui_mask)
+            max_kp = int(self.store.loc_cfg().get("max_kp_frame", DEFAULT_MAX_KP))
+            kp1, d1 = self._detect(mmf, max_kp)
         diag: dict[str, Any] = dict(
             mmi_shape=tuple(mm.shape),
             roi=None,
@@ -241,6 +280,7 @@ class MapLocator:
         budget: float | None = None,
         t0: float | None = None,
         progress: Callable[[tuple[Any, ...]], None] | None = None,
+        feats: tuple[list[cv2.KeyPoint], np.ndarray | None] | None = None,
     ) -> tuple[dict[str, Any] | None, dict[str, Any], float, float, float] | tuple[None, dict[str, Any]]:
         """Index-based pose: growing radius around (cx, cy), then whole map."""
         start_t = t0 if t0 is not None else time.time()
@@ -280,7 +320,8 @@ class MapLocator:
                 cands = idx.radius_candidates(qx, qy, rad)
                 thr = global_thr if rad > track_radius else local_thr
                 res, dd = self._pose_via_index(
-                    mm, ui_mask, idx, qx, qy, rad, thr=thr, budget=budget, t0=start_t
+                    mm, ui_mask, idx, qx, qy, rad, thr=thr, budget=budget,
+                    t0=start_t, feats=feats,
                 )
                 last_diag = dd
                 if res is not None:
@@ -298,7 +339,8 @@ class MapLocator:
             if progress is not None:
                 progress(("global",))
             res, dd = self._pose_via_index(
-                mm, ui_mask, idx, 0.0, 0.0, None, thr=global_thr, budget=budget, t0=start_t
+                mm, ui_mask, idx, 0.0, 0.0, None, thr=global_thr, budget=budget,
+                t0=start_t, feats=feats,
             )
             last_diag = dd
             if res is not None:
@@ -401,20 +443,11 @@ class MapLocator:
         diag["mm_std"] = float(mm.std())
         if ui_mask is not None and ui_mask.size:
             diag["mm_mask_frac"] = float(ui_mask.mean())
-        mmf = shadow_fill_norm(mm, ui_mask)
-        _kf, _df = self.sift.detectAndCompute(mmf, None)
-        nfeat = 0 if _df is None else len(_df)
-        diag["kp_mm"] = nfeat
-        diag["kp_pts"] = [kp.pt for kp in _kf] if _kf else []
-        diag["inlier_pts"] = []
-        if nfeat < 4:
-            diag["reject"] = "no_features_flat"
-            mask_pct = int(100 * (diag["mm_mask_frac"] or 0))
-            diag["detail"] = (
-                f"frame without texture (feat={nfeat}, std={diag['mm_std']:.1f}, "
-                f"mask={mask_pct}%) — map search impossible"
-            )
-            return (None, diag) if debug else None
+        max_kp = int(self.store.loc_cfg().get("max_kp_frame", DEFAULT_MAX_KP))
+        fast = bool(self.store.loc_cfg().get("fast_clahe", False))
+        passes: list[Callable[[np.ndarray, np.ndarray | None], np.ndarray]] = (
+            [self._clahe_preprocess, shadow_fill_norm] if fast else [shadow_fill_norm]
+        )
 
         _ = self.store.load_global_map()
         ms = self.store.mini_scale()
@@ -434,9 +467,38 @@ class MapLocator:
             )
             return (None, diag) if debug else None
 
-        fp = self._index_find(
-            mm, ui_mask, idx, cx, cy, min_inl=min_inl, budget=budget, t0=t0, progress=progress
-        )
+        _kf: list[cv2.KeyPoint] = []
+        _df: np.ndarray | None = None
+        nfeat = 0
+        fp: Any = None
+        for i, prep in enumerate(passes):
+            # the fast pass gets only a slice of the budget so a fallback can run
+            sub_budget = budget
+            if budget is not None and len(passes) > 1 and i < len(passes) - 1:
+                sub_budget = budget * FAST_BUDGET_FRAC
+            mmf = prep(mm, ui_mask)
+            _kf, _df = self._detect(mmf, max_kp)
+            nfeat = 0 if _df is None else len(_df)
+            if nfeat < 4:
+                continue
+            fp = self._index_find(
+                mm, ui_mask, idx, cx, cy, min_inl=min_inl, budget=sub_budget,
+                t0=t0, progress=progress, feats=(_kf, _df),
+            )
+            if fp is not None and len(fp) == 5 and fp[0] is not None:
+                break
+
+        diag["kp_mm"] = nfeat
+        diag["kp_pts"] = [kp.pt for kp in _kf] if _kf else []
+        diag["inlier_pts"] = []
+        if nfeat < 4:
+            diag["reject"] = "no_features_flat"
+            mask_pct = int(100 * (diag["mm_mask_frac"] or 0))
+            diag["detail"] = (
+                f"frame without texture (feat={nfeat}, std={diag['mm_std']:.1f}, "
+                f"mask={mask_pct}%) — map search impossible"
+            )
+            return (None, diag) if debug else None
         r = d = None
         win = orig = None
         if fp is not None and len(fp) == 5 and fp[0] is not None:

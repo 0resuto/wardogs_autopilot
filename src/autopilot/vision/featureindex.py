@@ -25,7 +25,12 @@ logger = get_logger("featureindex")
 
 
 TILE = 512
-MAX_PER_TILE = 600
+# Per-tile feature cap. Forest tiles hold up to ~3400 SIFT points; capping by
+# response at 600 kept only the strongest (canopy) points and dropped the
+# weaker road/building features, so low-structure forest frames had no matches
+# in the index (measured: 3 vs 12 RANSAC inliers on the same tile). Keep nearly
+# all of them.
+MAX_PER_TILE = 3000
 LEVELS = (1.0, 0.8, 0.6)
 
 # Descriptor build must match the query's preprocessing space. In practice the
@@ -280,7 +285,7 @@ def main():
                     help='scale levels, comma list e.g. 1.0,0.9,0.8,0.7,0.6 '
                          '(default: 1.0,0.8,0.6)')
     ap.add_argument('--max-per-tile', type=int, default=None,
-                    help='max stored features per tile (default: 600)')
+                    help='max stored features per tile (default: 3000)')
     ap.add_argument('--contrast', type=float, default=None,
                     help='SIFT contrastThreshold for the build '
                          '(default: 0.05; lower = denser)')
