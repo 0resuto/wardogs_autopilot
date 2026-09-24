@@ -1,207 +1,187 @@
-"""Map diagnostics tab with interactive canvas, tuning sliders, and snapshot tools."""
+"""Map diagnostics tab with interactive QGraphicsView, tuning controls, and frame capture."""
 
 from __future__ import annotations
 
-import math
-import threading
-import tkinter as tk
 from collections.abc import Callable
-from tkinter import ttk
 from typing import Any
+
+from PySide6.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ...common.log import get_logger
 from ...vision import locator
-from ..debug_collage import save_debug_snapshot
-from ..map_canvas import InteractiveMapCanvas
+from ..map_view import InteractiveMapWidget
 
 logger = get_logger("map_tab")
 
 
-class MapTab(ttk.Frame):
-    """Map view tab providing interactive navigation diagnostics and locator tuning."""
+class _StringVarCompat:
+    """Compatibility shim for tests checking Tkinter StringVar."""
+
+    def __init__(self, value: str = "") -> None:
+        self._val = str(value)
+
+    def get(self) -> str:
+        return self._val
+
+    def set(self, val: str) -> None:
+        self._val = str(val)
+
+
+class MapTab(QWidget):
+    """Tab widget providing interactive map navigation, SIFT live pose, and locator tuning."""
 
     def __init__(
         self,
-        master: tk.Widget,
+        parent: QWidget | None,
         cfg: dict[str, Any],
         save_cfg_fn: Callable[[], None],
         loc_thread_supplier: Callable[[], Any],
-        on_pick_roi: Callable[[], None],
-        **kwargs: Any,
+        on_pick_roi: Callable[[], None] | None = None,
     ) -> None:
-        super().__init__(master, **kwargs)
+        super().__init__(parent)
         self.cfg = cfg
         self.save_cfg = save_cfg_fn
         self.get_loc = loc_thread_supplier
         self.on_pick_roi = on_pick_roi
 
-        self.tune_vars: dict[str, tk.StringVar] = {}
-        self.tune_status: ttk.Label
-        self.map_status: ttk.Label
         self.map_name = "zestafona"
         self._disp_th: float | None = None
         self._last_loc: dict[str, Any] | None = None
 
-        self._snap_busy = False
+        self.tune_vars: dict[str, _StringVarCompat] = {}
+        self.tune_inputs: dict[str, QLineEdit] = {}
+
         self._build_ui()
 
     def _build_ui(self) -> None:
-        # Top action toolbar
-        top = ttk.Frame(self)
-        top.pack(fill="x", padx=6, pady=(6, 2))
-        ttk.Button(top, text="Pick minimap zone", command=self.on_pick_roi).pack(
-            side="left", padx=(0, 8)
-        )
-        ttk.Button(top, text="Save frame", command=self.save_debug_frame).pack(
-            side="left", padx=(0, 8)
-        )
-        self.map_status = ttk.Label(top, text="", foreground="#7cc4ff")
-        self.map_status.pack(side="left", fill="x", expand=True)
-        ttk.Label(top, text="wheel - zoom, MMB - pan", foreground="#8a8a8a").pack(
-            side="right", padx=(8, 0)
-        )
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
 
-        # Locator tuning bar
-        tune = ttk.Frame(self)
-        tune.pack(fill="x", padx=8, pady=(0, 2))
-        ttk.Label(tune, text="locator tune:", foreground="#8a8a8a").pack(side="left")
+        # Top status / hint bar
+        top = QHBoxLayout()
+        top.setSpacing(8)
 
-        trk = ttk.Frame(tune)
-        trk.pack(side="left", padx=(4, 0))
-        ttk.Label(trk, text="TRACK", foreground="#7cc4ff").pack(side="left", padx=(0, 4))
-        ttk.Label(trk, text="ratio", foreground="#8a8a8a").pack(side="left")
-        self.tune_vars["ratio_local"] = tk.StringVar(
-            value=str(self._loc_tune_cur("ratio_local", 0.85))
-        )
-        ttk.Entry(trk, width=5, textvariable=self.tune_vars["ratio_local"]).pack(
-            side="left", padx=2
-        )
-        ttk.Label(trk, text="min_inl", foreground="#8a8a8a").pack(side="left")
-        self.tune_vars["min_inl_local"] = tk.StringVar(
-            value=str(int(self._loc_tune_cur("min_inl_local", 3)))
-        )
-        ttk.Entry(trk, width=3, textvariable=self.tune_vars["min_inl_local"]).pack(
-            side="left", padx=2
-        )
-        ttk.Label(trk, text="inl%", foreground="#8a8a8a").pack(side="left")
-        self.tune_vars["min_inl_rate_local"] = tk.StringVar(
-            value=str(self._loc_tune_cur("min_inl_rate_local", 0.0))
-        )
-        ttk.Entry(trk, width=4, textvariable=self.tune_vars["min_inl_rate_local"]).pack(
-            side="left", padx=2
-        )
-        ttk.Label(trk, text="rad", foreground="#8a8a8a").pack(side="left")
-        self.tune_vars["track_radius"] = tk.StringVar(
-            value=str(int(self._loc_tune_cur("track_radius", 900)))
-        )
-        ttk.Entry(trk, width=5, textvariable=self.tune_vars["track_radius"]).pack(
-            side="left", padx=2
-        )
+        self.map_status = QLabel("", self)
+        self.map_status.setStyleSheet("color: #88c0d0; font-weight: bold;")
+        top.addWidget(self.map_status, stretch=1)
 
-        acq = ttk.Frame(tune)
-        acq.pack(side="left", padx=(10, 0))
-        ttk.Label(acq, text="RE-ACQ", foreground="#ff7c7c").pack(side="left", padx=(0, 4))
-        ttk.Label(acq, text="ratio", foreground="#8a8a8a").pack(side="left")
-        self.tune_vars["ratio_global"] = tk.StringVar(
-            value=str(self._loc_tune_cur("ratio_global", 0.72))
-        )
-        ttk.Entry(acq, width=5, textvariable=self.tune_vars["ratio_global"]).pack(
-            side="left", padx=2
-        )
-        ttk.Label(acq, text="min_inl", foreground="#8a8a8a").pack(side="left")
-        self.tune_vars["min_inl_global"] = tk.StringVar(
-            value=str(int(self._loc_tune_cur("min_inl_global", 15)))
-        )
-        ttk.Entry(acq, width=3, textvariable=self.tune_vars["min_inl_global"]).pack(
-            side="left", padx=2
-        )
-        ttk.Label(acq, text="inl%", foreground="#8a8a8a").pack(side="left")
-        self.tune_vars["min_inl_rate_global"] = tk.StringVar(
-            value=str(self._loc_tune_cur("min_inl_rate_global", 0.45))
-        )
-        ttk.Entry(acq, width=4, textvariable=self.tune_vars["min_inl_rate_global"]).pack(
-            side="left", padx=2
-        )
+        hint = QLabel("Drag: Pan | Wheel: Zoom | 2x Click: Fit", self)
+        hint.setStyleSheet("color: #707070; font-size: 8pt;")
+        top.addWidget(hint)
+        layout.addLayout(top)
 
-        misc = ttk.Frame(tune)
-        misc.pack(side="left", padx=(10, 0))
-        ttk.Label(misc, text="vote", foreground="#8a8a8a").pack(side="left")
-        self.tune_vars["vote_need"] = tk.StringVar(
-            value=str(int(self._loc_tune_cur("vote_need", 3)))
-        )
-        ttk.Entry(misc, width=3, textvariable=self.tune_vars["vote_need"]).pack(side="left", padx=2)
-        ttk.Label(misc, text="head", foreground="#8a8a8a").pack(side="left", padx=(6, 0))
-        self.tune_vars["heading_gate_deg"] = tk.StringVar(
-            value=str(int(self._loc_tune_cur("heading_gate_deg", 0)))
-        )
-        ttk.Entry(misc, width=4, textvariable=self.tune_vars["heading_gate_deg"]).pack(
-            side="left", padx=2
-        )
-        ttk.Label(misc, text="skip", foreground="#8a8a8a").pack(side="left", padx=(6, 0))
-        self.tune_vars["vote_inl_skip"] = tk.StringVar(
-            value=str(int(self._loc_tune_cur("vote_inl_skip", 40)))
-        )
-        ttk.Entry(misc, width=3, textvariable=self.tune_vars["vote_inl_skip"]).pack(
-            side="left", padx=2
-        )
-        ttk.Label(misc, text="hold", foreground="#8a8a8a").pack(side="left", padx=(6, 0))
-        self.tune_vars["hold_frames"] = tk.StringVar(
-            value=str(int(self._loc_tune_cur("hold_frames", 5)))
-        )
-        ttk.Entry(misc, width=3, textvariable=self.tune_vars["hold_frames"]).pack(
-            side="left", padx=2
-        )
+        # Locator tuning bar grouped in 3 clusters
+        tune_row = QHBoxLayout()
+        tune_row.setSpacing(6)
 
-        ttk.Button(tune, text="Apply", command=self.apply_tune).pack(side="left", padx=(10, 0))
-        ttk.Button(tune, text="Reset", command=self.reset_tune).pack(side="left", padx=(4, 0))
-        self.tune_status = ttk.Label(tune, text="", foreground="#8ae234")
-        self.tune_status.pack(side="left", padx=(8, 0))
+        # 1. Tracking
+        grp_trk = QGroupBox("Tracking", self)
+        l_trk = QHBoxLayout(grp_trk)
+        l_trk.setContentsMargins(6, 10, 6, 6)
+        l_trk.setSpacing(4)
+        self._add_tune_field(l_trk, grp_trk, "ratio", "ratio_local", 0.85, 38)
+        self._add_tune_field(l_trk, grp_trk, "inl", "min_inl_local", 3, 26, is_int=True)
+        self._add_tune_field(l_trk, grp_trk, "inl%", "min_inl_rate_local", 0.0, 34)
+        self._add_tune_field(l_trk, grp_trk, "rad", "track_radius", 900, 38, is_int=True)
+        tune_row.addWidget(grp_trk)
 
-        # Diagnostics bar
-        dbg_bar = ttk.Frame(self)
-        dbg_bar.pack(fill="x", padx=8, pady=(0, 2))
-        collect = bool(self.cfg.setdefault("debug", {}).get("collect_fail_logs", True))
-        self._collect_ck = tk.BooleanVar(value=collect)
-        ttk.Checkbutton(
-            dbg_bar,
-            text="collect fail logs",
-            variable=self._collect_ck,
-            command=self.apply_collect_logs,
-        ).pack(side="left")
-        self.dbg_text = tk.Text(
-            dbg_bar,
-            height=2,
-            wrap="word",
-            state="disabled",
-            bg="#2b2b2b",
-            fg="#ffcf6a",
-            insertbackground="#ffcf6a",
-            font=("Consolas", 9),
-            relief="flat",
-            highlightthickness=0,
+        # 2. Re-Acquisition
+        grp_acq = QGroupBox("Re-Acquisition", self)
+        l_acq = QHBoxLayout(grp_acq)
+        l_acq.setContentsMargins(6, 10, 6, 6)
+        l_acq.setSpacing(4)
+        self._add_tune_field(l_acq, grp_acq, "ratio", "ratio_global", 0.72, 38)
+        self._add_tune_field(l_acq, grp_acq, "inl", "min_inl_global", 15, 26, is_int=True)
+        self._add_tune_field(l_acq, grp_acq, "inl%", "min_inl_rate_global", 0.45, 34)
+        tune_row.addWidget(grp_acq)
+
+        # 3. Consensus & Gating
+        grp_misc = QGroupBox("Consensus", self)
+        l_misc = QHBoxLayout(grp_misc)
+        l_misc.setContentsMargins(6, 10, 6, 6)
+        l_misc.setSpacing(4)
+        self._add_tune_field(l_misc, grp_misc, "vote", "vote_need", 3, 24, is_int=True)
+        self._add_tune_field(l_misc, grp_misc, "head°", "heading_gate_deg", 0, 30, is_int=True)
+        self._add_tune_field(l_misc, grp_misc, "skip", "vote_inl_skip", 40, 30, is_int=True)
+        self._add_tune_field(l_misc, grp_misc, "hold", "hold_frames", 5, 24, is_int=True)
+        tune_row.addWidget(grp_misc)
+
+        # Action buttons
+        btn_box = QVBoxLayout()
+        btn_box.setSpacing(4)
+        top_btns = QHBoxLayout()
+        apply_btn = QPushButton("Apply", self)
+        apply_btn.setObjectName("AccentButton")
+        apply_btn.clicked.connect(self.apply_tune)
+        top_btns.addWidget(apply_btn)
+
+        reset_btn = QPushButton("Reset", self)
+        reset_btn.clicked.connect(self.reset_tune)
+        top_btns.addWidget(reset_btn)
+        btn_box.addLayout(top_btns)
+
+        self.tune_status = QLabel("", self)
+        self.tune_status.setStyleSheet("color: #8ae234; font-weight: 500;")
+        btn_box.addWidget(self.tune_status)
+        tune_row.addLayout(btn_box)
+
+        layout.addLayout(tune_row)
+
+        # Diagnostic logs bar
+        dbg_bar = QHBoxLayout()
+        self._collect_ck = QCheckBox("Collect fail logs", self)
+        self._collect_ck.setChecked(bool(self.cfg.setdefault("debug", {}).get("collect_fail_logs", True)))
+        self._collect_ck.toggled.connect(self.apply_collect_logs)
+        dbg_bar.addWidget(self._collect_ck)
+
+        self.dbg_text = QLabel("", self)
+        self.dbg_text.setStyleSheet(
+            "background-color: #252526; color: #ffcf6a; padding: 2px 6px; border-radius: 4px;"
         )
-        self.dbg_text.pack(side="left", fill="x", expand=True)
-        ttk.Button(dbg_bar, text="Copy", command=self.copy_debug).pack(side="left", padx=(6, 0))
+        dbg_bar.addWidget(self.dbg_text, stretch=1)
 
-        # Interactive Map Canvas
-        self.canvas_widget = InteractiveMapCanvas(
-            self,
-            on_overlay=self._draw_overlay,
-            on_status=self._on_canvas_status,
-        )
-        self.canvas_widget.pack(fill="both", expand=True, padx=6, pady=6)
-        self.canvas_widget.canvas.bind("<Double-Button-1>", self._on_double_click)
+        copy_btn = QPushButton("Copy", self)
+        copy_btn.clicked.connect(self.copy_debug)
+        dbg_bar.addWidget(copy_btn)
+        layout.addLayout(dbg_bar)
 
-    def _on_canvas_status(self, zoom_txt: str) -> None:
-        self.map_status.config(text=f"map: {self.map_name}  {zoom_txt}")
+        # Interactive Map Canvas / View
+        self.map_widget = InteractiveMapWidget(enable_route_editing=False, parent=self)
+        self.map_widget.set_on_center(self._center_vehicle)
 
-    def _on_double_click(self, e: Any = None) -> None:
-        loc = self._last_loc
-        mp = (loc.get("map_px_disp") or loc.get("map_px")) if loc else None
-        if mp is not None:
-            self.canvas_widget.center_on(mp[0], mp[1])
-        else:
-            self.canvas_widget.redraw()
+        layout.addWidget(self.map_widget, stretch=1)
+
+    def _add_tune_field(
+        self,
+        layout: QHBoxLayout,
+        parent: QWidget,
+        lbl_text: str,
+        var_name: str,
+        default: Any,
+        width: int,
+        is_int: bool = False,
+    ) -> None:
+        lbl = QLabel(lbl_text, parent)
+        lbl.setStyleSheet("color: #a0a0a0;")
+        layout.addWidget(lbl)
+
+        val = str(int(self._loc_tune_cur(var_name, default)) if is_int else self._loc_tune_cur(var_name, default))
+        inp = QLineEdit(val, parent)
+        inp.setFixedWidth(width)
+        layout.addWidget(inp)
+        self.tune_inputs[var_name] = inp
+        self.tune_vars[var_name] = _StringVarCompat(val)
 
     def _loc_tune_cur(self, name: str, default: Any) -> Any:
         block = self.cfg.setdefault("locator", {})
@@ -224,16 +204,22 @@ class MapTab(ttk.Frame):
         }
         parsed = {}
         for name, (lo, hi, typ, desc) in ranges.items():
-            s = self.tune_vars[name].get().strip()
+            s = self.tune_vars[name].get().strip() or self.tune_inputs[name].text().strip()
             try:
                 v = typ(float(s) if typ is float else int(s))
             except ValueError:
-                self.tune_status.config(text=f"Invalid {desc}", foreground="#ff7c7c")
+                self.tune_status.setText(f"Invalid {desc}")
+                self.tune_status.setStyleSheet("color: #ff7c7c;")
                 return
             if not (lo <= v <= hi):
-                self.tune_status.config(text=f"Invalid {desc}", foreground="#ff7c7c")
+                self.tune_status.setText(f"Invalid {desc}")
+                self.tune_status.setStyleSheet("color: #ff7c7c;")
                 return
             parsed[name] = v
+
+        for name, val in parsed.items():
+            self.tune_inputs[name].setText(str(val))
+            self.tune_vars[name].set(str(val))
 
         block = self.cfg.setdefault("locator", {})
         block.update(parsed)
@@ -244,7 +230,8 @@ class MapTab(ttk.Frame):
                 loc.apply_tune(block)
             elif hasattr(loc, "cfg") and isinstance(loc.cfg, dict):
                 loc.cfg.setdefault("locator", {}).update(block)
-        self.tune_status.config(text="applied", foreground="#8ae234")
+        self.tune_status.setText("applied")
+        self.tune_status.setStyleSheet("color: #8ae234;")
 
     def reset_tune(self) -> None:
         """Reset tuning parameters to schema defaults."""
@@ -254,10 +241,12 @@ class MapTab(ttk.Frame):
         for k, v in defaults.items():
             if k in self.tune_vars:
                 self.tune_vars[k].set(str(v))
+                if k in self.tune_inputs:
+                    self.tune_inputs[k].setText(str(v))
         self.apply_tune()
 
     def apply_collect_logs(self) -> None:
-        enabled = bool(self._collect_ck.get())
+        enabled = self._collect_ck.isChecked()
         self.cfg.setdefault("debug", {})["collect_fail_logs"] = enabled
         self.save_cfg()
         loc = self.get_loc()
@@ -265,67 +254,22 @@ class MapTab(ttk.Frame):
             loc.set_collect_fail_logs(enabled)
 
     def copy_debug(self) -> None:
-        txt = self.dbg_text.get("1.0", "end-1c")
-        self.clipboard_clear()
-        self.clipboard_append(txt)
-
-    def save_debug_frame(self) -> None:
-        """Capture live diagnostic snapshot asynchronously."""
-        if self._snap_busy:
-            return
-        loc = self.get_loc()
-        if loc is None:
-            return
-        self._snap_busy = True
-
-        def worker() -> None:
-            try:
-                mm_gray, mm_bgr, mask, latest = loc.snapshot_debug()
-                if mm_gray is not None:
-                    pose = latest.get("pose") if isinstance(latest, dict) else None
-                    raw_diag = latest.get("diag") if isinstance(latest, dict) else None
-                    diag: dict[str, Any] = dict(raw_diag) if isinstance(raw_diag, dict) else {}
-                    save_debug_snapshot("output", mm_gray, mm_bgr, mask, pose, diag, latest)
-            except Exception as exc:
-                logger.error("Failed to save debug snapshot: %s", exc)
-            finally:
-                self._snap_busy = False
-
-        threading.Thread(target=worker, daemon=True).start()
+        QApplication.clipboard().setText(self.dbg_text.text())
 
     def update_loc(self, last_loc: dict[str, Any] | None) -> None:
-        """Receive latest localization pose item from main event loop."""
+        """Receive latest localization pose from main event loop."""
         self._last_loc = last_loc
-        if self.canvas_widget.disp is not None:
-            self._draw_overlay(self.canvas_widget.canvas, self.canvas_widget.disp)
-
-    def _draw_overlay(self, canvas: tk.Canvas, disp: tuple[float, float, float] | None) -> None:
-        item = self._last_loc
-        if disp is None or item is None:
+        if last_loc is None:
+            self.map_widget.scene.hide_vehicle()
             return
 
-        pose = item.get("pose")
-        mp = item.get("map_px_disp") or item.get("map_px")
-        elapsed = item.get("elapsed")
-        delay_txt = "" if elapsed is None else f"  proc: {int(elapsed * 1000)} ms"
-
-        win = (item.get("diag") or {}).get("win_map")
-        if win:
-            x0, y0 = self.canvas_widget.to_canvas(win[0], win[1])
-            x1, y1 = self.canvas_widget.to_canvas(win[2], win[3])
-            canvas.delete("chunkbox")
-            canvas.create_rectangle(x0, y0, x1, y1, outline="#2e8bff", dash=(4, 3), tags="chunkbox")
-
+        pose = last_loc.get("pose")
+        mp = last_loc.get("map_px_disp") or last_loc.get("map_px")
         if pose is None or mp is None:
-            loc = self.get_loc()
-            phase = getattr(loc, "phase", "") if loc else ""
-            self.map_status.config(text=(phase if phase else "searching...") + delay_txt)
-            for t in ("marker", "arrow", "chunkbox"):
-                canvas.delete(t)
-            self._search_zone_draw(canvas, getattr(loc, "search_now", None), "searchzone")
+            self.map_status.setText("")
+            self.map_widget.scene.hide_vehicle()
             return
 
-        x, y = self.canvas_widget.to_canvas(mp[0], mp[1])
         heading = locator.heading_deg(pose)
         if self._disp_th is None:
             self._disp_th = heading
@@ -333,45 +277,17 @@ class MapTab(ttk.Frame):
             dth = (heading - self._disp_th + 540.0) % 360.0 - 180.0
             self._disp_th = (self._disp_th + dth * 0.4) % 360.0
         heading = self._disp_th
-        rad = math.radians(heading)
-        alen = 30.0
-        ax = x + alen * math.sin(rad)
-        ay = y - alen * math.cos(rad)
 
-        for t in ("marker", "arrow", "searchzone"):
-            canvas.delete(t)
-
-        canvas.create_line(
-            x, y, ax, ay, fill="#ff3b3b", width=3, arrow="last", arrowshape=(8, 10, 3), tags="arrow"
-        )
-        r = 6
-        canvas.create_oval(x - r, y - r, x + r, y + r, outline="#ffdd00", width=2, tags="marker")
-        canvas.create_line(x - r - 4, y, x + r + 4, y, fill="#ffdd00", width=1, tags="marker")
-        canvas.create_line(x, y - r - 4, x, y + r + 4, fill="#ffdd00", width=1, tags="marker")
-
-        self.map_status.config(
-            text=f"map px: x={mp[0]:.0f} y={mp[1]:.0f}   heading: {heading:.1f}°   "
-            f"s={pose['s']:.3f} inl={pose.get('inl', 0)}{delay_txt}"
+        self.map_widget.scene.update_vehicle(mp[0], mp[1], heading)
+        self.map_status.setText(
+            f"map px: x={mp[0]:.0f} y={mp[1]:.0f}   heading: {heading:.1f}°   "
+            f"s={pose['s']:.3f} inl={pose.get('inl', 0)}"
         )
 
-    def _search_zone_draw(self, canvas: tk.Canvas, region: Any, tags: str) -> None:
-        canvas.delete(tags)
-        if region is None or self.canvas_widget.disp is None:
-            return
-        ms = locator._mini_scale()
-        s = self.canvas_widget.disp[0]
-        if region[0] == "global":
-            x0, y0 = self.canvas_widget.to_canvas(0, 0)
-            x1, y1 = self.canvas_widget.to_canvas(
-                self.canvas_widget._map_size, self.canvas_widget._map_size
-            )
-            canvas.create_rectangle(
-                x0, y0, x1, y1, outline="#ff9500", dash=(4, 3), width=2, tags=tags
-            )
+    def _center_vehicle(self) -> None:
+        loc = self._last_loc
+        mp = (loc.get("map_px_disp") or loc.get("map_px")) if loc else None
+        if mp is not None:
+            self.map_widget.view.center_on_coords(mp[0], mp[1])
         else:
-            _, cxm, cym, radm = region
-            cx, cy = self.canvas_widget.to_canvas(cxm * ms, cym * ms)
-            r = radm * ms / self.canvas_widget._thumb * s
-            canvas.create_oval(
-                cx - r, cy - r, cx + r, cy + r, outline="#ff9500", dash=(4, 3), width=2, tags=tags
-            )
+            self.map_widget.view.fit_view()

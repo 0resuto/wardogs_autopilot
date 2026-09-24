@@ -1,12 +1,13 @@
 """Unit tests for decoupled UI modules: PresetManager, map_renderer, and debug_collage."""
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
 
 import numpy as np
 
-from autopilot.ui.debug_collage import build_debug_collage
+from autopilot.ui.debug_collage import build_debug_collage, save_debug_snapshot
 from autopilot.ui.map_renderer import (
     calc_fit_viewport,
     crop_map_viewport,
@@ -91,6 +92,54 @@ class TestDebugCollage(unittest.TestCase):
         self.assertIsNotNone(sheet)
         self.assertEqual(sheet.shape[2], 3)
         self.assertGreater(sheet.shape[0], 300)
+
+    def test_save_debug_snapshot_without_pose(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            mm = np.full((120, 160), 100, dtype=np.uint8)
+            bgr = np.full((120, 160, 3), 100, dtype=np.uint8)
+            mask = np.zeros((120, 160), dtype=bool)
+            diag = {"mode": "index", "kp_pts": [(20, 20), (40, 40)], "inlier_pts": []}
+            sheet, snap_dir, parts = save_debug_snapshot(
+                tmp_dir, mm, bgr, mask, None, diag, map_name="zestafona"
+            )
+            self.assertTrue(os.path.isdir(snap_dir))
+            self.assertIn("1_raw_capture.png", parts)
+            self.assertIn("2_mask_overlay.png", parts)
+            self.assertIn("3_sift_features.png", parts)
+            self.assertNotIn("4_map_crop.png", parts)
+            self.assertIn("state_log.txt", parts)
+            self.assertIn("state.json", parts)
+            self.assertTrue(os.path.exists(os.path.join(snap_dir, "1_raw_capture.png")))
+            self.assertTrue(os.path.exists(os.path.join(snap_dir, "2_mask_overlay.png")))
+            self.assertTrue(os.path.exists(os.path.join(snap_dir, "3_sift_features.png")))
+            self.assertTrue(os.path.exists(os.path.join(snap_dir, "state_log.txt")))
+            self.assertTrue(os.path.exists(os.path.join(snap_dir, "state.json")))
+
+    def test_save_debug_snapshot_with_pose(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            mm = np.full((120, 160), 100, dtype=np.uint8)
+            bgr = np.full((120, 160, 3), 100, dtype=np.uint8)
+            mask = np.zeros((120, 160), dtype=bool)
+            pose = {
+                "map_x": 10000.0,
+                "map_y": 12000.0,
+                "th": 45.0,
+                "s": 1.0,
+                "inl": 15,
+                "n_match": 30,
+            }
+            diag = {"mode": "index", "kp_pts": [(20, 20)], "inlier_pts": [(20, 20)]}
+            sheet, snap_dir, parts = save_debug_snapshot(
+                tmp_dir, mm, bgr, mask, pose, diag, map_name="zestafona"
+            )
+            self.assertTrue(os.path.isdir(snap_dir))
+            self.assertIn("1_raw_capture.png", parts)
+            self.assertIn("2_mask_overlay.png", parts)
+            self.assertIn("3_sift_features.png", parts)
+            self.assertIn("4_map_crop.png", parts)
+            self.assertIn("state_log.txt", parts)
+            self.assertIn("state.json", parts)
+            self.assertTrue(os.path.exists(os.path.join(snap_dir, "4_map_crop.png")))
 
 
 if __name__ == "__main__":

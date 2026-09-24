@@ -109,6 +109,13 @@ class _CaptureProducer(threading.Thread):
         self._queue = out_q
         self.error: str | None = None
 
+    def set_roi(self, roi: list[int] | tuple[int, ...]) -> None:
+        roi_list = [int(v) for v in roi]
+        if isinstance(self.cfg, dict):
+            self.cfg.setdefault("capture", {})["mmap_roi"] = roi_list
+        if hasattr(self, "capture_cfg"):
+            self.capture_cfg.mmap_roi = roi_list
+
     def run(self) -> None:
         cap = None
         last_sign = None
@@ -153,7 +160,8 @@ class _CaptureProducer(threading.Thread):
                         pass
                     self._queue.put_nowait(item)
                 except Exception as exc:  # noqa: BLE001
-                    crashlog.log("capture producer error", exc)
+                    if not self._stop.is_set():
+                        crashlog.log("capture producer error", exc)
                     self.error = str(exc)
                     break
                 self._stop.wait(period)
@@ -232,8 +240,33 @@ class LiveLocator(threading.Thread):
                 pass
         return self.app_cfg.locator
 
+    @property
+    def capture_cfg(self) -> CaptureConfig:
+        if (
+            isinstance(self.cfg, dict)
+            and "capture" in self.cfg
+            and isinstance(self.cfg["capture"], dict)
+        ):
+            try:
+                return CaptureConfig(**self.cfg["capture"])
+            except Exception:
+                pass
+        return self.app_cfg.capture
+
     def stop(self) -> None:
         self._stop.set()
+
+    def set_roi(self, roi: list[int] | tuple[int, ...]) -> None:
+        """Update live capture ROI on the fly."""
+        roi_list = [int(v) for v in roi]
+        if isinstance(self.cfg, dict):
+            self.cfg.setdefault("capture", {})["mmap_roi"] = roi_list
+        if hasattr(self, "app_cfg") and hasattr(self.app_cfg, "capture"):
+            self.app_cfg.capture.mmap_roi = roi_list
+        if hasattr(self, "cap_cfg") and hasattr(self.cap_cfg, "mmap_roi"):
+            self.cap_cfg.mmap_roi = roi_list
+        if hasattr(self, "_prod") and self._prod is not None:
+            self._prod.set_roi(roi_list)
 
     def set_collect_fail_logs(self, enabled: bool) -> None:
         """Live toggle of the fail-frame collector (Map tab checkbox)."""
@@ -291,8 +324,8 @@ class LiveLocator(threading.Thread):
             locator.load_global_map()
             self.phase = "searching pose..."
             q: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=1)
-            prod = _CaptureProducer(self.cfg, self.mask, self.frame_source, self._stop, q)
-            prod.start()
+            self._prod = _CaptureProducer(self.cfg, self.mask, self.frame_source, self._stop, q)
+            self._prod.start()
             while not self._stop.is_set():
                 try:
                     item = q.get_nowait()
@@ -306,8 +339,8 @@ class LiveLocator(threading.Thread):
                     self.mask = item["mask"]
                 roi = item["roi"]
                 t0 = item["ts"]
-                if prod.error:
-                    self.error = prod.error
+                if self._prod.error:
+                    self.error = self._prod.error
                     break
                 # frame budget: coarse map search can stall for tens of
                 # seconds (low-texture areas); with a budget the

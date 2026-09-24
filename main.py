@@ -52,17 +52,31 @@ def main() -> None:
         if args.cmd == "ui":
             from autopilot import ui
 
-            ui.main(cfg)
-    except BaseException:  # noqa: BLE001 — silent exit under pythonw, log it
+            code = ui.main(cfg)
+            if code not in (0, None):
+                sys.exit(code)
+    except (SystemExit, KeyboardInterrupt) as exc:
+        if isinstance(exc, SystemExit) and exc.code not in (0, None):
+            from autopilot import crashlog as cl
+
+            cl.write(*sys.exc_info())
+            raise
+    except Exception:
         from autopilot import crashlog as cl
 
         cl.write(*sys.exc_info())
         try:
-            from tkinter import messagebox
+            from PySide6.QtWidgets import QApplication, QMessageBox
 
-            messagebox.showerror("WARDOGS Studio", "Application error.\nDetails: output/crash.log")
-        except Exception:  # noqa: BLE001
-            pass
+            _app = QApplication.instance() or QApplication(sys.argv)
+            QMessageBox.critical(None, "WARDOGS Studio", "Application error.\nDetails: output/crash.log")
+        except Exception:
+            try:
+                from tkinter import messagebox
+
+                messagebox.showerror("WARDOGS Studio", "Application error.\nDetails: output/crash.log")
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

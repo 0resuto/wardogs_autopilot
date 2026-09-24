@@ -18,7 +18,7 @@
     "ratio": 0.8,
     "min_inl": 4,
     "min_inl_rate": 0.0,
-    "track_radius": 900,
+    "track_radius": 900.0,
     "ratio_local": 0.85,
     "min_inl_local": 4,
     "min_inl_rate_local": 0.0,
@@ -29,7 +29,7 @@
     "vote_frames": 5,
     "vote_radius_px": 300,
     "jump_gate_px": 3000,
-    "heading_gate_deg": 0,
+    "heading_gate_deg": 0.0,
     "vote_inl_skip": 40,
     "hold_frames": 5
   },

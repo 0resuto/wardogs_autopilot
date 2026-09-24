@@ -6,7 +6,10 @@ full-map crops at the estimated pose.
 
 from __future__ import annotations
 
+import json
+import math
 import os
+import shutil
 import time
 from typing import Any
 
@@ -153,6 +156,216 @@ def build_debug_collage(
     return np.vstack([bar, sheet])
 
 
+def render_map_crop(
+    pose: dict[str, Any],
+    mm_shape: tuple[int, int] = (180, 240),
+    crop_size: int = 600,
+    map_name: str | None = None,
+) -> np.ndarray | None:
+    """Render a high-resolution map crop with vehicle position, heading, and minimap bounds."""
+    try:
+        map_x = float(pose["map_x"])
+        map_y = float(pose["map_y"])
+        th = float(pose.get("th", 0.0))
+        s = float(pose.get("s", 1.0))
+        inl = int(pose.get("inl", 0))
+
+        # Try color map first, then grayscale mu fallback
+        cmap = None
+        try:
+            cmap = locator.color_map()
+        except Exception:
+            cmap = None
+
+        if cmap is None or not getattr(cmap, "size", 0):
+            try:
+                mu = locator.load_global_map()
+                if mu is not None and getattr(mu, "size", 0):
+                    cmap = cv2.cvtColor(mu, cv2.COLOR_GRAY2BGR)
+            except Exception:
+                cmap = None
+
+        if cmap is None or not getattr(cmap, "size", 0):
+            return None
+
+        sz = locator.full_map_size(map_name) or (32768, 32768)
+        full_w = float(sz[0] if isinstance(sz, (tuple, list)) else sz)
+        k = cmap.shape[1] / full_w
+        ms = locator._mini_scale(map_name)
+
+        cx_cmap = map_x * k
+        cy_cmap = map_y * k
+
+        half = crop_size // 2
+        x0 = int(round(cx_cmap - half))
+        y0 = int(round(cy_cmap - half))
+        x1 = x0 + crop_size
+        y1 = y0 + crop_size
+
+        crop = np.full((crop_size, crop_size, 3), (35, 35, 35), dtype=np.uint8)
+        src_x0 = max(0, x0)
+        src_y0 = max(0, y0)
+        src_x1 = min(cmap.shape[1], x1)
+        src_y1 = min(cmap.shape[0], y1)
+
+        if src_x1 > src_x0 and src_y1 > src_y0:
+            dst_x0 = src_x0 - x0
+            dst_y0 = src_y0 - y0
+            crop[dst_y0 : dst_y0 + (src_y1 - src_y0), dst_x0 : dst_x0 + (src_x1 - src_x0)] = cmap[
+                src_y0:src_y1, src_x0:src_x1
+            ]
+
+        ccx = int(round(cx_cmap - x0))
+        ccy = int(round(cy_cmap - y0))
+
+        # 1. Minimap footprint box on the map
+        mm_h, mm_w = mm_shape[:2]
+        hw = (mm_w / 2.0) * (s * ms) * k
+        hh = (mm_h / 2.0) * (s * ms) * k
+        th_rad = math.radians(th)
+        cos_t, sin_t = math.cos(th_rad), math.sin(th_rad)
+        corners = [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)]
+        box_pts = []
+        for dx, dy in corners:
+            bx = ccx + dx * cos_t - dy * sin_t
+            by = ccy + dx * sin_t + dy * cos_t
+            box_pts.append([int(round(bx)), int(round(by))])
+        cv2.polylines(
+            crop,
+            [np.array(box_pts)],
+            isClosed=True,
+            color=(0, 255, 0),
+            thickness=2,
+            lineType=cv2.LINE_AA,
+        )
+
+        # 2. Vehicle target ring and center dot
+        cv2.circle(crop, (ccx, ccy), 10, (0, 0, 255), 2, lineType=cv2.LINE_AA)
+        cv2.circle(crop, (ccx, ccy), 3, (0, 255, 0), -1, lineType=cv2.LINE_AA)
+
+        # 3. Directional heading arrow (0 deg = North/-Y, 90 deg = East/+X)
+        arr_len = 40
+        adx = math.sin(th_rad) * arr_len
+        ady = -math.cos(th_rad) * arr_len
+        arr_end = (int(round(ccx + adx)), int(round(ccy + ady)))
+        cv2.arrowedLine(
+            crop,
+            (ccx, ccy),
+            arr_end,
+            (0, 255, 255),
+            2,
+            tipLength=0.3,
+            line_type=cv2.LINE_AA,
+        )
+
+        # 4. Top info banner with coordinates and heading
+        ov = crop.copy()
+        cv2.rectangle(ov, (0, 0), (crop_size, 34), (20, 20, 20), -1)
+        cv2.addWeighted(ov, 0.75, crop, 0.25, 0, crop)
+        banner_text = f"POS: ({map_x:.0f}, {map_y:.0f})  HDG: {th:.1f}°  INL: {inl}  SCALE: {s:.3f}"
+        cv2.putText(
+            crop,
+            banner_text,
+            (10, 23),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.52,
+            (255, 255, 255),
+            1,
+            cv2.LINE_AA,
+        )
+
+        return crop
+    except Exception as exc:
+        logger.warning("Failed to render map crop: %s", exc)
+        return None
+
+
+def format_state_log(
+    timestamp: float,
+    map_name: str | None,
+    roi: list[int] | tuple[int, ...] | None,
+    pose: dict[str, Any] | None,
+    diag: dict[str, Any],
+    lat_info: dict[str, Any] | None,
+) -> tuple[str, dict[str, Any]]:
+    """Format human-readable log and machine-readable JSON dictionary."""
+    iso_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(timestamp))
+    ms = int((timestamp % 1.0) * 1000)
+    time_str = f"{iso_time}.{ms:03d}"
+
+    is_localized = pose is not None and "map_x" in pose and "map_y" in pose
+    kp_mm = diag.get("kp_mm", len(diag.get("kp_pts", [])))
+    inl = pose.get("inl", diag.get("inl1", len(diag.get("inlier_pts", [])))) if pose else 0
+    mode = diag.get("mode", "unknown")
+    reject = diag.get("reject")
+    detail = diag.get("detail", "")
+    elapsed = lat_info.get("elapsed", 0.0) if lat_info else 0.0
+    elapsed_ms = elapsed * 1000.0
+
+    lines = [
+        "=" * 60,
+        "WARDOGS AUTOPILOT - DIAGNOSTIC SNAPSHOT",
+        "=" * 60,
+        f"Timestamp:       {time_str} (UNIX {timestamp:.3f})",
+        f"Active Map:      {map_name or 'unknown'}",
+        f"Capture ROI:     {list(roi) if roi else 'not set'}",
+        "",
+        "--- Localization Status ---",
+        f"Status:          {'LOCALIZED' if is_localized else 'SEARCHING / UNLOCALIZED'}",
+    ]
+    if is_localized and pose is not None:
+        lines.extend([
+            f"Position (X, Y): ({pose['map_x']:.1f}, {pose['map_y']:.1f}) px",
+            f"Heading:         {pose.get('th', 0.0):.1f}°",
+            f"Scale:           {pose.get('s', 1.0):.3f}",
+            f"Inliers:         {inl}",
+            f"Total Matches:   {pose.get('n_match', 0)}",
+        ])
+    lines.extend([
+        f"Proc Latency:    {elapsed_ms:.1f} ms",
+        "",
+        "--- Vision & SIFT Diagnostics ---",
+        f"Mode:            {mode}",
+        f"Keypoints Found: {kp_mm}",
+        f"Inliers Count:   {inl}",
+        f"Reject Reason:   {reject or 'None'}",
+        f"Details:         {detail or 'OK'}",
+        "=" * 60,
+    ])
+    text_log = "\n".join(lines) + "\n"
+
+    json_payload = {
+        "timestamp": timestamp,
+        "datetime": time_str,
+        "map_name": map_name,
+        "roi": list(roi) if roi else None,
+        "localized": is_localized,
+        "pose": {
+            "map_x": pose.get("map_x"),
+            "map_y": pose.get("map_y"),
+            "heading_deg": pose.get("th"),
+            "scale": pose.get("s"),
+            "inliers": inl,
+            "n_match": pose.get("n_match"),
+        }
+        if is_localized and pose
+        else None,
+        "latency_ms": round(elapsed_ms, 2),
+        "diag": {
+            "mode": mode,
+            "reject": reject,
+            "detail": detail,
+            "kp_count": kp_mm,
+            "inl_count": inl,
+            "mm_mean": diag.get("mm_mean"),
+            "mm_std": diag.get("mm_std"),
+            "mm_mask_frac": diag.get("mm_mask_frac"),
+        },
+    }
+
+    return text_log, json_payload
+
+
 def save_debug_snapshot(
     out_dir: str,
     mm: np.ndarray,
@@ -161,63 +374,100 @@ def save_debug_snapshot(
     pose: dict[str, Any] | None,
     diag: dict[str, Any],
     lat_info: dict[str, Any] | None = None,
-    max_history: int = 10,
+    map_name: str | None = None,
+    roi: list[int] | tuple[int, ...] | None = None,
+    max_history: int = 25,
 ) -> tuple[np.ndarray, str, list[str]]:
-    """Save full debug snapshot suite to disk, prune old files, and return (sheet, collage_path, parts)."""
+    """Save full debug snapshot suite to disk in a timestamped folder, prune old snapshots,
+    and return (sheet, snapshot_dir, parts).
+    """
     os.makedirs(out_dir, exist_ok=True)
-    base = time.strftime("%H%M%S")
+    now = time.time()
+    ms = int((now % 1.0) * 1000)
+    base = f"{time.strftime('%Y%m%d_%H%M%S')}_{ms:03d}"
+    snap_dir = os.path.join(out_dir, f"snapshot_{base}")
+    os.makedirs(snap_dir, exist_ok=True)
     parts: list[str] = []
 
-    # 1. Raw grayscale minimap
-    raw_path = os.path.join(out_dir, f"debug_mm_{base}.png")
-    cv2.imwrite(raw_path, mm)
-    parts.append(os.path.basename(raw_path))
+    # Prepare base color/gray frame
+    frame = (
+        bgr.copy()
+        if (bgr is not None and getattr(bgr, "size", 0))
+        else cv2.cvtColor(mm, cv2.COLOR_GRAY2BGR)
+    )
+    h, w = frame.shape[:2]
 
-    # 2. Raw color frame (if available)
-    if bgr is not None:
-        raw_bgr_path = os.path.join(out_dir, f"debug_raw_{base}.png")
-        cv2.imwrite(raw_bgr_path, bgr)
-        parts.append(os.path.basename(raw_bgr_path))
+    # 1. Preview 1: Raw Capture
+    raw_path = os.path.join(snap_dir, "1_raw_capture.png")
+    cv2.imwrite(raw_path, frame)
+    parts.append("1_raw_capture.png")
 
-    # 3. Text context
-    info_path = os.path.join(out_dir, f"debug_info_{base}.txt")
-    try:
-        with open(info_path, "w", encoding="utf-8") as f:
-            f.write(f"mode={diag.get('mode') or '-'}\n")
-            f.write(f"reject={diag.get('reject') or '-'}\n")
-            if lat_info:
-                f.write(f"good={lat_info.get('good')}\n")
-                if pose is not None:
-                    f.write(f"map_x={pose['map_x']:.1f}\n")
-                    f.write(f"map_y={pose['map_y']:.1f}\n")
-                    f.write(
-                        f"s={pose['s']:.3f} th={pose['th']:.1f} "
-                        f"inl={pose['inl']} n_match={pose['n_match']}\n"
-                    )
-                f.write(f"prev={lat_info.get('prev_xy')}\n")
-                f.write(f"attempt={lat_info.get('attempt', 0)}\n")
-                f.write(f"elapsed={lat_info.get('elapsed', 0):.2f}\n")
-        parts.append(os.path.basename(info_path))
-    except Exception as exc:
-        logger.warning("[debug_collage] debug info save failed: %s", exc)
+    # 2. Preview 2: Mask Overlay
+    p2 = frame.copy()
+    if mask is not None and getattr(mask, "size", 0):
+        m = np.asarray(mask, bool)
+        if m.shape[:2] != (h, w):
+            m = cv2.resize(m.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST) > 0
+        overlay = p2.copy()
+        overlay[m] = (0, 30, 220)
+        cv2.addWeighted(overlay, 0.45, p2, 0.55, 0, p2)
+        cnts, _ = cv2.findContours(m.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        cv2.drawContours(p2, cnts, -1, (0, 160, 255), 1)
+    mask_path = os.path.join(snap_dir, "2_mask_overlay.png")
+    cv2.imwrite(mask_path, p2)
+    parts.append("2_mask_overlay.png")
 
-    # 4. 3x2 Collage sheet
+    # 3. Preview 3: SIFT Keypoints & Inliers
+    p3 = frame.copy()
+    kp_pts = diag.get("kp_pts") or []
+    inlier_pts = diag.get("inlier_pts") or []
+    for pt in kp_pts:
+        cv2.circle(p3, (int(round(pt[0])), int(round(pt[1]))), 2, (0, 255, 255), -1)
+    for pt in inlier_pts:
+        cv2.circle(p3, (int(round(pt[0])), int(round(pt[1]))), 4, (0, 255, 0), -1)
+        cv2.circle(p3, (int(round(pt[0])), int(round(pt[1]))), 6, (0, 200, 0), 1)
+    sift_path = os.path.join(snap_dir, "3_sift_features.png")
+    cv2.imwrite(sift_path, p3)
+    parts.append("3_sift_features.png")
+
+    # 4. Map crop with markings (only when position is determined)
+    is_localized = pose is not None and "map_x" in pose and "map_y" in pose
+    if is_localized and pose is not None:
+        map_crop = render_map_crop(pose, mm_shape=(h, w), map_name=map_name)
+        if map_crop is not None:
+            crop_path = os.path.join(snap_dir, "4_map_crop.png")
+            cv2.imwrite(crop_path, map_crop)
+            parts.append("4_map_crop.png")
+
+    # 5. State logs (human-readable text summary and structured JSON)
+    text_log, json_payload = format_state_log(now, map_name, roi, pose, diag, lat_info)
+    txt_path = os.path.join(snap_dir, "state_log.txt")
+    with open(txt_path, "w", encoding="utf-8") as f:
+        f.write(text_log)
+    parts.append("state_log.txt")
+
+    json_path = os.path.join(snap_dir, "state.json")
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(json_payload, f, ensure_ascii=False, indent=2)
+    parts.append("state.json")
+
+    # 6. Consolidated 3x2 collage sheet
     sheet = build_debug_collage(mm, bgr, mask, pose, diag)
-    collage_path = os.path.join(out_dir, f"debug_collage_{base}.png")
+    collage_path = os.path.join(snap_dir, "collage.png")
     cv2.imwrite(collage_path, sheet)
-    parts.insert(0, os.path.basename(collage_path))
+    parts.append("collage.png")
 
-    # 5. Prune old debug snapshot files
-    for prefix in ("debug_collage_", "debug_mm_", "debug_raw_", "debug_info_"):
-        try:
-            old_files = sorted(p for p in os.listdir(out_dir) if p.startswith(prefix))
-            while len(old_files) > max_history:
-                try:
-                    os.remove(os.path.join(out_dir, old_files[0]))
-                except OSError:
-                    pass
-                old_files.pop(0)
-        except Exception:
-            pass
+    # 7. Prune older snapshot directories
+    try:
+        all_snaps = sorted(
+            d
+            for d in os.listdir(out_dir)
+            if d.startswith("snapshot_") and os.path.isdir(os.path.join(out_dir, d))
+        )
+        while len(all_snaps) > max_history:
+            old_dir = os.path.join(out_dir, all_snaps.pop(0))
+            shutil.rmtree(old_dir, ignore_errors=True)
+    except Exception as exc:
+        logger.warning("Failed to prune old snapshots: %s", exc)
 
-    return sheet, collage_path, parts
+    return sheet, snap_dir, parts
