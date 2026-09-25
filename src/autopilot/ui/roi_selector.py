@@ -8,7 +8,7 @@ from typing import Any
 import numpy as np
 from PySide6.QtCore import QPoint, QRect, Qt
 from PySide6.QtGui import QColor, QFont, QKeyEvent, QMouseEvent, QPainter, QPen, QRegion
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QApplication, QWidget
 
 from .imaging import to_qpixmap
 
@@ -40,12 +40,26 @@ class RoiSelector(QWidget):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         self._pixmap = to_qpixmap(monitor_bgr)
+        self._img_w = monitor_bgr.shape[1]
+        self._img_h = monitor_bgr.shape[0]
         self._left = int(monitor_geom.get("left", 0))
         self._top = int(monitor_geom.get("top", 0))
-        self._w = int(monitor_geom.get("width", monitor_bgr.shape[1]))
-        self._h = int(monitor_geom.get("height", monitor_bgr.shape[0]))
+        self._w = int(monitor_geom.get("width", self._img_w))
+        self._h = int(monitor_geom.get("height", self._img_h))
 
-        self.setGeometry(self._left, self._top, self._w, self._h)
+        app = QApplication.instance()
+        target_screen = None
+        if app is not None and hasattr(app, "screens"):
+            for s in app.screens():
+                sg = s.geometry()
+                if abs(sg.left() - self._left) < 50 and abs(sg.top() - self._top) < 50:
+                    target_screen = s
+                    break
+        if target_screen is not None:
+            self.setScreen(target_screen)
+            self.setGeometry(target_screen.geometry())
+        else:
+            self.setGeometry(self._left, self._top, self._w, self._h)
 
         self._dragging = False
         self._start_pos: QPoint | None = None
@@ -80,7 +94,7 @@ class RoiSelector(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         if not self._pixmap.isNull():
-            painter.drawPixmap(0, 0, self._pixmap)
+            painter.drawPixmap(self.rect(), self._pixmap)
 
         if self._pending_roi and self._pending_roi[2] > 5 and self._pending_roi[3] > 5:
             rx, ry, rw, rh = self._pending_roi
@@ -214,9 +228,17 @@ class RoiSelector(QWidget):
     def _confirm(self) -> None:
         if self._pending_roi and self._pending_roi[2] > 10 and self._pending_roi[3] > 10:
             rx, ry, rw, rh = self._pending_roi
-            abs_x = self._left + rx
-            abs_y = self._top + ry
-            roi = [int(abs_x), int(abs_y), int(rw), int(rh)]
+            scale_x = self._img_w / float(self.width()) if self.width() > 0 else 1.0
+            scale_y = self._img_h / float(self.height()) if self.height() > 0 else 1.0
+
+            phys_x = int(round(rx * scale_x))
+            phys_y = int(round(ry * scale_y))
+            phys_w = int(round(rw * scale_x))
+            phys_h = int(round(rh * scale_y))
+
+            abs_x = self._left + phys_x
+            abs_y = self._top + phys_y
+            roi = [int(abs_x), int(abs_y), int(phys_w), int(phys_h)]
             try:
                 self.releaseKeyboard()
             except Exception:

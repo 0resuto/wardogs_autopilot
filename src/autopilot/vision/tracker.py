@@ -159,11 +159,20 @@ class _CaptureProducer(threading.Thread):
                     except queue.Empty:
                         pass
                     self._queue.put_nowait(item)
+                    self.error = None
                 except Exception as exc:  # noqa: BLE001
+                    if cap is not None and hasattr(cap, "close"):
+                        try:
+                            cap.close()
+                        except Exception:
+                            pass
+                    cap = None
+                    last_sign = None
+                    self.error = str(exc)
                     if not self._stop.is_set():
                         crashlog.log("capture producer error", exc)
-                    self.error = str(exc)
-                    break
+                    self._stop.wait(max(period, 0.5))
+                    continue
                 self._stop.wait(period)
         finally:
             if cap is not None and hasattr(cap, "close"):
@@ -327,6 +336,16 @@ class LiveLocator(threading.Thread):
             self._prod = _CaptureProducer(self.cfg, self.mask, self.frame_source, self._stop, q)
             self._prod.start()
             while not self._stop.is_set():
+                if self._prod is not None and self._prod.error:
+                    self.error = self._prod.error
+                    self.latest = dict(
+                        ts=time.time(),
+                        pose=None,
+                        map_px=None,
+                        good=False,
+                        elapsed=0.0,
+                        diag=dict(reject="capture_error", detail=f"Screen capture: {self.error}"),
+                    )
                 try:
                     item = q.get_nowait()
                 except queue.Empty:
@@ -339,9 +358,7 @@ class LiveLocator(threading.Thread):
                     self.mask = item["mask"]
                 roi = item["roi"]
                 t0 = item["ts"]
-                if self._prod.error:
-                    self.error = self._prod.error
-                    break
+                self.error = None
                 # frame budget: coarse map search can stall for tens of
                 # seconds (low-texture areas); with a budget the
                 # localization returns within max 3 s and the thread does

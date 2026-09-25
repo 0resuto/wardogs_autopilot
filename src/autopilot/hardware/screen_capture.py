@@ -25,7 +25,31 @@ class ScreenCapture:
             self.region = None
             return
         x, y, w, h = roi
-        self.region = {"left": int(x), "top": int(y), "width": int(w), "height": int(h)}
+        if 0 < self.monitor_index < len(self.monitors):
+            mon = self.monitors[self.monitor_index]
+        elif self.monitors:
+            mon = self.monitors[0]
+        else:
+            mon = None
+
+        if mon is not None:
+            m_left = int(mon["left"])
+            m_top = int(mon["top"])
+            m_w = int(mon["width"])
+            m_h = int(mon["height"])
+
+            clamped_x = max(m_left, min(m_left + m_w - 16, int(x)))
+            clamped_y = max(m_top, min(m_top + m_h - 16, int(y)))
+            clamped_w = max(16, min(int(w), m_left + m_w - clamped_x))
+            clamped_h = max(16, min(int(h), m_top + m_h - clamped_y))
+            self.region = {
+                "left": clamped_x,
+                "top": clamped_y,
+                "width": clamped_w,
+                "height": clamped_h,
+            }
+        else:
+            self.region = {"left": int(x), "top": int(y), "width": int(w), "height": int(h)}
 
     def grab(self) -> np.ndarray:
         """BGR (HxWx3). Without ROI - the whole target monitor."""
