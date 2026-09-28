@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ...common.config import AppConfig, LocatorConfig
+from ...common.config import AppConfig, LocatorConfig, NavigatorConfig
 from ...common.log import get_logger
 from ...navigation.follow import FollowDriver
 from ...vision import locator
@@ -215,6 +215,27 @@ class MapTab(QWidget):
 
         tune_vbox.addLayout(tune_row)
 
+        tune_row2 = QHBoxLayout()
+        tune_row2.setSpacing(6)
+
+        grp_veh = QGroupBox("Vehicle", self._tune_container)
+        l_veh = QHBoxLayout(grp_veh)
+        l_veh.setContentsMargins(6, 10, 6, 6)
+        l_veh.setSpacing(4)
+        self._add_tune_field(l_veh, grp_veh, "gain", "yaw_gain", 1.0, 38, section="navigator")
+        self._add_tune_field(l_veh, grp_veh, "lat g", "corner_lat_g", 0.35, 38, section="navigator")
+        self._add_tune_field(l_veh, grp_veh, "brake g", "brake_g", 0.45, 38, section="navigator")
+        self._add_tune_field(
+            l_veh, grp_veh, "min km/h", "corner_min_kmh", 12.0, 40, section="navigator"
+        )
+        self._add_tune_field(
+            l_veh, grp_veh, "ahead m", "plan_ahead_m", 200.0, 40, section="navigator"
+        )
+        self._add_tune_field(l_veh, grp_veh, "cut m", "corner_cut_m", 15.0, 38, section="navigator")
+        tune_row2.addWidget(grp_veh)
+        tune_row2.addStretch()
+        tune_vbox.addLayout(tune_row2)
+
         # Diagnostic fail logs bar
         dbg_bar = QHBoxLayout()
         self._collect_ck = QCheckBox("Collect fail logs", self._tune_container)
@@ -289,16 +310,15 @@ class MapTab(QWidget):
         default: Any,
         width: int,
         is_int: bool = False,
+        section: str = "locator",
     ) -> None:
         lbl = QLabel(lbl_text, parent)
         lbl.setStyleSheet("color: #a0a0a0;")
         layout.addWidget(lbl)
 
-        val = str(
-            int(self._loc_tune_cur(var_name, default))
-            if is_int
-            else self._loc_tune_cur(var_name, default)
-        )
+        cur = self._nav_tune_cur if section == "navigator" else self._loc_tune_cur
+        value = cur(var_name, default)
+        val = str(int(value) if is_int else value)
         inp = QLineEdit(val, parent)
         inp.setFixedWidth(width)
         layout.addWidget(inp)
@@ -309,23 +329,34 @@ class MapTab(QWidget):
         block = self.cfg.setdefault("locator", {})
         return block.get(name, default)
 
+    def _nav_tune_cur(self, name: str, default: Any) -> Any:
+        block = self.cfg.setdefault("navigator", {})
+        value = block.get(name, default)
+        return default if value is None else value
+
     def apply_tune(self) -> None:
-        """Validate tuning inputs, update configuration, and notify LiveLocator."""
+        """Validate tuning inputs, update configuration, and notify consumers."""
         ranges = {
-            "ratio_local": (0.1, 1.0, float, "TRACK ratio in [0.1 .. 1.0]"),
-            "min_inl_local": (1, 50, int, "TRACK min_inl in [1 .. 50]"),
-            "min_inl_rate_local": (0.0, 1.0, float, "TRACK inl% in [0.0 .. 1.0]"),
-            "track_radius": (50, 4000, int, "TRACK rad in [50 .. 4000] px"),
-            "ratio_global": (0.1, 1.0, float, "RE-ACQ ratio in [0.1 .. 1.0]"),
-            "min_inl_global": (1, 50, int, "RE-ACQ min_inl in [1 .. 50]"),
-            "min_inl_rate_global": (0.0, 1.0, float, "RE-ACQ inl% in [0.0 .. 1.0]"),
-            "vote_need": (1, 10, int, "vote in [1 .. 10]"),
-            "heading_gate_deg": (0, 180, int, "head gate in [0 .. 180] deg"),
-            "vote_inl_skip": (1, 200, int, "skip in [1 .. 200] inl"),
-            "hold_frames": (0, 30, int, "hold in [0 .. 30] frames"),
+            "ratio_local": ("locator", 0.1, 1.0, float, "TRACK ratio in [0.1 .. 1.0]"),
+            "min_inl_local": ("locator", 1, 50, int, "TRACK min_inl in [1 .. 50]"),
+            "min_inl_rate_local": ("locator", 0.0, 1.0, float, "TRACK inl% in [0.0 .. 1.0]"),
+            "track_radius": ("locator", 50, 4000, int, "TRACK rad in [50 .. 4000] px"),
+            "ratio_global": ("locator", 0.1, 1.0, float, "RE-ACQ ratio in [0.1 .. 1.0]"),
+            "min_inl_global": ("locator", 1, 50, int, "RE-ACQ min_inl in [1 .. 50]"),
+            "min_inl_rate_global": ("locator", 0.0, 1.0, float, "RE-ACQ inl% in [0.0 .. 1.0]"),
+            "vote_need": ("locator", 1, 10, int, "vote in [1 .. 10]"),
+            "heading_gate_deg": ("locator", 0, 180, int, "head gate in [0 .. 180] deg"),
+            "vote_inl_skip": ("locator", 1, 200, int, "skip in [1 .. 200] inl"),
+            "hold_frames": ("locator", 0, 30, int, "hold in [0 .. 30] frames"),
+            "yaw_gain": ("navigator", 0.05, 5.0, float, "VEH gain in [0.05 .. 5.0]"),
+            "corner_lat_g": ("navigator", 0.05, 1.5, float, "VEH lat g in [0.05 .. 1.5]"),
+            "brake_g": ("navigator", 0.05, 2.0, float, "VEH brake g in [0.05 .. 2.0]"),
+            "corner_min_kmh": ("navigator", 0.0, 79.0, float, "VEH min km/h in [0 .. 79]"),
+            "plan_ahead_m": ("navigator", 20.0, 1000.0, float, "VEH ahead m in [20 .. 1000]"),
+            "corner_cut_m": ("navigator", 4.0, 60.0, float, "VEH cut m in [4 .. 60]"),
         }
-        parsed = {}
-        for name, (lo, hi, typ, desc) in ranges.items():
+        parsed: dict[str, dict[str, Any]] = {"locator": {}, "navigator": {}}
+        for name, (section, lo, hi, typ, desc) in ranges.items():
             s = self.tune_inputs[name].text().strip()
             if not s:
                 s = self.tune_vars[name].get().strip()
@@ -339,27 +370,42 @@ class MapTab(QWidget):
                 self.tune_status.setText(f"Invalid {desc}")
                 self.tune_status.setStyleSheet("color: #ff7c7c;")
                 return
-            parsed[name] = v
+            parsed[section][name] = v
 
-        for name, val in parsed.items():
-            self.tune_inputs[name].setText(str(val))
-            self.tune_vars[name].set(str(val))
+        for values in parsed.values():
+            for name, val in values.items():
+                self.tune_inputs[name].setText(str(val))
+                self.tune_vars[name].set(str(val))
 
-        block = self.cfg.setdefault("locator", {})
-        block.update(parsed)
+        loc_block = self.cfg.setdefault("locator", {})
+        loc_block.update(parsed["locator"])
+        nav_block = self.cfg.setdefault("navigator", {})
+        nav_block.update(parsed["navigator"])
         self.save_cfg()
+
         loc = self.get_loc()
         if loc is not None:
             if hasattr(loc, "apply_tune"):
-                loc.apply_tune(block)
+                loc.apply_tune(loc_block)
             elif hasattr(loc, "cfg") and isinstance(loc.cfg, dict):
-                loc.cfg.setdefault("locator", {}).update(block)
+                loc.cfg.setdefault("locator", {}).update(loc_block)
+
+        if parsed["navigator"]:
+            for name, value in parsed["navigator"].items():
+                setattr(self.app_cfg.navigator, name, value)
+            if self.driver is not None and hasattr(self.driver, "apply_vehicle_tuning"):
+                self.driver.apply_vehicle_tuning(self.app_cfg.navigator)
+
         self.tune_status.setText("applied")
         self.tune_status.setStyleSheet("color: #8ae234;")
 
     def reset_tune(self) -> None:
         """Reset tuning parameters to schema defaults."""
         defaults = LocatorConfig().model_dump()
+        nav_defaults = NavigatorConfig().model_dump()
+        if nav_defaults.get("yaw_gain") is None:
+            nav_defaults["yaw_gain"] = 1.0
+        defaults.update(nav_defaults)
         for k, v in defaults.items():
             if k in self.tune_vars:
                 self.tune_vars[k].set(str(v))

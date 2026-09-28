@@ -113,6 +113,8 @@ class FollowDriver(threading.Thread):
                     self.nav_cfg.vehicle_profile,
                     exc,
                 )
+        if self.vehicle_model is not None and self.nav_cfg.yaw_gain is not None:
+            self.vehicle_model.yaw_gain = float(self.nav_cfg.yaw_gain)
 
         # Sub-controllers
         self.planner = (
@@ -342,6 +344,17 @@ class FollowDriver(threading.Thread):
         if px_per_m <= 0:
             return None
         return self.planner.target_speed_kmh(mp, self.pts, self.path.idx, px_per_m)
+
+    def apply_vehicle_tuning(self, cfg: NavigatorConfig) -> None:
+        """Apply live vehicle/planner tuning changed in the UI."""
+        if self.vehicle_model is not None and cfg.yaw_gain is not None:
+            self.vehicle_model.yaw_gain = float(cfg.yaw_gain)
+        if self.planner is not None:
+            self.planner.lat_accel = max(0.1, cfg.corner_lat_g * G)
+            self.planner.brake_decel = max(0.1, cfg.brake_g * G)
+            self.planner.min_speed_kmh = max(0.0, cfg.corner_min_kmh)
+            self.planner.lookahead_m = max(10.0, cfg.plan_ahead_m)
+            self.planner.cut_m = max(1.0, cfg.corner_cut_m)
 
     def _stop_state(self, now: float) -> str:
         """Final-waypoint stop state: 'stopped', 'braking' or 'timeout'.

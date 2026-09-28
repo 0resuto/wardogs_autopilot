@@ -10,6 +10,7 @@ import os
 import sys
 import tempfile
 import unittest
+from typing import Any
 from unittest.mock import patch
 
 from PySide6.QtWidgets import QApplication
@@ -66,13 +67,46 @@ class TestTuningValidation(unittest.TestCase):
 
     def test_reset_restores_schema_defaults(self):
         self.tab.tune_inputs["ratio_local"].setText("0.5")
+        self.tab.tune_inputs["corner_lat_g"].setText("0.9")
         self.tab.apply_tune()
         self.assertEqual(self.tab.cfg["locator"]["ratio_local"], 0.5)
+        self.assertEqual(self.tab.cfg["navigator"]["corner_lat_g"], 0.9)
 
         self.tab.reset_tune()
         self.assertEqual(self.tab.cfg["locator"]["ratio_local"], 0.85)
         self.assertEqual(self.tab.tune_inputs["ratio_local"].text(), "0.85")
         self.assertEqual(self.tab.tune_vars["ratio_local"].get(), "0.85")
+        self.assertEqual(self.tab.cfg["navigator"]["corner_lat_g"], 0.35)
+        self.assertEqual(self.tab.cfg["navigator"]["yaw_gain"], 1.0)
+
+    def test_vehicle_tuning_applies_live_to_the_driver(self):
+        class _FakeDriver:
+            def __init__(self) -> None:
+                self.applied: list[object] = []
+
+            def apply_vehicle_tuning(self, cfg) -> None:
+                self.applied.append(cfg)
+
+        driver: Any = _FakeDriver()
+        self.tab.driver = driver
+
+        self.tab.tune_inputs["yaw_gain"].setText("0.7")
+        self.tab.tune_inputs["corner_lat_g"].setText("0.5")
+        self.tab.tune_inputs["corner_min_kmh"].setText("20")
+        self.tab.apply_tune()
+
+        self.assertIn("applied", self.tab.tune_status.text())
+        self.assertEqual(self.tab.cfg["navigator"]["yaw_gain"], 0.7)
+        self.assertEqual(self.tab.cfg["navigator"]["corner_lat_g"], 0.5)
+        self.assertAlmostEqual(self.tab.app_cfg.navigator.corner_lat_g, 0.5, delta=1e-9)
+        self.assertEqual(len(driver.applied), 1)
+
+    def test_vehicle_tuning_rejects_out_of_range(self):
+        self.tab.tune_inputs["corner_lat_g"].setText("5.0")
+        self.tab.apply_tune()
+
+        self.assertIn("Invalid VEH lat g", self.tab.tune_status.text())
+        self.assertEqual(self.saved, 0)
 
 
 class TestRoiValidation(unittest.TestCase):

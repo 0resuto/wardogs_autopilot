@@ -80,6 +80,17 @@ def test_vehicle_profile_default():
     assert NavigatorConfig(vehicle_profile="").vehicle_profile == ""
 
 
+def test_yaw_gain_override_validation():
+    """yaw_gain is optional (profile value) and bounded when set."""
+    from autopilot.common.config import NavigatorConfig
+
+    assert NavigatorConfig().yaw_gain is None
+    assert NavigatorConfig(yaw_gain=1.5).yaw_gain == 1.5
+
+    with pytest.raises(ValidationError):
+        NavigatorConfig(yaw_gain=10.0)
+
+
 def test_speed_profile_defaults():
     """Route speed planning defaults are conservative and configurable."""
     from autopilot.common.config import NavigatorConfig

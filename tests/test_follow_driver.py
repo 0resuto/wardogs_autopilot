@@ -323,6 +323,31 @@ class TestVehicleAuthority(unittest.TestCase):
         self.assertIsNone(driver.vehicle_model)
         self.assertIsNone(driver._yaw_rate_max(50.0))
 
+    def test_yaw_gain_override_scales_authority(self):
+        base = self._driver()
+        tuned = self._driver(yaw_gain=2.0)
+        assert base.vehicle_model is not None and tuned.vehicle_model is not None
+        self.assertAlmostEqual(tuned.vehicle_model.yaw_gain, 2.0, delta=1e-9)
+
+        base_yaw = base._yaw_rate_max(50.0)
+        tuned_yaw = tuned._yaw_rate_max(50.0)
+        assert base_yaw is not None and tuned_yaw is not None
+        self.assertAlmostEqual(tuned_yaw, base_yaw * 2.0, delta=1e-6)
+
+    def test_apply_vehicle_tuning_updates_planner(self):
+        from autopilot.navigation.speed_profile import G
+
+        driver = self._driver()
+        assert driver.planner is not None
+
+        driver.apply_vehicle_tuning(
+            NavigatorConfig(corner_lat_g=0.9, brake_g=0.8, corner_min_kmh=20.0)
+        )
+
+        self.assertAlmostEqual(driver.planner.lat_accel, 0.9 * G, delta=1e-6)
+        self.assertAlmostEqual(driver.planner.brake_decel, 0.8 * G, delta=1e-6)
+        self.assertAlmostEqual(driver.planner.min_speed_kmh, 20.0, delta=1e-6)
+
     def test_speed_estimate_prefers_fresh_ocr(self):
         driver = self._driver()
         driver._speed_kmh = 42.0

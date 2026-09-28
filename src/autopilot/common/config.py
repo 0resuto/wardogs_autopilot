@@ -129,6 +129,12 @@ class NavigatorConfig(BaseModel):
         default="ural",
         description="Physics profile name from data/vehicles ('' disables the model)",
     )
+    yaw_gain: float | None = Field(
+        default=None,
+        ge=0.05,
+        le=5.0,
+        description="Steering yaw-authority scale override; None uses the profile value",
+    )
     arrive_r: float = Field(default=25.0, ge=1.0, description="Waypoint arrival radius (px)")
     slow_r: float = Field(default=350.0, ge=1.0, description="Deceleration radius (px)")
     dead: float = Field(default=3.0, ge=0.0, description="Steering dead-zone (deg)")
