@@ -354,37 +354,48 @@ class MapStore:
     def rebuild_map_cache(
         self, name: str, progress_cb: Callable[[str], None] | None = None
     ) -> bool:
-        """Rebuild mu.npy, preview mipmaps, and SIFT feature index for specified map."""
+        """Rebuild mu.npy, preview mipmaps, and SIFT feature index for specified map.
+
+        The active map is restored afterwards (rebuilding a background map must
+        not switch the store), and the in-memory feature index of the rebuilt
+        map is dropped so the freshly written npz is picked up on the next
+        frame instead of surviving until a restart.
+        """
         with self._cache_lock:
+            previous_name = self._cur_name
             self.set_map(name)
-            if progress_cb:
-                progress_cb("Step 1/3: Reading full map and generating mu...")
-            cache_mu = self.cache_path(name, "mu.npy")
-            gray = cv2.imread(self.full_path(name), cv2.IMREAD_GRAYSCALE)
-            if gray is None:
-                raise OSError(f"full map not read: {self.full_path(name)}")
-            h, _ = gray.shape[:2]
+            try:
+                if progress_cb:
+                    progress_cb("Step 1/3: Reading full map and generating mu...")
+                cache_mu = self.cache_path(name, "mu.npy")
+                gray = cv2.imread(self.full_path(name), cv2.IMREAD_GRAYSCALE)
+                if gray is None:
+                    raise OSError(f"full map not read: {self.full_path(name)}")
+                h, _ = gray.shape[:2]
 
-            ms = self.mini_scale(name)
-            side = int(round(h / ms))
-            mu = cv2.resize(gray, (side, side), interpolation=cv2.INTER_AREA)
-            np.save(cache_mu, mu)
-            sig = self.gray_sig()
-            with open(self.cache_path(name, "gray.txt"), "w", encoding="utf-8") as f:
-                f.write(sig)
+                ms = self.mini_scale(name)
+                side = int(round(h / ms))
+                mu = cv2.resize(gray, (side, side), interpolation=cv2.INTER_AREA)
+                np.save(cache_mu, mu)
+                sig = self.gray_sig()
+                with open(self.cache_path(name, "gray.txt"), "w", encoding="utf-8") as f:
+                    f.write(sig)
 
-            if progress_cb:
-                progress_cb("Step 2/3: Building preview mipmaps (512..16384)...")
-            self.build_previews(gray)
-            del gray
+                if progress_cb:
+                    progress_cb("Step 2/3: Building preview mipmaps (512..16384)...")
+                self.build_previews(gray)
+                del gray
 
-            self._g.update(mu=mu, ms=ms)
+                self._g.update(mu=mu, ms=ms)
 
-            if progress_cb:
-                progress_cb("Step 3/3: Building SIFT feature index...")
-            from . import featureindex
+                if progress_cb:
+                    progress_cb("Step 3/3: Building SIFT feature index...")
+                from . import featureindex
 
-            featureindex.build_index(name, progress=False)
+                featureindex.build_index(name, progress=False)
+                self._g.pop("idx", None)
+            finally:
+                self.set_map(previous_name)
 
             if progress_cb:
                 progress_cb("Done: Map cache and SIFT index ready!")
