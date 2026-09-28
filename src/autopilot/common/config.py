@@ -125,6 +125,10 @@ class NavigatorConfig(BaseModel):
 
     key_source: str = Field(default="arduino", description="'arduino' or virtual simulator")
     port: str = Field(default="COM6", description="Serial port for Arduino Micro")
+    vehicle_profile: str = Field(
+        default="ural",
+        description="Physics profile name from data/vehicles ('' disables the model)",
+    )
     arrive_r: float = Field(default=25.0, ge=1.0, description="Waypoint arrival radius (px)")
     slow_r: float = Field(default=350.0, ge=1.0, description="Deceleration radius (px)")
     dead: float = Field(default=3.0, ge=0.0, description="Steering dead-zone (deg)")

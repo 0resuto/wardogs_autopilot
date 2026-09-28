@@ -19,6 +19,7 @@ from .path_tracker import PathTracker
 from .speed_controller import SpeedController
 from .steering_controller import SteeringController, wrap180
 from .telemetry import NavTelemetryLogger
+from .vehicle_model import VehicleModel
 
 logger = get_logger("follow")
 
@@ -51,6 +52,7 @@ class FollowDriver(threading.Thread):
         stop_confirm_s: float | None = None,
         stop_hold: float | None = None,
         stop_timeout: float | None = None,
+        vehicle_model: Any = None,
         nav_cfg: NavigatorConfig | dict[str, Any] | None = None,
     ) -> None:
         super().__init__(daemon=True)
@@ -95,6 +97,21 @@ class FollowDriver(threading.Thread):
             stop_timeout if stop_timeout is not None else self.nav_cfg.stop_timeout
         )
         self.kb = kb
+        self.vehicle_model = vehicle_model
+        if self.vehicle_model is None and self.nav_cfg.vehicle_profile:
+            try:
+                self.vehicle_model = VehicleModel.load(self.nav_cfg.vehicle_profile)
+                logger.info(
+                    "[nav] vehicle profile %s loaded (%s)",
+                    self.nav_cfg.vehicle_profile,
+                    self.vehicle_model.name,
+                )
+            except (OSError, ValueError, KeyError) as exc:
+                logger.warning(
+                    "[nav] vehicle profile %r not loaded: %s",
+                    self.nav_cfg.vehicle_profile,
+                    exc,
+                )
 
         # Sub-controllers
         self.path = PathTracker(self.pts, arrive_r=self.arrive_r, xte_m=self.xte_m)
@@ -293,6 +310,18 @@ class FollowDriver(threading.Thread):
         """True when the last OCR speedometer reading is recent enough to trust."""
         return self._last_speed_t is not None and (now - self._last_speed_t) <= self.stop_confirm_s
 
+    def _speed_kmh_estimate(self, now: float) -> float:
+        """Best available speed for model lookups: OCR when fresh, else the track."""
+        if self._speed_fresh(now):
+            return self._speed_kmh
+        return self._kmh(self.path.mv)
+
+    def _yaw_rate_max(self, speed_kmh: float) -> float | None:
+        """Model yaw-rate authority at a speed (None when no profile is loaded)."""
+        if self.vehicle_model is None:
+            return None
+        return self.vehicle_model.yaw_rate_max_deg_s(speed_kmh)
+
     def _stop_state(self, now: float) -> str:
         """Final-waypoint stop state: 'stopped', 'braking' or 'timeout'.
 
@@ -354,6 +383,7 @@ class FollowDriver(threading.Thread):
             stop_confirm_s=self.stop_confirm_s,
             stop_hold=self.stop_hold,
             stop_timeout=self.stop_timeout,
+            vehicle=self.vehicle_model.vehicle_id if self.vehicle_model else None,
         )
 
     def run(self) -> None:
@@ -550,8 +580,11 @@ class FollowDriver(threading.Thread):
                 turn_angle, road_turn = self.path.calc_road_turn(heading)
                 tgt_spd = self.speed_ctrl.calc_target_speed(road_turn, xte, xte_lim)
 
-                # Steering state machine
-                steer_action = self.steer_ctrl.step(now, err, heading, self.path.mh, self.path.mh_t)
+                # Steering state machine (speed-dependent yaw authority)
+                yaw_max = self._yaw_rate_max(self._speed_kmh_estimate(now))
+                steer_action = self.steer_ctrl.step(
+                    now, err, heading, self.path.mh, self.path.mh_t, yaw_rate_max=yaw_max
+                )
                 keys: dict[str, bool] = {}
                 if steer_action == 1:
                     keys["D"] = True
@@ -642,6 +675,9 @@ class FollowDriver(threading.Thread):
                             speed=round(self.speed, 1),
                             ocr=round(self._speed_kmh, 1) if self._speed_fresh(now) else None,
                             v=round(self.path.mv, 1),
+                            good=bool(it.get("good", False)) if it else False,
+                            th_raw=round(float(pose["th"]), 2) if pose else None,
+                            yaw_max=round(yaw_max, 1) if yaw_max else None,
                             runaway=self.speed_ctrl.runaway,
                             ang=round(self.steer_ctrl.ang, 2),
                             steer=self.steer_ctrl.steer,

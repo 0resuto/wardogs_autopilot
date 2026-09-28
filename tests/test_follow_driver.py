@@ -272,6 +272,36 @@ class TestStopDecision(unittest.TestCase):
         self.assertEqual(driver._stop_state(1.5), "timeout")
 
 
+class TestVehicleAuthority(unittest.TestCase):
+    @staticmethod
+    def _driver(**nav_kwargs) -> FollowDriver:
+        nav = NavigatorConfig(**nav_kwargs)
+        return FollowDriver(loc=None, pts=[(0.0, 0.0), (1.0, 0.0)], nav_cfg=nav, kb=None)
+
+    def test_profile_is_loaded_and_authority_scales_with_speed(self):
+        driver = self._driver()
+        self.assertIsNotNone(driver.vehicle_model)
+        assert driver.vehicle_model is not None
+        self.assertEqual(driver.vehicle_model.vehicle_id, "WHL_07")
+
+        slow = driver._yaw_rate_max(5.0)
+        fast = driver._yaw_rate_max(80.0)
+        assert slow is not None and fast is not None
+        self.assertGreater(fast, slow)
+
+    def test_profile_can_be_disabled(self):
+        driver = self._driver(vehicle_profile="")
+        self.assertIsNone(driver.vehicle_model)
+        self.assertIsNone(driver._yaw_rate_max(50.0))
+
+    def test_speed_estimate_prefers_fresh_ocr(self):
+        driver = self._driver()
+        driver._speed_kmh = 42.0
+        driver._last_speed_t = 100.0
+
+        self.assertAlmostEqual(driver._speed_kmh_estimate(100.5), 42.0, delta=1e-6)
+
+
 class TestKeyboardCleanup(unittest.TestCase):
     def test_stop_closes_keyboard_driver(self):
         loc = _FakeLocator()

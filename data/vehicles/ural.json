@@ -1,0 +1,112 @@
+{
+  "vehicle_id": "WHL_07",
+  "name": "WHL_07 Ural (truck)",
+  "source": "wardogs-vehicle-physics pack (cooked asset decode)",
+  "confidence": "gears/rpm/torque/steer curves: high; wheel radius: derived",
+  "max_speed_kmh": 79.0,
+  "wheel_radius_m": 0.649,
+  "gears_forward": [
+    5.62,
+    2.89,
+    1.64,
+    1.25,
+    1.1
+  ],
+  "gear_reverse": 3.25,
+  "final_drive": 7.32,
+  "idle_rpm": 650.0,
+  "max_rpm": 2600.0,
+  "torque_nm": [
+    [
+      600.0,
+      200.0
+    ],
+    [
+      800.0,
+      550.0
+    ],
+    [
+      1000.0,
+      820.0
+    ],
+    [
+      1100.0,
+      880.0
+    ],
+    [
+      1200.0,
+      900.0
+    ],
+    [
+      1300.0,
+      880.0
+    ],
+    [
+      1500.0,
+      860.0
+    ],
+    [
+      1700.0,
+      840.0
+    ],
+    [
+      1800.5,
+      820.0
+    ],
+    [
+      1900.0,
+      800.0
+    ],
+    [
+      2100.0,
+      740.0
+    ],
+    [
+      2300.0,
+      650.0
+    ]
+  ],
+  "steer_limit_pct": [
+    [
+      2.1,
+      97.5
+    ],
+    [
+      23.200001,
+      90.0
+    ],
+    [
+      48.799999,
+      67.5
+    ],
+    [
+      80.0,
+      51.25
+    ]
+  ],
+  "steer_speed_mult": [
+    [
+      0.0,
+      1.425
+    ],
+    [
+      21.0,
+      1.0
+    ],
+    [
+      42.099998,
+      0.65
+    ],
+    [
+      80.0,
+      0.5
+    ]
+  ],
+  "tire_peak_force": 2699.9683,
+  "calibration": {
+    "yaw_gain": 1.0,
+    "wheelbase_m": 3.8,
+    "steer_angle_max_deg": 35.0,
+    "drive_efficiency": 0.9
+  }
+}

@@ -84,11 +84,18 @@ class SteeringController:
         self.last_hd = heading
         self.last_hd_t = now
 
-    def calc_impulse(self, err: float) -> float:
-        """Compute base steering impulse duration (seconds) for given error."""
+    def calc_impulse(self, err: float, yaw_rate_max: float | None = None) -> float:
+        """Steering impulse duration (seconds) for a heading error.
+
+        With a model-provided yaw rate the duration follows the physically
+        available turn rate; without it the legacy constant is used.
+        """
+        rate = self.w_est
+        if yaw_rate_max is not None and yaw_rate_max > 1e-3:
+            rate = float(yaw_rate_max)
         return max(
             self.t_min,
-            min(self.t_max, abs(err) * self.imp_k / self.w_est),
+            min(self.t_max, abs(err) * self.imp_k / rate),
         )
 
     def step(
@@ -98,6 +105,7 @@ class SteeringController:
         heading: float,
         mh: float | None,
         mh_t: float,
+        yaw_rate_max: float | None = None,
     ) -> int:
         """Evaluate steering state machine and return active key command (-1=A, 0=None, +1=D)."""
         self.update_angular_velocity(now, heading)
@@ -116,7 +124,9 @@ class SteeringController:
                     self.hold = self.big_n >= 2
                     self.hold_err0 = abs(err)
                     self.imp_end = now + (
-                        self.hold_max if self.hold else min(self.calc_impulse(abs(err)), self.t_max)
+                        self.hold_max
+                        if self.hold
+                        else min(self.calc_impulse(abs(err), yaw_rate_max), self.t_max)
                     )
                     self.press_t0 = now
                     self.press_h0 = heading
@@ -127,7 +137,9 @@ class SteeringController:
                     self.hold = self.big_n >= 2
                     self.hold_err0 = abs(err)
                     self.imp_end = now + (
-                        self.hold_max if self.hold else min(self.calc_impulse(abs(err)), self.t_max)
+                        self.hold_max
+                        if self.hold
+                        else min(self.calc_impulse(abs(err), yaw_rate_max), self.t_max)
                     )
                     self.press_t0 = now
                     self.press_h0 = heading

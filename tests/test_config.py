@@ -72,6 +72,14 @@ def test_speed_roi_validation():
         CaptureConfig(speed_roi=[0, 0, 100])  # Length != 4
 
 
+def test_vehicle_profile_default():
+    """The Ural physics profile is enabled by default and can be disabled."""
+    from autopilot.common.config import NavigatorConfig
+
+    assert NavigatorConfig().vehicle_profile == "ural"
+    assert NavigatorConfig(vehicle_profile="").vehicle_profile == ""
+
+
 def test_invalid_locator_ratio():
     """Verify ratio bounds on LocatorConfig."""
     with pytest.raises(ValidationError):
