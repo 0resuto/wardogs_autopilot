@@ -25,6 +25,11 @@ class CaptureConfig(BaseModel):
         default_factory=lambda: [45, 1009, 336, 277],
         description="Minimap ROI box [x, y, width, height] on monitor",
     )
+    speed_roi: list[int] | None = Field(
+        default=None,
+        description="Speedometer HUD ROI box [x, y, width, height] on monitor, "
+        "or None to disable speed OCR",
+    )
 
     @field_validator("mmap_roi")
     @classmethod
@@ -34,6 +39,18 @@ class CaptureConfig(BaseModel):
         _, _, w, h = v
         if w < 10 or h < 10:
             raise ValueError(f"mmap_roi dimensions too small: w={w}, h={h} (minimum 10x10)")
+        return v
+
+    @field_validator("speed_roi")
+    @classmethod
+    def validate_speed_roi(cls, v: list[int] | None) -> list[int] | None:
+        if v is None:
+            return v
+        if len(v) != 4:
+            raise ValueError("speed_roi must have exactly 4 elements [x, y, w, h]")
+        _, _, w, h = v
+        if w < 8 or h < 8:
+            raise ValueError(f"speed_roi dimensions too small: w={w}, h={h} (minimum 8x8)")
         return v
 
 

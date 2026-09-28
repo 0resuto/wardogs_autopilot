@@ -6,7 +6,9 @@ segmentation, normalization and matching without any screen or font at runtime.
 """
 
 import os
+import queue
 import sys
+import threading
 import unittest
 
 import cv2
@@ -23,6 +25,7 @@ from autopilot.vision.hud_speed import (  # noqa: E402
     SpeedFilter,
     SpeedReading,
     SpeedRecognizer,
+    SpeedSensor,
 )
 
 
@@ -150,6 +153,76 @@ class TestRealCapture(unittest.TestCase):
         recognizer = SpeedRecognizer(DigitAtlas())
         self.assertIsNone(recognizer.read(image[63:96, 90:193]).kmh)
         self.assertIsNone(recognizer.read(image[5:55, 15:185]).kmh)
+
+
+class TestSpeedSensor(unittest.TestCase):
+    def test_returns_filtered_value_and_measured_flag(self):
+        sensor = SpeedSensor()
+        self.assertTrue(sensor.available)
+        assert sensor.recognizer is not None
+
+        frame = _compose(sensor.recognizer.atlas, "44", 1.4, seed=21)
+        self.assertEqual(sensor.update(frame, now=0.0), (44, True))
+
+        blank = np.full((frame.shape[0], frame.shape[1]), 30, np.uint8)
+        self.assertEqual(sensor.update(blank, now=0.3), (44, True))
+        value, ok = sensor.update(blank, now=2.0)
+        self.assertEqual(value, 44)
+        self.assertFalse(ok)
+
+    def test_disabled_without_atlas(self):
+        from unittest.mock import patch
+
+        import autopilot.vision.hud_speed as hud_speed
+
+        with patch.object(hud_speed, "SpeedRecognizer", side_effect=OSError("no atlas")):
+            sensor = SpeedSensor()
+
+        self.assertFalse(sensor.available)
+        self.assertEqual(sensor.update(np.zeros((40, 80), np.uint8), now=0.0), (None, False))
+
+
+class TestSpeedPlumbing(unittest.TestCase):
+    def test_capture_producer_speed_roi_updates_config(self):
+        from autopilot.vision.tracker import _CaptureProducer
+
+        producer = _CaptureProducer(
+            {"capture": {"mmap_roi": [1, 2, 50, 50]}},
+            np.zeros((4, 4), bool),
+            None,
+            threading.Event(),
+            queue.Queue(maxsize=1),
+        )
+        producer.set_speed_roi([10, 20, 30, 20])
+        self.assertEqual(producer.capture_cfg.speed_roi, [10, 20, 30, 20])
+        self.assertEqual(producer.cfg["capture"]["speed_roi"], [10, 20, 30, 20])
+
+        producer.set_speed_roi(None)
+        self.assertIsNone(producer.capture_cfg.speed_roi)
+        self.assertIsNone(producer.cfg["capture"]["speed_roi"])
+
+    def test_screen_capture_grab_region_clamps(self):
+        from autopilot.hardware.screen_capture import ScreenCapture
+
+        cap = ScreenCapture.__new__(ScreenCapture)
+        cap.monitor_index = 1
+        cap.monitors = [
+            {"left": 0, "top": 0, "width": 1920, "height": 1080},
+            {"left": 1920, "top": 0, "width": 1920, "height": 1080},
+        ]
+
+        recorded: dict[str, int] = {}
+
+        class _FakeSct:
+            def grab(self, region):
+                recorded.update(region)
+                return np.zeros((10, 10, 4), np.uint8)
+
+        cap._sct = _FakeSct()
+        frame = cap.grab_region([5000, 0, 100, 50])
+        self.assertEqual(frame.shape, (10, 10, 3))
+        self.assertEqual(recorded["left"], 1920 + 1920 - 16)
+        self.assertGreaterEqual(recorded["width"], 16)
 
 
 class TestSpeedFilter(unittest.TestCase):

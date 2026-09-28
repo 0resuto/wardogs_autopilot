@@ -24,6 +24,7 @@ from ..common.config import AppConfig, CaptureConfig, LocatorConfig
 from ..common.log import get_logger
 from ..hardware.screen_capture import ScreenCapture
 from . import locator
+from .hud_speed import SpeedSensor
 
 logger = get_logger("tracker")
 
@@ -71,9 +72,11 @@ class _CaptureProducer(threading.Thread):
     """Screen capture at a fixed rate into a single-slot drop-old queue.
 
     Each item: dict(ts=time.time(), gray=mm_grayscale, bgr=mm_color,
-    roi=roi, mask=ui_bool) with the UI mask already resized to the frame.
-    The color frame is kept for debug dumps only; the pipeline uses gray.
-    Errors land in crash.log and self.error (the consumer surfaces it).
+    roi=roi, mask=ui_bool, speed_kmh=int|None, speed_ok=bool) with the UI mask
+    already resized to the frame. The color frame is kept for debug dumps
+    only; the pipeline uses gray. Speed is read from the optional speedometer
+    ROI (capture.speed_roi). Errors land in crash.log and self.error (the
+    consumer surfaces it).
     """
 
     def __init__(
@@ -108,6 +111,7 @@ class _CaptureProducer(threading.Thread):
         self._stop = stop
         self._queue = out_q
         self.error: str | None = None
+        self.speed_sensor = SpeedSensor()
 
     def set_roi(self, roi: list[int] | tuple[int, ...]) -> None:
         roi_list = [int(v) for v in roi]
@@ -115,6 +119,13 @@ class _CaptureProducer(threading.Thread):
             self.cfg.setdefault("capture", {})["mmap_roi"] = roi_list
         if hasattr(self, "capture_cfg"):
             self.capture_cfg.mmap_roi = roi_list
+
+    def set_speed_roi(self, roi: list[int] | tuple[int, ...] | None) -> None:
+        roi_list = None if roi is None else [int(v) for v in roi]
+        if isinstance(self.cfg, dict):
+            self.cfg.setdefault("capture", {})["speed_roi"] = roi_list
+        if hasattr(self, "capture_cfg"):
+            self.capture_cfg.speed_roi = roi_list
 
     def run(self) -> None:
         cap = None
@@ -127,9 +138,11 @@ class _CaptureProducer(threading.Thread):
                     cap_cfg = self.cfg.get("capture") if isinstance(self.cfg, dict) else None
                     if cap_cfg and isinstance(cap_cfg, dict):
                         roi = cap_cfg.get("mmap_roi")
+                        speed_roi = cap_cfg.get("speed_roi")
                         mon = int(cap_cfg.get("monitor", 0) or 0)
                     else:
                         roi = self.capture_cfg.mmap_roi
+                        speed_roi = self.capture_cfg.speed_roi
                         mon = self.capture_cfg.monitor
                     if not roi:
                         self._stop.wait(period)
@@ -153,7 +166,20 @@ class _CaptureProducer(threading.Thread):
                             cv2.resize(ui.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST)
                             > 0
                         )
-                    item = dict(ts=time.time(), gray=mm, bgr=frame, roi=roi, mask=ui)
+                    item = dict(
+                        ts=time.time(),
+                        gray=mm,
+                        bgr=frame,
+                        roi=roi,
+                        mask=ui,
+                        speed_kmh=None,
+                        speed_ok=False,
+                    )
+                    if speed_roi and cap is not None and self.speed_sensor.available:
+                        speed_frame = cap.grab_region(speed_roi)
+                        kmh, ok = self.speed_sensor.update(speed_frame, item["ts"])
+                        item["speed_kmh"] = kmh
+                        item["speed_ok"] = ok
                     try:
                         self._queue.get_nowait()  # drop the stale frame
                     except queue.Empty:
@@ -187,6 +213,8 @@ class LiveLocator(threading.Thread):
     latest['good'] is True ONLY for a measured pose: the held pose of a capture
     void and all failed frames report good=False, so consumers must not derive
     motion or a stopped state from them.
+    latest['speed_kmh']/latest['speed_ok'] carry the optional speedometer OCR
+    (capture.speed_roi): speed_ok=False means the value is stale or unread.
     """
 
     def __init__(self, cfg: AppConfig | dict, mask, frame_source=None) -> None:
@@ -280,6 +308,18 @@ class LiveLocator(threading.Thread):
         if hasattr(self, "_prod") and self._prod is not None:
             self._prod.set_roi(roi_list)
 
+    def set_speed_roi(self, roi: list[int] | tuple[int, ...] | None) -> None:
+        """Update (or disable with None) the speedometer OCR ROI on the fly."""
+        roi_list = None if roi is None else [int(v) for v in roi]
+        if isinstance(self.cfg, dict):
+            self.cfg.setdefault("capture", {})["speed_roi"] = roi_list
+        if hasattr(self, "app_cfg") and hasattr(self.app_cfg, "capture"):
+            self.app_cfg.capture.speed_roi = roi_list
+        if hasattr(self, "cap_cfg") and hasattr(self.cap_cfg, "speed_roi"):
+            self.cap_cfg.speed_roi = roi_list
+        if hasattr(self, "_prod") and self._prod is not None:
+            self._prod.set_speed_roi(roi_list)
+
     def set_collect_fail_logs(self, enabled: bool) -> None:
         """Live toggle of the fail-frame collector (Map tab checkbox)."""
         enabled = bool(enabled)
@@ -346,6 +386,8 @@ class LiveLocator(threading.Thread):
                         pose=None,
                         map_px=None,
                         good=False,
+                        speed_kmh=None,
+                        speed_ok=False,
                         elapsed=0.0,
                         diag=dict(reject="capture_error", detail=f"Screen capture: {self.error}"),
                     )
@@ -440,6 +482,8 @@ class LiveLocator(threading.Thread):
                                     pose=None,
                                     map_px=None,
                                     good=False,
+                                    speed_kmh=item.get("speed_kmh"),
+                                    speed_ok=bool(item.get("speed_ok", False)),
                                     elapsed=elapsed,
                                     diag=diag,
                                 )
@@ -496,6 +540,8 @@ class LiveLocator(threading.Thread):
                                 map_px=self._good_xy,
                                 map_px_disp=self._good_xy,
                                 good=False,
+                                speed_kmh=item.get("speed_kmh"),
+                                speed_ok=bool(item.get("speed_ok", False)),
                                 elapsed=elapsed,
                                 diag=d2,
                             )
@@ -510,6 +556,8 @@ class LiveLocator(threading.Thread):
                     map_px=mp,
                     map_px_disp=disp,
                     good=good,
+                    speed_kmh=item.get("speed_kmh"),
+                    speed_ok=bool(item.get("speed_ok", False)),
                     elapsed=elapsed,
                     diag=diag,
                 )

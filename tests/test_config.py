@@ -30,6 +30,18 @@ def test_invalid_roi_validation():
         CaptureConfig(mmap_roi=[0, 0, 100])  # Length != 4
 
 
+def test_speed_roi_validation():
+    """Verify the optional speedometer ROI accepts None and validated boxes."""
+    assert CaptureConfig(speed_roi=None).speed_roi is None
+    assert CaptureConfig(speed_roi=[1, 2, 40, 30]).speed_roi == [1, 2, 40, 30]
+
+    with pytest.raises(ValidationError):
+        CaptureConfig(speed_roi=[0, 0, 5, 5])  # Too small (<8x8)
+
+    with pytest.raises(ValidationError):
+        CaptureConfig(speed_roi=[0, 0, 100])  # Length != 4
+
+
 def test_invalid_locator_ratio():
     """Verify ratio bounds on LocatorConfig."""
     with pytest.raises(ValidationError):

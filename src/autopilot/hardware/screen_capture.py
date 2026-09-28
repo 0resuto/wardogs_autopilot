@@ -20,10 +20,8 @@ class ScreenCapture:
         self.region: dict[str, int] | None = None
         self.set_roi(roi)
 
-    def set_roi(self, roi) -> None:
-        if roi is None:
-            self.region = None
-            return
+    def _region_for(self, roi) -> dict[str, int]:
+        """Clamp an ROI box to the target monitor and return an mss region dict."""
         x, y, w, h = roi
         if 0 < self.monitor_index < len(self.monitors):
             mon = self.monitors[self.monitor_index]
@@ -32,24 +30,27 @@ class ScreenCapture:
         else:
             mon = None
 
-        if mon is not None:
-            m_left = int(mon["left"])
-            m_top = int(mon["top"])
-            m_w = int(mon["width"])
-            m_h = int(mon["height"])
+        if mon is None:
+            return {"left": int(x), "top": int(y), "width": int(w), "height": int(h)}
 
-            clamped_x = max(m_left, min(m_left + m_w - 16, int(x)))
-            clamped_y = max(m_top, min(m_top + m_h - 16, int(y)))
-            clamped_w = max(16, min(int(w), m_left + m_w - clamped_x))
-            clamped_h = max(16, min(int(h), m_top + m_h - clamped_y))
-            self.region = {
-                "left": clamped_x,
-                "top": clamped_y,
-                "width": clamped_w,
-                "height": clamped_h,
-            }
-        else:
-            self.region = {"left": int(x), "top": int(y), "width": int(w), "height": int(h)}
+        m_left = int(mon["left"])
+        m_top = int(mon["top"])
+        m_w = int(mon["width"])
+        m_h = int(mon["height"])
+
+        clamped_x = max(m_left, min(m_left + m_w - 16, int(x)))
+        clamped_y = max(m_top, min(m_top + m_h - 16, int(y)))
+        clamped_w = max(16, min(int(w), m_left + m_w - clamped_x))
+        clamped_h = max(16, min(int(h), m_top + m_h - clamped_y))
+        return {
+            "left": clamped_x,
+            "top": clamped_y,
+            "width": clamped_w,
+            "height": clamped_h,
+        }
+
+    def set_roi(self, roi) -> None:
+        self.region = None if roi is None else self._region_for(roi)
 
     def grab(self) -> np.ndarray:
         """BGR (HxWx3). Without ROI - the whole target monitor."""
@@ -58,6 +59,11 @@ class ScreenCapture:
             raw = self._sct.grab(mon)
         else:
             raw = self._sct.grab(self.region)
+        return np.array(raw)[:, :, :3].copy()
+
+    def grab_region(self, roi) -> np.ndarray:
+        """BGR (HxWx3) of an arbitrary ROI on the target monitor."""
+        raw = self._sct.grab(self._region_for(roi))
         return np.array(raw)[:, :, :3].copy()
 
     def close(self) -> None:

@@ -276,3 +276,33 @@ class SpeedFilter:
         else:
             return self.value, False
         return self.value, True
+
+
+class SpeedSensor:
+    """Recognizer + temporal filter; degrades to 'not measured' without an atlas."""
+
+    def __init__(
+        self,
+        recognizer: SpeedRecognizer | None = None,
+        speed_filter: SpeedFilter | None = None,
+    ) -> None:
+        self.recognizer: SpeedRecognizer | None = None
+        self.disabled_reason = ""
+        try:
+            self.recognizer = recognizer or SpeedRecognizer()
+        except (OSError, ValueError) as exc:
+            self.disabled_reason = str(exc)
+            logger.warning("[hud_speed] speed OCR disabled: %s", exc)
+        self.filter = speed_filter or SpeedFilter()
+        self.last_reading: SpeedReading | None = None
+
+    @property
+    def available(self) -> bool:
+        return self.recognizer is not None
+
+    def update(self, frame: np.ndarray, now: float) -> tuple[int | None, bool]:
+        """Return (speed_kmh, measured) for one captured ROI frame."""
+        if self.recognizer is None:
+            return None, False
+        self.last_reading = self.recognizer.read(frame)
+        return self.filter.update(self.last_reading, now)
