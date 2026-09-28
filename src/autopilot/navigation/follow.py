@@ -118,6 +118,8 @@ class FollowDriver(threading.Thread):
         self._last_mp: tuple[float, float] | None = None
         self._last_t = 0.0
         self._last_measured_t: float | None = None
+        self._last_speed_t: float | None = None
+        self._speed_kmh = 0.0
         self._heading: float | None = None
         self._lost = False
         self._dbg_n = 0
@@ -287,14 +289,26 @@ class FollowDriver(threading.Thread):
             and (now - self._last_measured_t) <= self.stop_confirm_s
         )
 
+    def _speed_fresh(self, now: float) -> bool:
+        """True when the last OCR speedometer reading is recent enough to trust."""
+        return self._last_speed_t is not None and (now - self._last_speed_t) <= self.stop_confirm_s
+
     def _stop_state(self, now: float) -> str:
         """Final-waypoint stop state: 'stopped', 'braking' or 'timeout'.
 
-        A full stop is only trusted while fresh measured poses keep confirming
-        it: a frozen (held) pose must not be mistaken for a stopped vehicle.
-        'timeout' is the emergency exit after stop_timeout seconds.
+        A fresh speedometer OCR reading is the ground truth (it is independent
+        of localization, so a frozen pose cannot fake a stop). Without it the
+        position-derived estimate is used, and only fresh measured poses may
+        confirm it. 'timeout' is the emergency exit after stop_timeout seconds.
         """
-        if self._pose_fresh(now) and max(self.speed, self.path.mv) <= self._stop_thr():
+        if self._speed_fresh(now):
+            below = self._speed_kmh <= self.stop_speed_kmh
+        elif self._pose_fresh(now):
+            below = max(self.speed, self.path.mv) <= self._stop_thr()
+        else:
+            below = False
+
+        if below:
             if self._stop_s_t is None:
                 self._stop_s_t = now
             elif now - self._stop_s_t >= self.stop_hold:
@@ -348,10 +362,17 @@ class FollowDriver(threading.Thread):
             while not self._stop_ev.is_set():
                 now = time.time()
                 new_sample = False
+                speed_ok = False
+                speed_kmh = None
                 it = getattr(self.loc, "latest", None)
                 if it is not None:
                     mpx = it.get("map_px")
                     ts = it.get("ts", now)
+                    speed_ok = bool(it.get("speed_ok", False))
+                    speed_kmh = it.get("speed_kmh")
+                    if speed_ok and speed_kmh is not None:
+                        self._speed_kmh = float(speed_kmh)
+                        self._last_speed_t = ts
                     # good=True marks a MEASURED pose; held (frozen) poses of a
                     # capture void keep the last position with good=False. Held
                     # poses are only used for aiming: feeding them to the track
@@ -473,6 +494,7 @@ class FollowDriver(threading.Thread):
                                 mv=round(self.path.mv, 1),
                                 heading=round(self._heading or 0.0, 2),
                                 speed=round(self.speed, 1),
+                                ocr=round(self._speed_kmh, 1) if self._speed_fresh(now) else None,
                                 dist=round(dist, 1),
                                 keys="SPACE",
                                 idx=self.path.idx,
@@ -480,10 +502,11 @@ class FollowDriver(threading.Thread):
                         )
                     if self._dbg_n % 5 == 0:
                         logger.info(
-                            "[nav] final-stop braking sv=%.1fpx/s mv=%.1fpx/s dist=%.0fm",
+                            "[nav] final-stop braking sv=%.1fpx/s mv=%.1fpx/s dist=%.0fm%s",
                             self.speed,
                             self.path.mv,
                             self._m(dist),
+                            f" ocr={self._speed_kmh:.0f}km/h" if self._speed_fresh(now) else "",
                         )
                     self._dbg_n += 1
                     self.last = dict(
@@ -565,7 +588,7 @@ class FollowDriver(threading.Thread):
                         "[nav] mp=%.0f,%.0f goal=%d (%.0f,%.0f) dist=%.0fm "
                         "bearing=%.1f heading=%.1f err=%.1f xte=%.1fm "
                         "turn=%.0f tgt=%.0fkm/h spar=%.0fkm/h(%.0f) "
-                        "keys=%s th=%s",
+                        "keys=%s th=%s%s",
                         mp[0],
                         mp[1],
                         self.path.idx,
@@ -582,6 +605,7 @@ class FollowDriver(threading.Thread):
                         self.path.mv,
                         "".join(k for k in ("W", "A", "D", "SPACE") if keys.get(k)),
                         hmode,
+                        f" ocr={self._speed_kmh:.0f}km/h" if self._speed_fresh(now) else "",
                     )
 
                 self._dbg_n += 1
@@ -616,6 +640,7 @@ class FollowDriver(threading.Thread):
                             xte=round(abs(xte), 1),
                             xte_m=round(self._m(abs(xte)), 1),
                             speed=round(self.speed, 1),
+                            ocr=round(self._speed_kmh, 1) if self._speed_fresh(now) else None,
                             v=round(self.path.mv, 1),
                             runaway=self.speed_ctrl.runaway,
                             ang=round(self.steer_ctrl.ang, 2),

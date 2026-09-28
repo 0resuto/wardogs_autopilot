@@ -402,8 +402,12 @@ class MapTab(QWidget):
         heading = self._disp_th
 
         self.map_widget.scene.update_vehicle(mp[0], mp[1], heading)
+        speed_txt = ""
+        if last_loc.get("speed_ok") and last_loc.get("speed_kmh") is not None:
+            speed_txt = f" | v={last_loc['speed_kmh']} km/h"
         self.map_status.setText(
-            f"x={mp[0]:.0f} y={mp[1]:.0f} | {heading:.1f}° | s={pose['s']:.2f} inl={pose.get('inl', 0)}"
+            f"x={mp[0]:.0f} y={mp[1]:.0f} | {heading:.1f}° | "
+            f"s={pose['s']:.2f} inl={pose.get('inl', 0)}{speed_txt}"
         )
 
         diag = last_loc.get("diag")

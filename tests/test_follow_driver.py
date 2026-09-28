@@ -146,6 +146,66 @@ class TestFinalWaypointStop(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertEqual(driver.state, "finished")
 
+    def test_no_finish_while_ocr_reports_motion(self):
+        loc = _FakeLocator()
+        kb = _FakeKeyboard()
+        nav = NavigatorConfig(
+            arrive_r=25.0,
+            brake_d=260.0,
+            stop_hold=0.2,
+            stop_confirm_s=0.3,
+            stop_timeout=30.0,
+            poll=0.01,
+        )
+        driver = FollowDriver(
+            loc=loc,
+            pts=[(900.0, 0.0), (1000.0, 0.0)],
+            nav_cfg=nav,
+            kb=kb,
+        )
+
+        def publish(x: float, good: bool, kmh: int, ok: bool) -> None:
+            now = time.time()
+            loc.latest = dict(
+                ts=now,
+                pose=dict(th=90.0, s=1.0, inl=20),
+                map_px=(x, 0.0),
+                good=good,
+                speed_kmh=kmh,
+                speed_ok=ok,
+            )
+
+        errors: list[threading.ExceptHookArgs] = []
+        previous_hook = threading.excepthook
+        threading.excepthook = errors.append
+        try:
+            driver.start()
+            t0 = time.time()
+            while time.time() - t0 < 8.0 and driver.is_alive() and driver.state != "final_stop":
+                publish(min(1000.0, 890.0 + 40.0 * (time.time() - t0)), True, 40, True)
+                time.sleep(0.005)
+            self.assertEqual(driver.state, "final_stop")
+
+            hold_until = time.time() + 0.6
+            while time.time() < hold_until:
+                publish(1000.0, False, 30, True)
+                time.sleep(0.005)
+            time.sleep(0.1)
+            self.assertTrue(driver.is_alive())
+            self.assertEqual(driver.state, "final_stop")
+
+            stop_until = time.time() + 0.5
+            while time.time() < stop_until and driver.is_alive():
+                publish(1000.0, False, 0, True)
+                time.sleep(0.005)
+            time.sleep(0.2)
+        finally:
+            driver.stop()
+            threading.excepthook = previous_hook
+
+        self.assertEqual(errors, [])
+        self.assertEqual(driver.state, "finished")
+
 
 class TestStopDecision(unittest.TestCase):
     @staticmethod
@@ -182,6 +242,23 @@ class TestStopDecision(unittest.TestCase):
         driver._last_measured_t = now
         self.assertEqual(driver._stop_state(now), "braking")
         driver._last_measured_t = now + 0.25
+        self.assertEqual(driver._stop_state(now + 0.25), "stopped")
+
+    def test_ocr_speed_overrides_position_estimate(self):
+        driver = self._driver(stop_hold=0.2, stop_confirm_s=0.3)
+        now = 100.0
+        driver._final_t0 = now
+        driver.speed = 50.0
+        driver.path._mv = 50.0
+        driver._last_measured_t = now
+        driver._last_speed_t = now
+
+        driver._speed_kmh = 30.0
+        self.assertEqual(driver._stop_state(now), "braking")
+
+        driver._speed_kmh = 1.0
+        self.assertEqual(driver._stop_state(now), "braking")
+        driver._last_speed_t = now + 0.25
         self.assertEqual(driver._stop_state(now + 0.25), "stopped")
 
     def test_stop_timeout_is_the_emergency_exit(self):
