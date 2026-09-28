@@ -26,8 +26,7 @@ class MapGraphicsView(QGraphicsView):
         self.map_scene = scene
 
         self.setRenderHints(
-            QPainter.RenderHint.Antialiasing
-            | QPainter.RenderHint.SmoothPixmapTransform
+            QPainter.RenderHint.Antialiasing | QPainter.RenderHint.SmoothPixmapTransform
         )
         self.setDragMode(QGraphicsView.DragMode.NoDrag)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)

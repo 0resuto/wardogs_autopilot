@@ -30,10 +30,7 @@ class RoiSelector(QWidget):
         self._on_roi = on_roi
         self._on_cancel = on_cancel
 
-        self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-        )
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self.setCursor(Qt.CursorShape.CrossCursor)
@@ -44,8 +41,8 @@ class RoiSelector(QWidget):
         self._img_h = monitor_bgr.shape[0]
         self._left = int(monitor_geom.get("left", 0))
         self._top = int(monitor_geom.get("top", 0))
-        self._w = int(monitor_geom.get("width", self._img_w))
-        self._h = int(monitor_geom.get("height", self._img_h))
+        self._w = int(monitor_geom.get("width") or self._img_w)
+        self._h = int(monitor_geom.get("height") or self._img_h)
 
         app = QApplication.instance()
         target_screen = None

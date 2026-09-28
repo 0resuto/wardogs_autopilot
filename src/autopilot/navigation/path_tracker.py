@@ -118,32 +118,46 @@ class PathTracker:
             return (x1 + vx * d, y1 + vy * d)
         return (x1, y1)
 
-    def advance_waypoint(self, mp: tuple[float, float]) -> tuple[float, float, float, bool]:
-        """Find the nearest unpassed point and check arrival radius.
+    def _passed(self, mp: tuple[float, float]) -> bool:
+        """True when the vehicle crossed the perpendicular through the current
+        waypoint along the route, without wandering far off the corridor."""
+        if self.idx <= 0:
+            return False
+        ax, ay = self.pts[self.idx - 1]
+        bx, by = self.pts[self.idx]
+        sx, sy = bx - ax, by - ay
+        l2 = sx * sx + sy * sy
+        if l2 <= 1e-6:
+            return False
+        t = ((mp[0] - ax) * sx + (mp[1] - ay) * sy) / l2
+        if t < 1.0:
+            return False
+        lateral = abs((mp[0] - ax) * sy - (mp[1] - ay) * sx) / math.sqrt(l2)
+        return lateral <= self.arrive_r * 4.0
 
-        Returns (target_x, target_y, distance, arrived_at_end).
+    def advance_waypoint(self, mp: tuple[float, float]) -> tuple[float, float, float, bool]:
+        """Advance to the first waypoint that is neither reached nor passed.
+
+        Waypoints are consumed strictly in order: picking the globally nearest
+        remaining point used to cut out-and-back routes. The current waypoint
+        is consumed when the vehicle is inside its arrival radius or has
+        already crossed the perpendicular through it along the route (so a
+        missed sample does not send the vehicle back). Returns
+        (target_x, target_y, distance, arrived_at_end).
         """
         if self.idx >= len(self.pts):
             return 0.0, 0.0, 0.0, True
 
-        bi = self.idx
-        bd = math.hypot(self.pts[bi][0] - mp[0], self.pts[bi][1] - mp[1])
-        for i in range(self.idx + 1, len(self.pts)):
-            di = math.hypot(self.pts[i][0] - mp[0], self.pts[i][1] - mp[1])
-            if di < bd:
-                bi, bd = i, di
-        self.idx = bi
-        tx, ty = self.pts[bi]
-        dist = bd
-
-        if dist < self.arrive_r:
-            self.idx += 1
-            if self.idx >= len(self.pts):
-                return tx, ty, dist, True
+        while self.idx < len(self.pts):
             tx, ty = self.pts[self.idx]
             dist = math.hypot(tx - mp[0], ty - mp[1])
+            if dist < self.arrive_r or self._passed(mp):
+                self.idx += 1
+                continue
+            return tx, ty, dist, False
 
-        return tx, ty, dist, False
+        tx, ty = self.pts[-1]
+        return tx, ty, math.hypot(tx - mp[0], ty - mp[1]), True
 
     def calc_xte_and_bearing(
         self,
@@ -152,7 +166,7 @@ class PathTracker:
     ) -> tuple[float, float, float]:
         """Calculate cross-track error, corridor limit, and pure pursuit target bearing."""
         look = max(90.0, min(240.0, 60.0 + self._mv * 2.6))
-        si = self.idx if self.idx >= 1 else 1
+        si = min(max(self.idx, 1), len(self.pts) - 1)
         ax3, ay3 = self.pts[si - 1]
         bx3, by3 = self.pts[si]
         sx3 = bx3 - ax3

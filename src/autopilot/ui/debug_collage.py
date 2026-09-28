@@ -180,7 +180,7 @@ def render_map_crop(
         if cmap is None or not getattr(cmap, "size", 0):
             try:
                 mu = locator.load_global_map()
-                if mu is not None and getattr(mu, "size", 0):
+                if mu is not None and mu.size > 0:
                     cmap = cv2.cvtColor(mu, cv2.COLOR_GRAY2BGR)
             except Exception:
                 cmap = None
@@ -314,24 +314,28 @@ def format_state_log(
         f"Status:          {'LOCALIZED' if is_localized else 'SEARCHING / UNLOCALIZED'}",
     ]
     if is_localized and pose is not None:
-        lines.extend([
-            f"Position (X, Y): ({pose['map_x']:.1f}, {pose['map_y']:.1f}) px",
-            f"Heading:         {pose.get('th', 0.0):.1f}°",
-            f"Scale:           {pose.get('s', 1.0):.3f}",
-            f"Inliers:         {inl}",
-            f"Total Matches:   {pose.get('n_match', 0)}",
-        ])
-    lines.extend([
-        f"Proc Latency:    {elapsed_ms:.1f} ms",
-        "",
-        "--- Vision & SIFT Diagnostics ---",
-        f"Mode:            {mode}",
-        f"Keypoints Found: {kp_mm}",
-        f"Inliers Count:   {inl}",
-        f"Reject Reason:   {reject or 'None'}",
-        f"Details:         {detail or 'OK'}",
-        "=" * 60,
-    ])
+        lines.extend(
+            [
+                f"Position (X, Y): ({pose['map_x']:.1f}, {pose['map_y']:.1f}) px",
+                f"Heading:         {pose.get('th', 0.0):.1f}°",
+                f"Scale:           {pose.get('s', 1.0):.3f}",
+                f"Inliers:         {inl}",
+                f"Total Matches:   {pose.get('n_match', 0)}",
+            ]
+        )
+    lines.extend(
+        [
+            f"Proc Latency:    {elapsed_ms:.1f} ms",
+            "",
+            "--- Vision & SIFT Diagnostics ---",
+            f"Mode:            {mode}",
+            f"Keypoints Found: {kp_mm}",
+            f"Inliers Count:   {inl}",
+            f"Reject Reason:   {reject or 'None'}",
+            f"Details:         {detail or 'OK'}",
+            "=" * 60,
+        ]
+    )
     text_log = "\n".join(lines) + "\n"
 
     json_payload = {
@@ -391,9 +395,7 @@ def save_debug_snapshot(
 
     # Prepare base color/gray frame
     frame = (
-        bgr.copy()
-        if (bgr is not None and getattr(bgr, "size", 0))
-        else cv2.cvtColor(mm, cv2.COLOR_GRAY2BGR)
+        bgr.copy() if (bgr is not None and bgr.size > 0) else cv2.cvtColor(mm, cv2.COLOR_GRAY2BGR)
     )
     h, w = frame.shape[:2]
 
@@ -404,7 +406,7 @@ def save_debug_snapshot(
 
     # 2. Preview 2: Mask Overlay
     p2 = frame.copy()
-    if mask is not None and getattr(mask, "size", 0):
+    if mask is not None and mask.size > 0:
         m = np.asarray(mask, bool)
         if m.shape[:2] != (h, w):
             m = cv2.resize(m.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST) > 0

@@ -50,7 +50,9 @@ class HotkeyManager(QObject):
         user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, 0)
         for vk in _HK_IDS:
             if not user32.RegisterHotKey(None, vk, _HK_MOD_NOREPEAT, vk):
-                logger.warning("[studio] global hotkey F%s registration failed", "6" if vk == _HK_F6 else "7")
+                logger.warning(
+                    "[studio] global hotkey F%s registration failed", "6" if vk == _HK_F6 else "7"
+                )
 
         while True:
             n = user32.GetMessageW(ctypes.byref(msg), None, 0, 0)

@@ -119,8 +119,10 @@ class MapLocator:
         while bounding the per-frame match cost.
         """
         kp, desc = self.sift.detectAndCompute(mmf, None)
+        if desc is not None:
+            desc = np.asarray(desc)
         if desc is None or max_kp <= 0 or len(kp) <= max_kp:
-            return kp, desc
+            return list(kp), desc
         order = np.argsort([k.response for k in kp])[::-1][:max_kp]
         return [kp[int(i)] for i in order], desc[order]
 

@@ -45,6 +45,45 @@ class _StringVarCompat:
         self._val = str(val)
 
 
+def map_cache_status(name: str) -> tuple[str, str]:
+    """Human-readable cache status of `name` and its display color."""
+    if not name:
+        return "No map selected", "#8a8a8a"
+    data_dir = os.path.join(PROJECT_ROOT, "data", "maps")
+    mu_path = os.path.join(data_dir, f"{name}_mu.npy")
+    feat_path = os.path.join(data_dir, f"{name}_feat.npz")
+
+    has_mu = os.path.exists(mu_path)
+    has_feat = os.path.exists(feat_path)
+    missing_previews = [
+        sz
+        for sz in locator.PREVIEW_SIZES
+        if not os.path.exists(os.path.join(data_dir, f"{name}_preview_{sz}.npy"))
+    ]
+
+    png_path = os.path.join(data_dir, f"{name}_map.png")
+    has_png = os.path.exists(png_path)
+
+    if not has_png and not has_mu and not has_feat:
+        return f"Not downloaded: run python tools/download_map.py {name}", "#ff7c7c"
+    if not has_mu and not has_feat:
+        return "Cache not built: mu.npy and SIFT index missing (press Rebuild)", "#ff7c7c"
+    if not has_mu:
+        return "Cache incomplete: mu.npy missing (press Rebuild)", "#ff7c7c"
+    if not has_feat:
+        return "Cache incomplete: SIFT feature index missing (press Rebuild)", "#ffaa00"
+    if missing_previews:
+        return f"Cache incomplete: missing previews {missing_previews} (press Rebuild)", "#ffaa00"
+
+    try:
+        with np.load(feat_path) as idx:
+            sig = str(idx.get("gray_sig", [""])[0])
+            n_tiles = int(idx.get("gw", 0)) * int(idx.get("gh", 0))
+            return f"Ready: mu OK, SIFT index OK ({n_tiles} tiles, {sig}), mipmaps OK", "#8ae234"
+    except Exception:
+        return "Ready: mu OK, SIFT index OK, mipmaps OK", "#8ae234"
+
+
 class RoiTab(QWidget):
     """Tab widget for selecting minimap capture zone, managing SIFT cache, and previewing frames."""
 
@@ -219,7 +258,9 @@ class RoiTab(QWidget):
         hdr_row.addWidget(self.open_snap_btn)
 
         self.save_snap_btn = QPushButton("📷 Save frame", card_prev)
-        self.save_snap_btn.setToolTip("Save diagnostic snapshot: 3 preview frames, map crop, and state log to output/")
+        self.save_snap_btn.setToolTip(
+            "Save diagnostic snapshot: 3 preview frames, map crop, and state log to output/"
+        )
         self.save_snap_btn.clicked.connect(self.save_debug_frame)
         hdr_row.addWidget(self.save_snap_btn)
         prev_layout.addLayout(hdr_row)
@@ -234,7 +275,9 @@ class RoiTab(QWidget):
         self.raw_title_lbl.setStyleSheet("color: #88c0d0; font-weight: bold; font-size: 9pt;")
         self.raw_preview_lbl = QLabel(card_prev)
         self.raw_preview_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.raw_preview_lbl.setStyleSheet("background-color: #1a1a1a; border-radius: 4px; border: 1px solid #2a2a2a;")
+        self.raw_preview_lbl.setStyleSheet(
+            "background-color: #1a1a1a; border-radius: 4px; border: 1px solid #2a2a2a;"
+        )
         self.raw_preview_lbl.setMinimumSize(120, 120)
         p1_box.addWidget(self.raw_title_lbl)
         p1_box.addWidget(self.raw_preview_lbl, stretch=1)
@@ -247,7 +290,9 @@ class RoiTab(QWidget):
         self.mask_title_lbl.setStyleSheet("color: #88c0d0; font-weight: bold; font-size: 9pt;")
         self.mask_preview_lbl = QLabel(card_prev)
         self.mask_preview_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.mask_preview_lbl.setStyleSheet("background-color: #1a1a1a; border-radius: 4px; border: 1px solid #2a2a2a;")
+        self.mask_preview_lbl.setStyleSheet(
+            "background-color: #1a1a1a; border-radius: 4px; border: 1px solid #2a2a2a;"
+        )
         self.mask_preview_lbl.setMinimumSize(120, 120)
         p2_box.addWidget(self.mask_title_lbl)
         p2_box.addWidget(self.mask_preview_lbl, stretch=1)
@@ -260,7 +305,9 @@ class RoiTab(QWidget):
         self.sift_title_lbl.setStyleSheet("color: #88c0d0; font-weight: bold; font-size: 9pt;")
         self.sift_preview_lbl = QLabel(card_prev)
         self.sift_preview_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.sift_preview_lbl.setStyleSheet("background-color: #1a1a1a; border-radius: 4px; border: 1px solid #2a2a2a;")
+        self.sift_preview_lbl.setStyleSheet(
+            "background-color: #1a1a1a; border-radius: 4px; border: 1px solid #2a2a2a;"
+        )
         self.sift_preview_lbl.setMinimumSize(120, 120)
         p3_box.addWidget(self.sift_title_lbl)
         p3_box.addWidget(self.sift_preview_lbl, stretch=1)
@@ -366,7 +413,10 @@ class RoiTab(QWidget):
     def apply_roi(self) -> None:
         """Parse coordinate entries, validate bounds, and update configuration."""
         try:
-            roi = [int(self.roi_vars[n].get() or self.coord_inputs[n].text()) for n in ("x", "y", "w", "h")]
+            roi = [
+                int(self.coord_inputs[n].text().strip() or self.roi_vars[n].get().strip())
+                for n in ("x", "y", "w", "h")
+            ]
         except ValueError:
             self.status_lbl.setText("Error: integers are required")
             self.status_lbl.setStyleSheet("color: #ff3b3b;")
@@ -414,41 +464,7 @@ class RoiTab(QWidget):
         self._cache_status_lbl.setStyleSheet(f"color: {color};")
 
     def _get_map_cache_status(self, name: str) -> tuple[str, str]:
-        if not name:
-            return "No map selected", "#8a8a8a"
-        data_dir = os.path.join(PROJECT_ROOT, "data", "maps")
-        mu_path = os.path.join(data_dir, f"{name}_mu.npy")
-        feat_path = os.path.join(data_dir, f"{name}_feat.npz")
-
-        has_mu = os.path.exists(mu_path)
-        has_feat = os.path.exists(feat_path)
-        missing_previews = [
-            sz
-            for sz in locator.PREVIEW_SIZES
-            if not os.path.exists(os.path.join(data_dir, f"{name}_preview_{sz}.npy"))
-        ]
-
-        png_path = os.path.join(data_dir, f"{name}_map.png")
-        has_png = os.path.exists(png_path)
-
-        if not has_png and not has_mu and not has_feat:
-            return f"Not downloaded: run python tools/download_map.py {name}", "#ff7c7c"
-        if not has_mu and not has_feat:
-            return "Cache not built: mu.npy and SIFT index missing (press Rebuild)", "#ff7c7c"
-        if not has_mu:
-            return "Cache incomplete: mu.npy missing (press Rebuild)", "#ff7c7c"
-        if not has_feat:
-            return "Cache incomplete: SIFT feature index missing (press Rebuild)", "#ffaa00"
-        if missing_previews:
-            return f"Cache incomplete: missing previews {missing_previews} (press Rebuild)", "#ffaa00"
-
-        try:
-            with np.load(feat_path) as idx:
-                sig = str(idx.get("gray_sig", [""])[0])
-                n_tiles = int(idx.get("gw", 0)) * int(idx.get("gh", 0))
-                return f"Ready: mu OK, SIFT index OK ({n_tiles} tiles, {sig}), mipmaps OK", "#8ae234"
-        except Exception:
-            return "Ready: mu OK, SIFT index OK, mipmaps OK", "#8ae234"
+        return map_cache_status(name)
 
     def _cache_rebuild_click(self) -> None:
         name = self._cache_map_sel.currentText().strip()
@@ -480,7 +496,9 @@ class RoiTab(QWidget):
 
     def _cache_rebuild_worker(self, name: str) -> None:
         try:
-            locator.rebuild_map_cache(name, progress_cb=lambda msg: self.sig_cache_progress.emit(msg))
+            locator.rebuild_map_cache(
+                name, progress_cb=lambda msg: self.sig_cache_progress.emit(msg)
+            )
             self.sig_cache_done.emit(name)
         except Exception as exc:
             crashlog.log(f"rebuild map cache {name}", exc)
@@ -495,7 +513,9 @@ class RoiTab(QWidget):
         self.cache_status_refresh()
         if self.on_map_rebuilt is not None:
             self.on_map_rebuilt(name)
-        QMessageBox.information(self, "Map Cache", f'Map cache and SIFT index successfully rebuilt for "{name}"!')
+        QMessageBox.information(
+            self, "Map Cache", f'Map cache and SIFT index successfully rebuilt for "{name}"!'
+        )
 
     def _on_cache_failed(self, err_msg: str) -> None:
         self._cache_rebuild_busy = False
@@ -516,7 +536,11 @@ class RoiTab(QWidget):
         if mm_gray is None:
             return
 
-        frame = mm_bgr.copy() if (mm_bgr is not None and mm_bgr.size) else cv2.cvtColor(mm_gray, cv2.COLOR_GRAY2BGR)
+        frame = (
+            mm_bgr.copy()
+            if (mm_bgr is not None and mm_bgr.size)
+            else cv2.cvtColor(mm_gray, cv2.COLOR_GRAY2BGR)
+        )
         h, w = frame.shape[:2]
         if h < 4 or w < 4:
             return
@@ -531,7 +555,9 @@ class RoiTab(QWidget):
             if s > 0.05:
                 nw = max(1, int(round(iw * s)))
                 nh = max(1, int(round(ih * s)))
-                disp = cv2.resize(img, (nw, nh), interpolation=cv2.INTER_AREA if s < 1.0 else cv2.INTER_NEAREST)
+                disp = cv2.resize(
+                    img, (nw, nh), interpolation=cv2.INTER_AREA if s < 1.0 else cv2.INTER_NEAREST
+                )
             else:
                 disp = img
             pix = to_qpixmap(disp)
@@ -552,7 +578,9 @@ class RoiTab(QWidget):
             overlay = p2.copy()
             overlay[m] = (0, 30, 220)
             cv2.addWeighted(overlay, 0.45, p2, 0.55, 0, p2)
-            cnts, _ = cv2.findContours(m.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            cnts, _ = cv2.findContours(
+                m.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+            )
             cv2.drawContours(p2, cnts, -1, (0, 160, 255), 1)
             pct = (m.sum() / float(m.size)) * 100.0
             self.mask_title_lbl.setText(f"Mask Overlay ({pct:.1f}%)")
@@ -564,7 +592,11 @@ class RoiTab(QWidget):
         p3 = frame.copy()
         kp_pts = diag.get("kp_pts") or []
         inlier_pts = diag.get("inlier_pts") or []
-        kp_draw = kp_pts[:: int(np.ceil(len(kp_pts) / float(MAX_KP_DRAW)))] if len(kp_pts) > MAX_KP_DRAW else kp_pts
+        kp_draw = (
+            kp_pts[:: int(np.ceil(len(kp_pts) / float(MAX_KP_DRAW)))]
+            if len(kp_pts) > MAX_KP_DRAW
+            else kp_pts
+        )
         for pt in kp_draw:
             cv2.circle(p3, (int(round(pt[0])), int(round(pt[1]))), 2, (0, 255, 255), -1)
         for pt in inlier_pts:
@@ -643,4 +675,3 @@ class RoiTab(QWidget):
                 os.startfile(self._last_snapshot_dir)
             except Exception as exc:
                 crashlog.log("open snapshot directory", exc)
-

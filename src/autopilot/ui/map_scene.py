@@ -6,7 +6,7 @@ from collections.abc import Callable
 from typing import Any
 
 import numpy as np
-from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtCore import QPointF, QRect, QRectF, Qt
 from PySide6.QtGui import (
     QBrush,
     QColor,
@@ -69,7 +69,9 @@ class WaypointItem(QGraphicsItem):
         # Waypoint index number
         painter.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
         painter.setPen(QColor("#ffffff"))
-        painter.drawText(QRectF(-10, -10, 20, 20), Qt.AlignmentFlag.AlignCenter, str(self.index + 1))
+        painter.drawText(
+            QRectF(-10, -10, 20, 20), Qt.AlignmentFlag.AlignCenter, str(self.index + 1)
+        )
 
     def mousePressEvent(self, event: Any) -> None:
         if event.button() == Qt.MouseButton.RightButton:
@@ -118,12 +120,14 @@ class VehicleMarkerItem(QGraphicsItem):
         # Red heading pointer arrow
         painter.save()
         painter.rotate(self.heading)
-        arrow = QPolygonF([
-            QPointF(0, -16),
-            QPointF(-5, 4),
-            QPointF(0, 0),
-            QPointF(5, 4),
-        ])
+        arrow = QPolygonF(
+            [
+                QPointF(0, -16),
+                QPointF(-5, 4),
+                QPointF(0, 0),
+                QPointF(5, 4),
+            ]
+        )
         arrow_pen = QPen(QColor("#ffffff"), 1)
         arrow_pen.setCosmetic(True)
         painter.setPen(arrow_pen)
@@ -181,7 +185,7 @@ class MapGraphicsScene(QGraphicsScene):
         self.setSceneRect(0, 0, map_size, map_size)
         self.update()
 
-    def drawBackground(self, painter: QPainter, rect: QRectF) -> None:
+    def drawBackground(self, painter: QPainter, rect: QRectF | QRect) -> None:
         """Render visible slice of map pyramid directly into painter."""
         pyr = self._pyr or ({self._map8.shape[0]: self._map8} if self._map8 is not None else None)
         if not pyr:
@@ -200,7 +204,9 @@ class MapGraphicsScene(QGraphicsScene):
         rh = h / float(self._thumb)
 
         s_thumb = scale * float(self._thumb)
-        bgr = crop_map_viewport(s_thumb, ru, rv, rw, rh, pyr, self._map_size, self._thumb, RGB_CANVAS)
+        bgr = crop_map_viewport(
+            s_thumb, ru, rv, rw, rh, pyr, self._map_size, self._thumb, RGB_CANVAS
+        )
         qimg = to_qimage(bgr)
         if not qimg.isNull():
             painter.drawImage(QRectF(x0, y0, w, h), qimg)
@@ -226,7 +232,9 @@ class MapGraphicsScene(QGraphicsScene):
         clamped_y = max(0.0, min(float(self._map_size), y))
         idx = len(self.route_pts)
         self.route_pts.append([clamped_x, clamped_y])
-        item = WaypointItem(idx, clamped_x, clamped_y, self._on_waypoint_moved, self._on_waypoint_deleted)
+        item = WaypointItem(
+            idx, clamped_x, clamped_y, self._on_waypoint_moved, self._on_waypoint_deleted
+        )
         self.addItem(item)
         self.waypoint_items.append(item)
         self._update_route_line()

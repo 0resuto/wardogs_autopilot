@@ -515,7 +515,7 @@ class LiveLocator(threading.Thread):
             crashlog.log("locator thread exited with an error", exc)
             self.error = str(exc)
 
-    def _fail_payload(self, diag: dict, mm, mask) -> dict[str, Any]:
+    def _fail_payload(self, diag: dict, mm: np.ndarray, mask: np.ndarray | None) -> dict[str, Any]:
         """Structured context of a failed frame for offline replay/triage."""
         loc = self.locator_cfg.model_dump()
         prev = self._prev_xy if self._prev_xy is not None else diag.get("prev")
@@ -542,9 +542,7 @@ class LiveLocator(threading.Thread):
             "search_global": diag.get("search_global"),
             "vote": diag.get("vote"),
             "reject_tally": diag.get("reject_tally"),
-            "mask_px": int(np.asarray(mask).sum())
-            if mask is not None and getattr(mask, "size", 0)
-            else None,
+            "mask_px": int(np.asarray(mask).sum()) if mask is not None and mask.size > 0 else None,
             "thr": {
                 k: loc.get(k)
                 for k in (
@@ -565,7 +563,13 @@ class LiveLocator(threading.Thread):
             },
         }
 
-    def _save_fail_frame(self, diag: dict, mm, bgr=None, mask=None) -> None:
+    def _save_fail_frame(
+        self,
+        diag: dict,
+        mm: np.ndarray,
+        bgr: np.ndarray | None = None,
+        mask: np.ndarray | None = None,
+    ) -> None:
         """Autosave a failed frame (gray + color + context) for post-run analysis."""
         try:
             out_dir = os.path.join(PROJECT_ROOT, "output")
@@ -573,7 +577,7 @@ class LiveLocator(threading.Thread):
             ms = int((time.time() % 1.0) * 1000)
             base = "debug_fail_%s_%03d" % (time.strftime("%Y%m%d_%H%M%S"), ms)
             cv2.imwrite(os.path.join(out_dir, base + ".png"), mm)
-            if bgr is not None and getattr(bgr, "size", 0):
+            if bgr is not None and bgr.size > 0:
                 cv2.imwrite(os.path.join(out_dir, base + "_rgb.png"), bgr)
             payload = self._fail_payload(diag, mm, mask)
             with open(os.path.join(out_dir, base + ".json"), "w", encoding="utf-8") as f:

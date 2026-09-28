@@ -1,8 +1,14 @@
-"""Unit tests for debug log pruning and map cache status."""
+"""Regression tests for debug-artifact pruning and map cache reporting.
+
+The pruning checks call the production code (LiveLocator._prune_fail_files,
+NavTelemetryLogger.open) with temporary directories; the map-cache checks read
+the real data/maps tree and are skipped when the caches are not downloaded.
+"""
 
 import json
 import os
 import sys
+import tempfile
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -11,90 +17,115 @@ if os.path.join(ROOT, "src") not in sys.path:
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from autopilot.ui.app import App
+from autopilot.navigation.telemetry import NavTelemetryLogger  # noqa: E402
+from autopilot.ui.tabs.roi_tab import map_cache_status  # noqa: E402
+from autopilot.vision.tracker import LiveLocator  # noqa: E402
+
+MAP_NAMES = ("zestafona", "bakurani", "ozeti")
 
 
-def load_test_cfg():
-    with open(os.path.join(ROOT, "config.json"), encoding="utf-8") as f:
-        return json.load(f)
+def _map_cache_ready(name: str) -> bool:
+    data_dir = os.path.join(ROOT, "data", "maps")
+    return all(
+        os.path.exists(os.path.join(data_dir, f"{name}_{suffix}"))
+        for suffix in ("mu.npy", "feat.npz", "gray.txt")
+    )
 
 
-class TestPruningAndCache(unittest.TestCase):
-    def test_config_defaults(self):
-        """collect_fail_logs must be False by default in config.json."""
-        cfg = load_test_cfg()
-        self.assertFalse(cfg.get("debug", {}).get("collect_fail_logs", True))
+class TestArtifactPruning(unittest.TestCase):
+    def test_fail_frame_pruning_keeps_newest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for i in range(12):
+                with open(
+                    os.path.join(tmp, f"debug_fail_{i:03d}.png"), "w", encoding="utf-8"
+                ) as fh:
+                    fh.write("x")
 
-    def test_debug_fail_pruning(self):
-        """debug_fail files must be pruned to retain at most 20 files."""
-        out_dir = os.path.join(ROOT, "output")
-        os.makedirs(out_dir, exist_ok=True)
+            LiveLocator._prune_fail_files(tmp, keep=5)
 
-        for i in range(25):
-            p = os.path.join(out_dir, f"debug_fail_unit_{i:03d}.png")
-            with open(p, "w") as f:
-                f.write("test")
+            remaining = sorted(p for p in os.listdir(tmp) if p.startswith("debug_fail_"))
+            self.assertEqual(remaining, [f"debug_fail_{i:03d}.png" for i in range(7, 12)])
 
-        try:
-            files = sorted(p for p in os.listdir(out_dir) if p.startswith("debug_fail_unit_"))
-            while len(files) > 20:
-                os.remove(os.path.join(out_dir, files[0]))
-                files = files[1:]
+    def test_fail_frame_pruning_ignores_other_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for name in ("snapshot_dir", "autopilot.log", "debug_fail_a.png"):
+                path = os.path.join(tmp, name)
+                if name.endswith(".png"):
+                    with open(path, "w", encoding="utf-8") as fh:
+                        fh.write("x")
+                else:
+                    os.makedirs(path, exist_ok=True)
 
-            remaining = [p for p in os.listdir(out_dir) if p.startswith("debug_fail_unit_")]
-            self.assertEqual(len(remaining), 20)
-        finally:
-            for p in [p for p in os.listdir(out_dir) if p.startswith("debug_fail_unit_")]:
-                os.remove(os.path.join(out_dir, p))
+            LiveLocator._prune_fail_files(tmp, keep=0)
 
-    def test_nav_dbg_pruning(self):
-        """nav_dbg logs must be pruned to retain at most 10 session logs."""
-        out_dir = os.path.join(ROOT, "output")
-        os.makedirs(out_dir, exist_ok=True)
+            self.assertFalse(os.path.exists(os.path.join(tmp, "debug_fail_a.png")))
+            self.assertTrue(os.path.isdir(os.path.join(tmp, "snapshot_dir")))
 
-        for i in range(15):
-            p = os.path.join(out_dir, f"nav_dbg_unit_{i:03d}.jsonl")
-            with open(p, "w") as f:
-                f.write("{}\n")
+    def test_nav_dbg_pruning_keeps_latest_sessions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for i in range(15):
+                with open(os.path.join(tmp, f"nav_dbg_{i:03d}.jsonl"), "w", encoding="utf-8") as fh:
+                    fh.write("{}\n")
 
-        try:
-            old_logs = sorted(
-                p
-                for p in os.listdir(out_dir)
-                if p.startswith("nav_dbg_unit_") and p.endswith(".jsonl")
-            )
-            while len(old_logs) >= 10:
-                os.remove(os.path.join(out_dir, old_logs[0]))
-                old_logs.pop(0)
+            logger = NavTelemetryLogger(dbg_target=True)
+            logger.open([], {}, out_dir=tmp)
+            try:
+                files = sorted(
+                    p for p in os.listdir(tmp) if p.startswith("nav_dbg_") and p.endswith(".jsonl")
+                )
+                self.assertEqual(len(files), 10)
+                self.assertNotIn("nav_dbg_000.jsonl", files)
+                assert logger._dbg_name is not None
+                with open(logger._dbg_name, encoding="utf-8") as fh:
+                    header = json.loads(fh.readline())
+                self.assertEqual(header["kind"], "nav-log")
+            finally:
+                logger.close()
 
-            remaining = [p for p in os.listdir(out_dir) if p.startswith("nav_dbg_unit_")]
-            self.assertEqual(len(remaining), 9)
-        finally:
-            for p in [p for p in os.listdir(out_dir) if p.startswith("nav_dbg_unit_")]:
-                os.remove(os.path.join(out_dir, p))
+    def test_nav_dbg_explicit_path_is_not_pruned(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            keep = os.path.join(tmp, "keep.jsonl")
+            with open(keep, "w", encoding="utf-8") as fh:
+                fh.write("old\n")
+            extra = os.path.join(tmp, "nav_dbg_000.jsonl")
+            with open(extra, "w", encoding="utf-8") as fh:
+                fh.write("{}\n")
 
-    def test_map_cache_status_all_maps(self):
-        """All 3 maps ('zestafona', 'bakurani', 'ozeti') must report Ready with valid caches."""
-        cfg = load_test_cfg()
-        app = App(cfg)
-        app.withdraw()
-        try:
-            for name in ["zestafona", "bakurani", "ozeti"]:
-                txt, color = app._get_map_cache_status(name)
-                self.assertEqual(color, "#8ae234", f"Map '{name}' status is not green: {txt}")
-                self.assertIn("Ready", txt, f"Map '{name}' is not Ready: {txt}")
-        finally:
-            app.destroy()
+            logger = NavTelemetryLogger(dbg_target=keep)
+            logger.open([], {})
+            try:
+                self.assertTrue(os.path.exists(extra))
+                with open(keep, encoding="utf-8") as fh:
+                    self.assertEqual(json.loads(fh.readline())["kind"], "nav-log")
+            finally:
+                logger.close()
 
-    def test_map_gray_signatures_exist(self):
-        """All 3 maps must have matching gray signature files to prevent unnecessary rebuilds."""
+
+@unittest.skipUnless(
+    all(_map_cache_ready(name) for name in MAP_NAMES), "map caches are not downloaded"
+)
+class TestMapCacheReporting(unittest.TestCase):
+    def test_all_maps_report_ready(self):
+        for name in MAP_NAMES:
+            txt, color = map_cache_status(name)
+            self.assertEqual(color, "#8ae234", f"Map '{name}' status is not green: {txt}")
+            self.assertIn("Ready", txt, f"Map '{name}' is not Ready: {txt}")
+
+    def test_missing_map_is_reported(self):
+        txt, color = map_cache_status("no_such_map")
+        self.assertEqual(color, "#ff7c7c")
+        self.assertIn("Not downloaded", txt)
+
+    def test_empty_name(self):
+        txt, color = map_cache_status("")
+        self.assertEqual(color, "#8a8a8a")
+        self.assertIn("No map", txt)
+
+    def test_gray_signatures_match_config(self):
         maps_dir = os.path.join(ROOT, "data", "maps")
-        for name in ["zestafona", "bakurani", "ozeti"]:
-            sig_file = os.path.join(maps_dir, f"{name}_gray.txt")
-            self.assertTrue(os.path.exists(sig_file), f"Missing signature: {sig_file}")
-            with open(sig_file, encoding="utf-8") as f:
-                sig = f.read().strip()
-            self.assertEqual(sig, "luma-1.000")
+        for name in MAP_NAMES:
+            with open(os.path.join(maps_dir, f"{name}_gray.txt"), encoding="utf-8") as fh:
+                self.assertEqual(fh.read().strip(), "luma-1.000", name)
 
 
 if __name__ == "__main__":

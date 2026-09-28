@@ -1,18 +1,24 @@
-"""Unit test verifying high-priority reliability fixes:
-1. Atomic config saving.
-2. Thread-safe set_map and _get_index in locator.
+"""Regression tests for reliability-critical components.
+
+Covers, against the real production code:
+1. Atomic config saving (AppConfig.save / atomic_write_json).
+2. Concurrent map switching and index access in the locator store.
 3. ScreenCapture resource closing.
-4. HotkeyManager vk dispatch.
-5. ArduinoKeyDriver serial input drain.
+4. ArduinoKeyDriver serial protocol: input drain and key-mask composition.
+5. HotkeyManager Win32 pump: WM_HOTKEY dispatch, failures, unregistration.
 """
 
+import ctypes
 import json
 import os
 import sys
+import tempfile
 import threading
 import time
 import unittest
-from unittest.mock import MagicMock
+from ctypes import wintypes
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if os.path.join(ROOT, "src") not in sys.path:
@@ -20,83 +26,118 @@ if os.path.join(ROOT, "src") not in sys.path:
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from autopilot.hardware.arduino_keyboard import ArduinoKeyDriver
-from autopilot.hardware.screen_capture import ScreenCapture
-from autopilot.ui.hotkeys import HotkeyManager
-from autopilot.vision import locator
+import autopilot.common.config as config_mod  # noqa: E402
+import autopilot.ui.hotkeys as hotkeys_mod  # noqa: E402
+from autopilot.common.config import AppConfig, CaptureConfig, atomic_write_json  # noqa: E402
+from autopilot.hardware.arduino_keyboard import ArduinoKeyDriver  # noqa: E402
+from autopilot.hardware.screen_capture import ScreenCapture  # noqa: E402
+from autopilot.ui.hotkeys import HotkeyManager  # noqa: E402
+from autopilot.vision import locator  # noqa: E402
+from autopilot.vision import map_store as map_store_mod  # noqa: E402
 
 
-class TestReliabilityFixes(unittest.TestCase):
-    def test_atomic_config_save(self):
-        """Verify atomic config saving writes valid json and cleans up .tmp."""
-        test_path = os.path.join(ROOT, "output", "test_config_atomic.json")
-        tmp_path = test_path + ".tmp"
-        if os.path.exists(test_path):
-            os.remove(test_path)
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
+class TestAtomicConfigSave(unittest.TestCase):
+    def test_save_writes_valid_json_without_leftover_tmp(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = os.path.join(tmp, "config.json")
+            AppConfig(capture=CaptureConfig(fps=25)).save(target)
 
-        data = {"test_key": "test_val", "number": 42}
-        with open(tmp_path, "w", encoding="utf-8") as fh:
-            json.dump(data, fh, indent=2)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp_path, test_path)
+            with open(target, encoding="utf-8") as fh:
+                data = json.load(fh)
+            self.assertEqual(data["capture"]["fps"], 25)
+            self.assertEqual(os.listdir(tmp), ["config.json"])
 
-        self.assertTrue(os.path.exists(test_path))
-        self.assertFalse(os.path.exists(tmp_path))
+    def test_failed_save_keeps_previous_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = os.path.join(tmp, "config.json")
+            AppConfig().save(target)
+            with open(target, encoding="utf-8") as fh:
+                original = fh.read()
 
-        with open(test_path, encoding="utf-8") as fh:
-            loaded = json.load(fh)
-        self.assertEqual(loaded, data)
-        os.remove(test_path)
+            def boom(*_args, **_kwargs):
+                raise OSError("disk full")
 
-    def test_locator_thread_safety(self):
-        """Verify concurrent set_map and _get_index do not crash or corrupt state."""
-        errors = []
+            with (
+                patch.object(config_mod.json, "dump", boom),
+                self.assertRaises(OSError),
+            ):
+                AppConfig(capture=CaptureConfig(fps=30)).save(target)
 
-        def worker_set_map(name):
+            with open(target, encoding="utf-8") as fh:
+                self.assertEqual(fh.read(), original)
+            self.assertEqual(os.listdir(tmp), ["config.json"])
+
+    def test_atomic_write_json_supports_plain_payloads(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = os.path.join(tmp, "payload.json")
+            atomic_write_json(target, {"a": [1, 2, 3]})
+            with open(target, encoding="utf-8") as fh:
+                self.assertEqual(json.load(fh), {"a": [1, 2, 3]})
+
+
+class TestLocatorConcurrency(unittest.TestCase):
+    def test_concurrent_set_map_and_get_index(self):
+        store = locator.get_store()
+        known_maps = {"zestafona", "bakurani"}
+
+        def fake_load_index(name):
+            return SimpleNamespace(
+                name=name,
+                gray_sig=store.gray_sig(),
+                norm=map_store_mod._INDEX_NORM,
+            )
+
+        errors: list[BaseException] = []
+        stop = threading.Event()
+
+        def switcher():
             try:
-                for _ in range(10):
-                    locator.set_map(name)
-                    time.sleep(0.005)
-            except Exception as e:
-                errors.append(e)
+                while not stop.is_set():
+                    locator.set_map("zestafona")
+                    locator.set_map("bakurani")
+            except BaseException as exc:  # noqa: BLE001
+                errors.append(exc)
 
-        def worker_get_index():
+        def reader():
             try:
-                for _ in range(10):
-                    _ = locator._get_index()
-                    time.sleep(0.005)
-            except Exception as e:
-                errors.append(e)
+                while not stop.is_set():
+                    idx = locator._get_index()
+                    if idx is not None and idx.name not in known_maps:
+                        errors.append(AssertionError(f"unexpected index {idx.name!r}"))
+            except BaseException as exc:  # noqa: BLE001
+                errors.append(exc)
 
-        threads = [
-            threading.Thread(target=worker_set_map, args=("zestafona",)),
-            threading.Thread(target=worker_set_map, args=("zestafona",)),
-            threading.Thread(target=worker_get_index),
-            threading.Thread(target=worker_get_index),
-        ]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=5.0)
+        with patch.object(map_store_mod, "load_index", fake_load_index):
+            threads = [
+                threading.Thread(target=switcher),
+                threading.Thread(target=reader),
+                threading.Thread(target=reader),
+            ]
+            for t in threads:
+                t.start()
+            time.sleep(0.2)
+            stop.set()
+            for t in threads:
+                t.join(timeout=5.0)
 
-        # Restore back to zestafona
         locator.set_map("zestafona")
-        self.assertEqual(len(errors), 0, f"Errors in concurrent locator access: {errors}")
+        self.assertEqual(errors, [])
+        self.assertEqual(locator.map_name(), "zestafona")
+        idx = locator._get_index()
+        self.assertIsNotNone(idx)
+        assert idx is not None
+        self.assertEqual(idx.name, "zestafona")
 
+
+class TestHardwareDrivers(unittest.TestCase):
     def test_screen_capture_close(self):
-        """Verify ScreenCapture close() method cleans up mss context."""
         cap = ScreenCapture(0, (0, 0, 100, 100))
         self.assertIsNotNone(cap._sct)
         cap.close()
         self.assertIsNone(cap._sct)
-        # Calling close again should be a safe no-op
         cap.close()
 
-    def test_arduino_key_driver_drain(self):
-        """Verify ArduinoKeyDriver drains input buffer before writing."""
+    def test_arduino_key_driver_drains_input_buffer(self):
         mock_ser = MagicMock()
         mock_ser.in_waiting = 5
 
@@ -109,21 +150,79 @@ class TestReliabilityFixes(unittest.TestCase):
         mock_ser.reset_input_buffer.assert_called_once()
         mock_ser.write.assert_called_with(bytes([0x01]))
 
-    def test_hotkey_manager_vk_dispatch(self):
-        """Verify HotkeyManager passes vk code to the callback."""
-        received = []
-        hm = HotkeyManager.__new__(HotkeyManager)
-        hm._on_hotkey = lambda vk: received.append(vk)
-        hm._queue = MagicMock()
-        hm._queue.get_nowait.side_effect = [0x75, 0x76, Exception("queue empty")]
-        hm._root = MagicMock()
-        hm._poll_ms = 60
+    def test_arduino_key_masks_match_firmware_protocol(self):
+        mock_ser = MagicMock()
+        driver = ArduinoKeyDriver.__new__(ArduinoKeyDriver)
+        driver._ser = mock_ser
+        driver._port = "TEST_PORT"
+        driver._state = {}
 
-        for _ in range(2):
-            vk = hm._queue.get_nowait()
-            hm._on_hotkey(vk)
+        driver.set_state({"W": True, "SPACE": True})
+        mock_ser.write.assert_called_with(bytes([0x11]))
+        self.assertEqual(sorted(driver.held()), ["SPACE", "W"])
+
+        driver.set_state({"A": True})
+        mock_ser.write.assert_called_with(bytes([0x02]))
+        self.assertEqual(driver.held(), ["A"])
+
+        driver.release_all()
+        mock_ser.write.assert_called_with(bytes([0x00]))
+        self.assertEqual(driver.held(), [])
+
+
+class TestHotkeyManager(unittest.TestCase):
+    @staticmethod
+    def _fake_windll(pending, registered, unregistered):
+        def get_message(lpmsg, _hwnd, _lo, _hi):
+            if not pending:
+                return 0
+            message_id, vk = pending.pop(0)
+            msg = ctypes.cast(lpmsg, ctypes.POINTER(wintypes.MSG)).contents
+            msg.message = message_id
+            msg.wParam = vk
+            return 1
+
+        user32 = SimpleNamespace(
+            PeekMessageW=lambda *_args: 0,
+            RegisterHotKey=lambda _hwnd, vk, _mods, _key: registered.append(vk) or 1,
+            UnregisterHotKey=lambda _hwnd, vk: unregistered.append(vk) or 1,
+            GetMessageW=get_message,
+        )
+        kernel32 = SimpleNamespace(GetCurrentThreadId=lambda: 4242)
+        return SimpleNamespace(user32=user32, kernel32=kernel32)
+
+    def test_pump_dispatches_wm_hotkey_and_unregisters(self):
+        received: list[int] = []
+        registered: list[int] = []
+        unregistered: list[int] = []
+        fake = self._fake_windll([(0x0312, 0x75), (0x0312, 0x76)], registered, unregistered)
+
+        manager = HotkeyManager(None, received.append)
+        with patch.object(hotkeys_mod.ctypes, "windll", fake):
+            manager._walk()
 
         self.assertEqual(received, [0x75, 0x76])
+        self.assertEqual(registered, [hotkeys_mod._HK_F6, hotkeys_mod._HK_F7])
+        self.assertEqual(unregistered, [hotkeys_mod._HK_F6, hotkeys_mod._HK_F7])
+
+    def test_registration_failure_is_logged(self):
+        received: list[int] = []
+        registered: list[int] = []
+        unregistered: list[int] = []
+        fake = self._fake_windll([], registered, unregistered)
+        fake.user32.RegisterHotKey = lambda *_args: 0
+
+        manager = HotkeyManager(None, received.append)
+        with (
+            patch.object(hotkeys_mod.ctypes, "windll", fake),
+            self.assertLogs("hotkeys", level="WARNING") as captured,
+        ):
+            manager._walk()
+
+        self.assertEqual(received, [])
+        self.assertTrue(
+            any("registration failed" in line for line in captured.output), captured.output
+        )
 
 
 if __name__ == "__main__":

@@ -1,9 +1,17 @@
-"""Unit tests for input validation, boundary checking, and preset path sanitization."""
+"""Input-validation tests driven through the real Qt widgets.
 
-import json
+Tuning-panel and capture-zone values are typed into the actual QLineEdit
+widgets and applied through the production handlers; config writes are stubbed
+so the repository config.json is never touched. The App smoke test builds the
+full main window with map loading and the locator thread stubbed out.
+"""
+
 import os
 import sys
 import unittest
+from unittest.mock import patch
+
+from PySide6.QtWidgets import QApplication
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if os.path.join(ROOT, "src") not in sys.path:
@@ -11,88 +19,135 @@ if os.path.join(ROOT, "src") not in sys.path:
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from autopilot.ui.app import App
-from autopilot.vision import locator
+from autopilot.common.config import AppConfig  # noqa: E402
+from autopilot.ui.presets import PresetManager  # noqa: E402
+from autopilot.ui.tabs.map_tab import MapTab  # noqa: E402
+from autopilot.ui.tabs.roi_tab import RoiTab  # noqa: E402
+from autopilot.vision import locator  # noqa: E402
+
+_QT_APP = QApplication.instance() or QApplication([])
 
 
-def load_test_cfg():
-    with open(os.path.join(ROOT, "config.json"), encoding="utf-8") as f:
-        return json.load(f)
+class TestTuningValidation(unittest.TestCase):
+    def setUp(self):
+        self.cfg = AppConfig()
+        self.saved = 0
+        self.tab = MapTab(
+            None,
+            self.cfg,
+            save_cfg_fn=self._on_save,
+            loc_thread_supplier=lambda: None,
+            app_cfg=self.cfg,
+        )
+
+    def _on_save(self):
+        self.saved += 1
+
+    def test_typed_values_are_applied_after_validation(self):
+        self.tab.tune_inputs["ratio_local"].setText("1.5")
+        self.tab.apply_tune()
+        self.assertIn("Invalid TRACK ratio", self.tab.tune_status.text())
+        self.assertEqual(self.tab.cfg["locator"]["ratio_local"], 0.85)
+        self.assertEqual(self.saved, 0)
+
+        self.tab.tune_inputs["ratio_local"].setText("0.85")
+        self.tab.tune_inputs["track_radius"].setText("-10")
+        self.tab.apply_tune()
+        self.assertIn("Invalid TRACK rad", self.tab.tune_status.text())
+        self.assertEqual(self.saved, 0)
+
+        self.tab.tune_inputs["track_radius"].setText("900")
+        self.tab.apply_tune()
+        self.assertIn("applied", self.tab.tune_status.text())
+        self.assertEqual(self.tab.cfg["locator"]["track_radius"], 900)
+        self.assertEqual(self.tab.tune_vars["track_radius"].get(), "900")
+        self.assertEqual(self.saved, 1)
+
+    def test_reset_restores_schema_defaults(self):
+        self.tab.tune_inputs["ratio_local"].setText("0.5")
+        self.tab.apply_tune()
+        self.assertEqual(self.tab.cfg["locator"]["ratio_local"], 0.5)
+
+        self.tab.reset_tune()
+        self.assertEqual(self.tab.cfg["locator"]["ratio_local"], 0.85)
+        self.assertEqual(self.tab.tune_inputs["ratio_local"].text(), "0.85")
+        self.assertEqual(self.tab.tune_vars["ratio_local"].get(), "0.85")
 
 
-class TestCodeQuality(unittest.TestCase):
-    def test_tune_range_validation(self):
-        """_apply_tune() must reject out-of-range parameters and accept valid ones."""
-        cfg = load_test_cfg()
-        app = App(cfg)
-        app.withdraw()
-        try:
-            # Test ratio > 1.0
-            app._tune_vars["ratio_local"].set("1.5")
-            app._apply_tune()
-            self.assertIn("Invalid TRACK ratio", app._tune_status.cget("text"))
+class TestRoiValidation(unittest.TestCase):
+    def setUp(self):
+        self.cfg = AppConfig().to_dict()
+        self.saved = 0
+        self.tab = RoiTab(
+            None,
+            self.cfg,
+            save_cfg_fn=self._on_save,
+            screen_cap_supplier=lambda: None,
+            loc_thread_supplier=lambda: None,
+        )
 
-            # Test negative radius
-            app._tune_vars["ratio_local"].set("0.85")
-            app._tune_vars["track_radius"].set("-10")
-            app._apply_tune()
-            self.assertIn("Invalid TRACK rad", app._tune_status.cget("text"))
+    def _on_save(self):
+        self.saved += 1
 
-            # Test valid inputs
-            app._tune_vars["track_radius"].set("900")
-            app._apply_tune()
-            self.assertIn("applied", app._tune_status.cget("text"))
-        finally:
-            app.destroy()
+    def test_typed_coordinates_are_validated_and_applied(self):
+        self.tab.coord_inputs["w"].setText("5")
+        self.tab.apply_roi()
+        self.assertIn("Error:", self.tab.status_lbl.text())
+        self.assertEqual(self.saved, 0)
 
-    def test_roi_bounds_validation(self):
-        """_apply_roi() must reject negative or microscopic dimensions and accept valid ROIs."""
-        cfg = load_test_cfg()
-        app = App(cfg)
-        app.withdraw()
-        try:
-            # Invalid tiny width
-            app._roi_vars["w"].set("5")
-            app._apply_roi()
-            self.assertIn("Error:", app._roi_status.cget("text"))
+        self.tab.coord_inputs["w"].setText("300")
+        self.tab.coord_inputs["x"].setText("-20")
+        self.tab.apply_roi()
+        self.assertIn("Error:", self.tab.status_lbl.text())
+        self.assertEqual(self.saved, 0)
 
-            # Invalid negative x
-            app._roi_vars["w"].set("300")
-            app._roi_vars["x"].set("-20")
-            app._apply_roi()
-            self.assertIn("Error:", app._roi_status.cget("text"))
+        for name, value in (("x", "45"), ("y", "1009"), ("w", "336"), ("h", "277")):
+            self.tab.coord_inputs[name].setText(value)
+        self.tab.apply_roi()
+        self.assertIn("OK:", self.tab.status_lbl.text())
+        self.assertEqual(self.cfg["capture"]["mmap_roi"], [45, 1009, 336, 277])
+        self.assertEqual(self.tab.roi_vars["w"].get(), "336")
+        self.assertEqual(self.saved, 1)
 
-            # Valid ROI
-            app._roi_vars["x"].set("45")
-            app._roi_vars["y"].set("1009")
-            app._roi_vars["w"].set("336")
-            app._roi_vars["h"].set("277")
-            app._apply_roi()
-            self.assertIn("OK:", app._roi_status.cget("text"))
-        finally:
-            app.destroy()
 
-    def test_preset_path_sanitization(self):
-        """_preset_path() must sanitize filenames against directory traversal."""
-        cfg = load_test_cfg()
-        app = App(cfg)
-        app.withdraw()
-        try:
-            p = app._preset_path("../../traversal_attack")
-            expected_dir = os.path.normpath(app._preset_dir())
-            actual_dir = os.path.dirname(os.path.normpath(p))
-            self.assertEqual(actual_dir, expected_dir)
-        finally:
-            app.destroy()
+class TestPresetSanitization(unittest.TestCase):
+    def test_traversal_is_neutralized(self):
+        manager = PresetManager()
+        path = manager.preset_path("../../etc/passwd")
+        self.assertEqual(os.path.dirname(path), str(manager.presets_dir))
+        self.assertEqual(os.path.basename(path), "passwd.json")
 
-    def test_locator_set_map(self):
-        """locator.set_map() must cleanly switch active map without state corruption."""
+
+class TestLocatorMapSwitch(unittest.TestCase):
+    def test_set_map_switches_and_invalidates_caches(self):
         locator.set_map("zestafona")
         self.assertEqual(locator.map_name(), "zestafona")
+
         locator.set_map("bakurani")
         self.assertEqual(locator.map_name(), "bakurani")
+        self.assertIsNone(locator.get_store()._g["mu"])
+
         locator.set_map("zestafona")
         self.assertEqual(locator.map_name(), "zestafona")
+
+
+class TestAppSmoke(unittest.TestCase):
+    def test_app_builds_with_unified_map_tab(self):
+        from autopilot.ui.app import App
+        from autopilot.vision.tracker import LiveLocator
+
+        with (
+            patch.object(LiveLocator, "start", lambda _self: None),
+            patch.object(App, "_load_map_worker", lambda _self, _name: None),
+        ):
+            app = App(AppConfig())
+            try:
+                self.assertEqual(app.nb.count(), 2)
+                self.assertIs(app.routes_tab, app.map_tab)
+                self.assertIsNotNone(app._loc_thread)
+                self.assertIsNotNone(app._hotkeys)
+            finally:
+                app.close()
 
 
 if __name__ == "__main__":

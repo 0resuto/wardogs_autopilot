@@ -116,6 +116,7 @@ class FollowDriver(threading.Thread):
         self._final_stop = False
         self._stop_s_t: float | None = None
         self._final_t0: float | None = None
+        self._kb_closed = False
 
     @property
     def idx(self) -> int:
@@ -175,7 +176,7 @@ class FollowDriver(threading.Thread):
         return self.speed_ctrl.is_braking
 
     def stop(self) -> None:
-        """Signal thread to stop and release all held keyboard keys."""
+        """Signal thread to stop, release all held keys, and close the key driver."""
         self._stop_ev.set()
         try:
             if self.kb is not None:
@@ -183,6 +184,21 @@ class FollowDriver(threading.Thread):
         except OSError:
             pass
         self.telemetry.close()
+        if self.is_alive() and self is not threading.current_thread():
+            self.join(timeout=1.0)
+        self._close_kb()
+
+    def _close_kb(self) -> None:
+        """Close the key driver's serial port exactly once (never raises)."""
+        if self._kb_closed:
+            return
+        self._kb_closed = True
+        close = getattr(self.kb, "close", None)
+        if callable(close):
+            try:
+                close()
+            except OSError:
+                pass
 
     def _px_per_m_now(self) -> float:
         return self.speed_ctrl.px_per_m_now()
@@ -365,7 +381,14 @@ class FollowDriver(threading.Thread):
 
                 # The last waypoint is the active target: brake with SPACE down to a
                 # full stop, then disable the autopilot (the same as pressing F7).
-                if final_seg and not self._final_stop and dist < self._final_brake_dist():
+                # Reaching the arrival radius must trigger the stop as well:
+                # otherwise the waypoint index runs past the last point and the
+                # segment math (calc_xte_and_bearing) indexes out of range.
+                if (
+                    final_seg
+                    and not self._final_stop
+                    and (arrived or dist < self._final_brake_dist())
+                ):
                     self._final_stop = True
                     self._final_t0 = now
                     self._stop_s_t = None
@@ -579,3 +602,4 @@ class FollowDriver(threading.Thread):
                     self.kb.release_all()
             except OSError:
                 pass
+            self._close_kb()

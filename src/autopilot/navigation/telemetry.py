@@ -30,7 +30,12 @@ class NavTelemetryLogger:
         """True if debugging/logging is enabled."""
         return bool(self.dbg)
 
-    def open(self, route_pts: list[tuple[float, float]], params: dict[str, Any]) -> None:
+    def open(
+        self,
+        route_pts: list[tuple[float, float]],
+        params: dict[str, Any],
+        out_dir: str = "output",
+    ) -> None:
         """Open the JSONL log file and write metadata header."""
         if self._dbg_f is not None or not self.dbg:
             return
@@ -41,7 +46,6 @@ class NavTelemetryLogger:
             if dd:
                 os.makedirs(dd, exist_ok=True)
         else:
-            out_dir = "output"
             os.makedirs(out_dir, exist_ok=True)
             try:
                 old_logs = sorted(
@@ -69,6 +73,7 @@ class NavTelemetryLogger:
                 params=params,
             )
             self._dbg_f.write(json.dumps(meta, ensure_ascii=False) + "\n")
+            self._dbg_f.flush()
         except OSError as exc:
             logger.warning("Failed to open nav debug log %s: %s", path, exc)
             self._dbg_f = None

@@ -7,6 +7,7 @@ Maintains full backward compatibility with legacy dictionary access via to_dict(
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -179,7 +180,30 @@ class AppConfig(BaseModel):
         return cfg
 
     def save(self, path: str | Path | None = None) -> None:
-        """Save configuration back to JSON file."""
+        """Atomically save configuration back to JSON file.
+
+        Writes to a sibling .tmp file, fsyncs it, then replaces the target with
+        os.replace(), so a crash or full disk never leaves a truncated config.
+        """
         target_path = Path(path or self.cfg_path)
-        with open(target_path, "w", encoding="utf-8") as f:
-            json.dump(self.to_dict(), f, indent=2)
+        atomic_write_json(target_path, self.to_dict())
+
+
+def atomic_write_json(path: str | Path, payload: Any) -> None:
+    """Write JSON to `path` via a temp file + os.replace so readers see a
+    complete document even if the process dies mid-write."""
+    target_path = Path(path)
+    tmp_path = target_path.with_name(target_path.name + ".tmp")
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, target_path)
+    except Exception:
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except OSError:
+            pass
+        raise

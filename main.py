@@ -69,12 +69,16 @@ def main() -> None:
             from PySide6.QtWidgets import QApplication, QMessageBox
 
             _app = QApplication.instance() or QApplication(sys.argv)
-            QMessageBox.critical(None, "WARDOGS Studio", "Application error.\nDetails: output/crash.log")
+            QMessageBox.critical(
+                None, "WARDOGS Studio", "Application error.\nDetails: output/crash.log"
+            )
         except Exception:
             try:
                 from tkinter import messagebox
 
-                messagebox.showerror("WARDOGS Studio", "Application error.\nDetails: output/crash.log")
+                messagebox.showerror(
+                    "WARDOGS Studio", "Application error.\nDetails: output/crash.log"
+                )
             except Exception:
                 pass
 
