@@ -17,6 +17,7 @@ from ..common.config import NavigatorConfig
 from ..common.log import get_logger
 from .path_tracker import PathTracker
 from .speed_controller import SpeedController
+from .speed_profile import G, RouteSpeedPlanner
 from .steering_controller import SteeringController, wrap180
 from .telemetry import NavTelemetryLogger
 from .vehicle_model import VehicleModel
@@ -114,6 +115,17 @@ class FollowDriver(threading.Thread):
                 )
 
         # Sub-controllers
+        self.planner = (
+            RouteSpeedPlanner(
+                lat_accel_mps2=self.nav_cfg.corner_lat_g * G,
+                brake_decel_mps2=self.nav_cfg.brake_g * G,
+                min_speed_kmh=self.nav_cfg.corner_min_kmh,
+                lookahead_m=self.nav_cfg.plan_ahead_m,
+                cut_m=self.nav_cfg.corner_cut_m,
+            )
+            if self.nav_cfg.speed_profile
+            else None
+        )
         self.path = PathTracker(self.pts, arrive_r=self.arrive_r, xte_m=self.xte_m)
         self.speed_ctrl = SpeedController(speed_cap_kmh=self.speed_cap_kmh, brake_d=self.brake_d)
         self.steer_ctrl = SteeringController(
@@ -322,6 +334,15 @@ class FollowDriver(threading.Thread):
             return None
         return self.vehicle_model.yaw_rate_max_deg_s(speed_kmh)
 
+    def _route_target_kmh(self, mp: tuple[float, float]) -> float | None:
+        """Planned corner/braking speed limit ahead (None when disabled)."""
+        if self.planner is None:
+            return None
+        px_per_m = self._px_per_m_now()
+        if px_per_m <= 0:
+            return None
+        return self.planner.target_speed_kmh(mp, self.pts, self.path.idx, px_per_m)
+
     def _stop_state(self, now: float) -> str:
         """Final-waypoint stop state: 'stopped', 'braking' or 'timeout'.
 
@@ -384,6 +405,11 @@ class FollowDriver(threading.Thread):
             stop_hold=self.stop_hold,
             stop_timeout=self.stop_timeout,
             vehicle=self.vehicle_model.vehicle_id if self.vehicle_model else None,
+            speed_profile=self.nav_cfg.speed_profile,
+            corner_lat_g=self.nav_cfg.corner_lat_g,
+            brake_g=self.nav_cfg.brake_g,
+            corner_min_kmh=self.nav_cfg.corner_min_kmh,
+            plan_ahead_m=self.nav_cfg.plan_ahead_m,
         )
 
     def run(self) -> None:
@@ -579,6 +605,9 @@ class FollowDriver(threading.Thread):
                 # Road geometry angles
                 turn_angle, road_turn = self.path.calc_road_turn(heading)
                 tgt_spd = self.speed_ctrl.calc_target_speed(road_turn, xte, xte_lim)
+                plan_kmh = self._route_target_kmh(mp)
+                if plan_kmh is not None:
+                    tgt_spd = min(tgt_spd, self.speed_ctrl.from_kmh(plan_kmh))
 
                 # Steering state machine (speed-dependent yaw authority)
                 yaw_max = self._yaw_rate_max(self._speed_kmh_estimate(now))
@@ -678,6 +707,7 @@ class FollowDriver(threading.Thread):
                             good=bool(it.get("good", False)) if it else False,
                             th_raw=round(float(pose["th"]), 2) if pose else None,
                             yaw_max=round(yaw_max, 1) if yaw_max else None,
+                            plan_kmh=round(plan_kmh, 1) if plan_kmh is not None else None,
                             runaway=self.speed_ctrl.runaway,
                             ang=round(self.steer_ctrl.ang, 2),
                             steer=self.steer_ctrl.steer,

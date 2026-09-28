@@ -56,6 +56,11 @@ class SpeedController:
         pm = self.px_per_m_now()
         return d_px / pm if pm > 0 else 0.0
 
+    def from_kmh(self, kmh: float) -> float:
+        """Convert km/h to map pixels per second with the current scale."""
+        pm = self.px_per_m_now()
+        return kmh / 3.6 * pm if pm > 0 else 0.0
+
     def update_scale(self, mv: float) -> None:
         """Refine speed cap and pixel-per-meter scale on the fly from pose motion."""
         if mv > self._vmax_px:

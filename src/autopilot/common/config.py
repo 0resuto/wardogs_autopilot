@@ -143,6 +143,39 @@ class NavigatorConfig(BaseModel):
         description="Safety timeout for continuous steering (s)",
     )
     speed_cap_kmh: float = Field(default=79.0, ge=1.0, description="Maximum driving speed in km/h")
+    speed_profile: bool = Field(
+        default=True,
+        description="Plan corner/braking speed limits from the route geometry",
+    )
+    corner_lat_g: float = Field(
+        default=0.35,
+        ge=0.05,
+        le=1.5,
+        description="Lateral acceleration budget for corners (g)",
+    )
+    brake_g: float = Field(
+        default=0.45,
+        ge=0.05,
+        le=2.0,
+        description="Braking deceleration budget (g)",
+    )
+    corner_min_kmh: float = Field(
+        default=12.0,
+        ge=0.0,
+        description="Minimum planned speed at the sharpest corner (km/h)",
+    )
+    plan_ahead_m: float = Field(
+        default=200.0,
+        ge=20.0,
+        le=1000.0,
+        description="Speed planning horizon along the route (meters)",
+    )
+    corner_cut_m: float = Field(
+        default=15.0,
+        ge=4.0,
+        le=60.0,
+        description="Distance over which a sharp vertex is rounded (meters)",
+    )
     xte_m: float = Field(default=4.0, ge=0.0, description="Cross-track error limit (meters)")
     poll: float = Field(default=0.033, ge=0.001, description="Navigation tick rate in seconds")
     brake_d: float = Field(default=260.0, ge=1.0, description="Braking distance threshold (px)")

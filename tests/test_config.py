@@ -80,6 +80,22 @@ def test_vehicle_profile_default():
     assert NavigatorConfig(vehicle_profile="").vehicle_profile == ""
 
 
+def test_speed_profile_defaults():
+    """Route speed planning defaults are conservative and configurable."""
+    from autopilot.common.config import NavigatorConfig
+
+    cfg = NavigatorConfig()
+    assert cfg.speed_profile is True
+    assert cfg.corner_lat_g == 0.35
+    assert cfg.brake_g == 0.45
+    assert cfg.corner_min_kmh == 12.0
+
+    tuned = NavigatorConfig(corner_lat_g=0.5, brake_g=0.6, speed_profile=False)
+    assert tuned.corner_lat_g == 0.5
+    assert tuned.brake_g == 0.6
+    assert tuned.speed_profile is False
+
+
 def test_invalid_locator_ratio():
     """Verify ratio bounds on LocatorConfig."""
     with pytest.raises(ValidationError):

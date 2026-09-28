@@ -272,6 +272,35 @@ class TestStopDecision(unittest.TestCase):
         self.assertEqual(driver._stop_state(1.5), "timeout")
 
 
+class TestSpeedPlanning(unittest.TestCase):
+    @staticmethod
+    def _driver(**nav_kwargs) -> FollowDriver:
+        nav = NavigatorConfig(**nav_kwargs)
+        return FollowDriver(
+            loc=None,
+            pts=[(0.0, 0.0), (200.0, 0.0), (200.0, 200.0)],
+            nav_cfg=nav,
+            kb=None,
+        )
+
+    def test_planner_limits_speed_on_sharp_corner(self):
+        driver = self._driver()
+        assert driver.planner is not None
+        driver.path.idx = 1
+
+        plan = driver._route_target_kmh((190.0, 0.0))
+
+        assert plan is not None
+        self.assertGreater(plan, driver.nav_cfg.corner_min_kmh)
+        self.assertLess(plan, 60.0)
+
+    def test_planner_can_be_disabled(self):
+        driver = self._driver(speed_profile=False)
+
+        self.assertIsNone(driver.planner)
+        self.assertIsNone(driver._route_target_kmh((0.0, 0.0)))
+
+
 class TestVehicleAuthority(unittest.TestCase):
     @staticmethod
     def _driver(**nav_kwargs) -> FollowDriver:
