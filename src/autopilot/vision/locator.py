@@ -198,9 +198,13 @@ class MapLocator:
         best: dict[str, Any] | None = None
         best_len: int | None = None
         tried = []
+        budget_hit = False
+        n_tried = 0
         for _li, pts, d2 in cands:
             if _over(start_t, budget):
+                budget_hit = True
                 break
+            n_tried += 1
             if d2 is None or len(d2) < 2:
                 continue
             kn = self.bf.knnMatch(d1, d2, k=2)
@@ -246,8 +250,14 @@ class MapLocator:
         diag["kp_pts"] = [kp.pt for kp in kp1]
         if best is None:
             diag["inlier_pts"] = []
-            diag["reject"] = "index_no_match"
-            diag["detail"] = f"index ({scope}) search found no pose (tried={tried or '-'})"
+            if budget_hit:
+                diag["reject"] = "budget_timeout"
+                diag["detail"] = (
+                    f"frame budget exhausted during {scope} search (candidates tried={n_tried})"
+                )
+            else:
+                diag["reject"] = "index_no_match"
+                diag["detail"] = f"index ({scope}) search found no pose (tried={tried or '-'})"
             return None, diag
 
         diag.update(
