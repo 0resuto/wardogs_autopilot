@@ -13,6 +13,7 @@ import unittest
 from typing import Any
 from unittest.mock import patch
 
+from PySide6.QtCore import QRect
 from PySide6.QtWidgets import QApplication
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -140,6 +141,164 @@ class TestTuningValidation(unittest.TestCase):
         self.assertIn("Invalid VEH max km/h", self.tab.tune_status.text())
 
 
+class TestRouteEditor(unittest.TestCase):
+    def setUp(self):
+        self.cfg = AppConfig()
+        self.tab = MapTab(
+            None,
+            self.cfg,
+            save_cfg_fn=lambda: None,
+            loc_thread_supplier=lambda: None,
+            app_cfg=self.cfg,
+        )
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tab.preset_mgr = PresetManager(self._tmp.name, subdir="presets")
+        self.tab.p_sel.clear()
+
+    def test_apply_saves_to_the_selected_preset(self):
+        mgr = self.tab.preset_mgr
+        mgr.save_preset("r1", [])
+        self.tab.p_sel.addItem("r1")
+        self.tab.route_pts = [[1.0, 1.0]]
+
+        self.tab._edit_btn.click()
+        self.tab.route_pts = [[1.0, 1.0], [3.0, 3.0]]
+        self.tab._apply_btn.click()
+
+        self.assertEqual(mgr.load_preset("r1"), [[1.0, 1.0], [3.0, 3.0]])
+
+    def test_route_controls_lock_while_driving(self):
+        self.assertTrue(self.tab.p_sel.isEnabled())
+
+        self.tab.driver = object()  # type: ignore[assignment]
+        self.tab._set_follow_state(True)
+
+        self.assertFalse(self.tab.p_sel.isEnabled())
+        self.assertFalse(self.tab._edit_btn.isEnabled())
+
+        self.tab.driver = None
+        self.tab._set_follow_state(False)
+
+        self.assertTrue(self.tab.p_sel.isEnabled())
+        self.assertTrue(self.tab._edit_btn.isEnabled())
+
+    def test_follow_refuses_while_editing(self):
+        self.tab._edit_btn.click()
+
+        self.tab.follow_toggle(silent=True)
+
+        self.assertIsNone(self.tab.driver)
+        self.assertIn("Finish editing", self.tab.routes_status.text())
+
+    def test_reverse_is_refused_while_editing(self):
+        self.tab.route_pts = [[0.0, 0.0], [1.0, 0.0]]
+        self.tab._edit_btn.click()
+
+        self.tab.routes_invert()
+
+        self.assertEqual(self.tab.route_pts, [[0.0, 0.0], [1.0, 0.0]])
+        self.assertIn("Finish editing", self.tab.routes_status.text())
+
+    def test_editing_is_gated_by_the_edit_button(self):
+        self.assertFalse(self.tab.map_widget.view._route_edit_mode)
+        self.assertFalse(self.tab._edit_btn.isHidden())
+        self.assertTrue(self.tab._apply_btn.isHidden())
+
+        self.tab._edit_btn.click()
+
+        self.assertTrue(self.tab.map_widget.view._route_edit_mode)
+        self.assertTrue(self.tab._edit_btn.isHidden())
+        self.assertFalse(self.tab._apply_btn.isHidden())
+        self.assertFalse(self.tab._cancel_btn.isHidden())
+        self.assertFalse(self.tab.p_sel.isEnabled())
+
+        self.tab._apply_btn.click()
+
+        self.assertFalse(self.tab.map_widget.view._route_edit_mode)
+        self.assertFalse(self.tab._edit_btn.isHidden())
+        self.assertTrue(self.tab._apply_btn.isHidden())
+        self.assertTrue(self.tab.p_sel.isEnabled())
+
+    def test_cancel_restores_the_route(self):
+        self.tab.route_pts = [[10.0, 10.0], [20.0, 20.0]]
+
+        self.tab._edit_btn.click()
+        self.tab.route_pts = [[50.0, 50.0]]
+        self.tab._cancel_btn.click()
+
+        self.assertEqual(self.tab.route_pts, [[10.0, 10.0], [20.0, 20.0]])
+
+    def test_apply_keeps_the_edited_route(self):
+        self.tab.route_pts = [[10.0, 10.0]]
+
+        self.tab._edit_btn.click()
+        self.tab.route_pts = [[10.0, 10.0], [30.0, 30.0]]
+        self.tab._apply_btn.click()
+
+        self.assertEqual(self.tab.route_pts, [[10.0, 10.0], [30.0, 30.0]])
+
+
+class TestPresetStartup(unittest.TestCase):
+    def test_reload_selects_and_loads_the_last_preset(self):
+        cfg = AppConfig()
+        tab = MapTab(
+            None,
+            cfg,
+            save_cfg_fn=lambda: None,
+            loc_thread_supplier=lambda: None,
+            app_cfg=cfg,
+        )
+        names = tab.preset_mgr.list_presets()
+        if not names:
+            self.skipTest("no presets in the repository")
+        name = names[-1]
+
+        cfg.navigator.last_preset = name
+        tab.route_pts = []
+        tab.preset_reload()
+
+        self.assertEqual(tab.p_sel.currentText(), name)
+        self.assertEqual(tab.route_pts, tab.preset_mgr.load_preset(name))
+
+    def test_save_as_writes_the_route_under_the_asked_name(self):
+        cfg = AppConfig()
+        tab = MapTab(
+            None,
+            cfg,
+            save_cfg_fn=lambda: None,
+            loc_thread_supplier=lambda: None,
+            app_cfg=cfg,
+        )
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        mgr = tab.preset_mgr = PresetManager(tmp.name, subdir="presets")
+        tab.p_sel.clear()
+        tab.route_pts = [[5.0, 6.0], [7.0, 8.0]]
+
+        with patch.object(tab, "_ask_preset_name", return_value="route_x"):
+            tab.preset_save()
+
+        self.assertEqual(mgr.load_preset("route_x"), [[5.0, 6.0], [7.0, 8.0]])
+
+    def test_invert_refuses_while_driving(self):
+        cfg = AppConfig()
+        tab = MapTab(
+            None,
+            cfg,
+            save_cfg_fn=lambda: None,
+            loc_thread_supplier=lambda: None,
+            app_cfg=cfg,
+        )
+        tab.route_pts = [[0.0, 0.0], [10.0, 0.0]]
+        tab.driver = object()  # type: ignore[assignment]
+
+        tab.routes_invert(silent=True)
+
+        self.assertEqual(tab.route_pts, [[0.0, 0.0], [10.0, 0.0]])
+        self.assertIn("Stop the autopilot", tab.routes_status.text())
+
+
 class TestRoiValidation(unittest.TestCase):
     def setUp(self):
         self.cfg = AppConfig().to_dict()
@@ -260,6 +419,7 @@ class TestAppSmoke(unittest.TestCase):
         with (
             patch.object(LiveLocator, "start", lambda _self: None),
             patch.object(App, "_load_map_worker", lambda _self, _name: None),
+            patch.object(App, "_save_cfg", lambda _self: None),
         ):
             app = App(AppConfig())
             try:
@@ -267,8 +427,46 @@ class TestAppSmoke(unittest.TestCase):
                 self.assertIs(app.routes_tab, app.map_tab)
                 self.assertIsNotNone(app._loc_thread)
                 self.assertIsNotNone(app._hotkeys)
+                self.assertEqual(app.nb.currentIndex(), 1)
+                self.assertEqual(app.nb.tabText(1), "Map")
             finally:
                 app.close()
+
+    def test_app_remembers_the_window_geometry(self):
+        from autopilot.ui.app import App
+        from autopilot.vision.tracker import LiveLocator
+
+        with tempfile.TemporaryDirectory() as tmp:
+            target = os.path.join(tmp, "ui.json")
+            AppConfig().save(target)
+
+            with (
+                patch.object(LiveLocator, "start", lambda _self: None),
+                patch.object(App, "_load_map_worker", lambda _self, _name: None),
+            ):
+                app = App(AppConfig.load(target))
+                app.setGeometry(123, 45, 900, 700)
+                app.close()
+
+            ui = AppConfig.load(target).ui
+            self.assertEqual(
+                (ui.window_x, ui.window_y, ui.window_w, ui.window_h),
+                (123, 45, 900, 700),
+            )
+
+    def test_offscreen_geometry_is_clamped_to_a_screen(self):
+        from autopilot.ui.app import clamp_rect_to_screens
+
+        app = QApplication.instance()
+        assert isinstance(app, QApplication)
+        rect = QRect(-30000, -30000, 900, 700)
+
+        clamped = clamp_rect_to_screens(rect, app)
+
+        screen = app.primaryScreen().availableGeometry()
+        self.assertTrue(screen.intersects(clamped))
+        self.assertGreaterEqual(clamped.width(), 400)
+        self.assertGreaterEqual(clamped.height(), 300)
 
     def test_app_saves_to_the_loaded_config_path(self):
         from autopilot.ui.app import App

@@ -20,9 +20,14 @@ _WM_QUIT = 0x0012
 _HK_MOD_NOREPEAT = 0x4000
 _HK_F6 = 0x75
 _HK_F7 = 0x76
-_HK_IDS = (_HK_F6, _HK_F7)
+_HK_F8 = 0x77
+_HK_IDS = (_HK_F6, _HK_F7, _HK_F8)
 _HK_RETRY_MS = 3000
 _HK_TIMER_ID = 1
+
+
+def _hk_label(vk: int) -> str:
+    return {_HK_F6: "6", _HK_F7: "7", _HK_F8: "8"}.get(vk, str(vk))
 
 
 class HotkeyManager(QObject):
@@ -90,13 +95,13 @@ class HotkeyManager(QObject):
                 continue
             if user32.RegisterHotKey(None, vk, _HK_MOD_NOREPEAT, vk):
                 self._registered.add(vk)
-                logger.info("[studio] global hotkey F%s registered", "6" if vk == _HK_F6 else "7")
+                logger.info("[studio] global hotkey F%s registered", _hk_label(vk))
             elif vk not in self._failed:
                 self._failed.add(vk)
                 logger.warning(
                     "[studio] global hotkey F%s registration failed "
                     "(possibly another studio instance) - retrying",
-                    "6" if vk == _HK_F6 else "7",
+                    _hk_label(vk),
                 )
         all_ok = len(self._registered) == len(_HK_IDS)
         if all_ok != self._all_ok:

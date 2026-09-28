@@ -233,15 +233,23 @@ class TestHotkeyManager(unittest.TestCase):
         received: list[int] = []
         registered: list[int] = []
         unregistered: list[int] = []
-        fake = self._fake_windll([(0x0312, 0x75), (0x0312, 0x76)], registered, unregistered)
+        fake = self._fake_windll(
+            [
+                (0x0312, hotkeys_mod._HK_F6),
+                (0x0312, hotkeys_mod._HK_F7),
+                (0x0312, hotkeys_mod._HK_F8),
+            ],
+            registered,
+            unregistered,
+        )
 
         manager = HotkeyManager(None, received.append)
         with patch.object(hotkeys_mod.ctypes, "windll", fake):
             manager._walk()
 
-        self.assertEqual(received, [0x75, 0x76])
-        self.assertEqual(registered, [hotkeys_mod._HK_F6, hotkeys_mod._HK_F7])
-        self.assertEqual(unregistered, [hotkeys_mod._HK_F6, hotkeys_mod._HK_F7])
+        self.assertEqual(received, [hotkeys_mod._HK_F6, hotkeys_mod._HK_F7, hotkeys_mod._HK_F8])
+        self.assertEqual(registered, [hotkeys_mod._HK_F6, hotkeys_mod._HK_F7, hotkeys_mod._HK_F8])
+        self.assertEqual(unregistered, [hotkeys_mod._HK_F6, hotkeys_mod._HK_F7, hotkeys_mod._HK_F8])
 
     def test_registration_failure_is_logged(self):
         received: list[int] = []
@@ -285,7 +293,9 @@ class TestHotkeyManager(unittest.TestCase):
         with patch.object(hotkeys_mod.ctypes, "windll", fake):
             manager._walk()
 
-        self.assertEqual(registered, [hotkeys_mod._HK_F6, hotkeys_mod._HK_F7])
+        self.assertEqual(
+            sorted(registered), sorted([hotkeys_mod._HK_F6, hotkeys_mod._HK_F7, hotkeys_mod._HK_F8])
+        )
         self.assertIn(True, states)
 
 

@@ -277,6 +277,18 @@ class DebugConfig(BaseModel):
     collect_fail_logs: bool = Field(default=False)
 
 
+class UiConfig(BaseModel):
+    """Window geometry remembered between sessions (multi-monitor clamped)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    window_x: int = Field(default=-1)
+    window_y: int = Field(default=-1)
+    window_w: int = Field(default=0, ge=0)
+    window_h: int = Field(default=0, ge=0)
+    window_max: bool = Field(default=False)
+
+
 class AppConfig(BaseModel):
     """Root configuration for WARDOGS autopilot."""
 
@@ -287,6 +299,7 @@ class AppConfig(BaseModel):
     map: MapConfig = Field(default_factory=MapConfig)
     navigator: NavigatorConfig = Field(default_factory=NavigatorConfig)
     debug: DebugConfig = Field(default_factory=DebugConfig)
+    ui: UiConfig = Field(default_factory=UiConfig)
     cfg_path: str = Field(default="config.json", alias="_cfg_path")
 
     def to_dict(self) -> dict[str, Any]:

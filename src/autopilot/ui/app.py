@@ -11,7 +11,7 @@ import threading
 from typing import Any
 
 import numpy as np
-from PySide6.QtCore import QTimer, Signal
+from PySide6.QtCore import QRect, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -30,18 +30,47 @@ from ..common.config import (
     LocatorConfig,
     MapConfig,
     NavigatorConfig,
+    UiConfig,
     atomic_write_json,
 )
 from ..common.log import get_logger
 from ..hardware.screen_capture import ScreenCapture
 from ..vision import locator
 from ..vision.tracker import LiveLocator
-from .hotkeys import _HK_F6, _HK_F7, HotkeyManager
+from .hotkeys import _HK_F6, _HK_F7, _HK_F8, HotkeyManager
 from .tabs.map_tab import MapTab
 from .tabs.roi_tab import RoiTab
 from .theme import apply_theme
 
 logger = get_logger("ui.app")
+
+_HOTKEY_HINT = "[F6] Follow   [F7] E-Stop   [F8] Reverse"
+
+
+def clamp_rect_to_screens(rect: QRect, app: QApplication) -> QRect:
+    """Keep a remembered window rect reachable on the current monitors.
+
+    A window restored to a monitor that is gone would be invisible; if the
+    saved rect (including its title bar) is not on any screen, it is centered
+    on the primary screen at a clamped size.
+    """
+    screens = app.screens()
+    for screen in screens:
+        wa = screen.availableGeometry()
+        visible = wa.intersected(rect)
+        if visible.width() >= 150 and visible.height() >= 80 and visible.top() <= rect.top() + 40:
+            return rect
+    if not screens:
+        return rect
+    wa = app.primaryScreen().availableGeometry()
+    w = max(400, min(rect.width(), wa.width()))
+    h = max(300, min(rect.height(), wa.height()))
+    return QRect(
+        wa.x() + (wa.width() - w) // 2,
+        wa.y() + (wa.height() - h) // 2,
+        w,
+        h,
+    )
 
 
 class App(QMainWindow):
@@ -51,10 +80,11 @@ class App(QMainWindow):
     sig_map_loaded = Signal(str, object, object, int)
 
     def __init__(self, cfg: dict[str, Any] | AppConfig) -> None:
-        self._app_instance = QApplication.instance()
-        if not isinstance(self._app_instance, QApplication):
-            self._app_instance = QApplication(sys.argv)
-        apply_theme(self._app_instance, dark=True)
+        app = QApplication.instance()
+        if not isinstance(app, QApplication):
+            app = QApplication(sys.argv)
+        self._app_instance = app
+        apply_theme(app, dark=True)
 
         super().__init__()
         if isinstance(cfg, AppConfig):
@@ -68,7 +98,7 @@ class App(QMainWindow):
                 self.app_cfg = AppConfig()
 
         self.setWindowTitle("WARDOGS minimap studio")
-        self.resize(1100, 850)
+        self._restore_window_geometry()
 
         self._map_store = locator.get_store()
         self._map_store.set_config_path(self.app_cfg.cfg_path)
@@ -103,6 +133,28 @@ class App(QMainWindow):
         self._poll_timer = QTimer(self)
         self._poll_timer.timeout.connect(self._poll)
         self._poll_timer.start(50)
+
+    def _restore_window_geometry(self) -> None:
+        """Restore the last session's window rect, clamped to current screens."""
+        ui = self.app_cfg.ui
+        if ui.window_w > 0 and ui.window_h > 0:
+            rect = clamp_rect_to_screens(
+                QRect(ui.window_x, ui.window_y, ui.window_w, ui.window_h),
+                self._app_instance,
+            )
+            self.setGeometry(rect)
+            if ui.window_max:
+                self.setWindowState(self.windowState() | Qt.WindowState.WindowMaximized)
+            return
+        self.resize(1100, 850)
+
+    def _remember_window_geometry(self) -> None:
+        """Persist the window rect (normal geometry when maximized)."""
+        ui = self.app_cfg.ui
+        rect = self.normalGeometry() if self.isMaximized() else self.geometry()
+        ui.window_x, ui.window_y = rect.x(), rect.y()
+        ui.window_w, ui.window_h = rect.width(), rect.height()
+        ui.window_max = self.isMaximized()
 
     def _build_ui(self) -> None:
         central = QWidget(self)
@@ -149,7 +201,7 @@ class App(QMainWindow):
         self._status_nav.setStyleSheet("color: #808080; font-weight: bold; font-size: 9pt;")
         tb_layout.addWidget(self._status_nav)
 
-        self._hotkey_lbl = QLabel("[F6] Follow   [F7] E-Stop", toolbar)
+        self._hotkey_lbl = QLabel(_HOTKEY_HINT, toolbar)
         self._hotkey_lbl.setStyleSheet("color: #a0a0a0; font-size: 8pt;")
         tb_layout.addWidget(self._hotkey_lbl)
         self._hotkeys.registration_changed.connect(self._on_hotkey_state)
@@ -184,6 +236,7 @@ class App(QMainWindow):
         )
         self.routes_tab = self.map_tab  # Backward-compatibility alias
         self.nb.addTab(self.map_tab, "Map")
+        self.nb.setCurrentIndex(1)
 
     def _cfg_map_name(self) -> str:
         m = self.cfg.get("map")
@@ -302,10 +355,10 @@ class App(QMainWindow):
 
     def _on_hotkey_state(self, ready: bool) -> None:
         if ready:
-            self._hotkey_lbl.setText("[F6] Follow   [F7] E-Stop")
+            self._hotkey_lbl.setText(_HOTKEY_HINT)
             self._hotkey_lbl.setStyleSheet("color: #a0a0a0; font-size: 8pt;")
         else:
-            self._hotkey_lbl.setText("⚠ hotkeys F6/F7 busy - retrying")
+            self._hotkey_lbl.setText("⚠ hotkeys F6/F7/F8 busy - retrying")
             self._hotkey_lbl.setStyleSheet("color: #ff7c7c; font-size: 8pt;")
 
     def _on_global_hotkey(self, key_id: int) -> None:
@@ -313,6 +366,8 @@ class App(QMainWindow):
             self.routes_tab.follow_toggle(silent=True)
         elif key_id == _HK_F7:
             self.routes_tab.emergency_stop()
+        elif key_id == _HK_F8:
+            self.routes_tab.routes_invert(silent=True)
 
     def _save_cfg(self) -> None:
         target = self.app_cfg.cfg_path
@@ -328,11 +383,14 @@ class App(QMainWindow):
                 app_cfg.navigator = NavigatorConfig(**self.cfg["navigator"])
             if "debug" in self.cfg and isinstance(self.cfg["debug"], dict):
                 app_cfg.debug = DebugConfig(**self.cfg["debug"])
+            app_cfg.ui = UiConfig(**self.app_cfg.ui.model_dump())
             app_cfg.save(target)
         except Exception:
             atomic_write_json(target, self.cfg)
 
     def closeEvent(self, event: Any) -> None:
+        self._remember_window_geometry()
+        self._save_cfg()
         self._hotkeys.stop()
         self.routes_tab.stop_manual_record()
         self.routes_tab.emergency_stop()

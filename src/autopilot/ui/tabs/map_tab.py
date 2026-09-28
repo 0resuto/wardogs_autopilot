@@ -11,8 +11,10 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDialog,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -91,6 +93,7 @@ class MapTab(QWidget):
         self.preset_mgr = PresetManager()
         self.driver: FollowDriver | None = None
         self._manual_rec: ManualDriveRecorder | None = None
+        self._edit_snapshot: list[list[float]] | None = None
 
         self.tune_vars: dict[str, _StringVarCompat] = {}
         self.tune_inputs: dict[str, QLineEdit] = {}
@@ -130,33 +133,57 @@ class MapTab(QWidget):
         top_bar.addWidget(btn_reload)
 
         btn_load = QPushButton("Load", self)
-        btn_load.clicked.connect(self.preset_load_sel)
+        btn_load.clicked.connect(lambda: self.preset_load_sel())
         top_bar.addWidget(btn_load)
 
         btn_del = QPushButton("Delete", self)
         btn_del.clicked.connect(self.preset_delete)
         top_bar.addWidget(btn_del)
 
-        self.p_name = QLineEdit(self)
-        self.p_name.setPlaceholderText("Preset name...")
-        self.p_name.setFixedWidth(110)
-        top_bar.addWidget(self.p_name)
+        self._new_btn = QPushButton("New", self)
+        self._new_btn.setToolTip("Create a new empty route preset, then draw it")
+        self._new_btn.clicked.connect(self.route_new)
+        top_bar.addWidget(self._new_btn)
 
         btn_save = QPushButton("Save As", self)
+        btn_save.setToolTip("Save the current route under a new preset name")
         btn_save.clicked.connect(self.preset_save)
         top_bar.addWidget(btn_save)
-
-        btn_upd = QPushButton("Update", self)
-        btn_upd.clicked.connect(self.preset_overwrite)
-        top_bar.addWidget(btn_upd)
 
         btn_clear = QPushButton("🗑 Clear", self)
         btn_clear.clicked.connect(self.routes_clear)
         top_bar.addWidget(btn_clear)
 
-        self.invert_ck = QCheckBox("Invert", self)
-        self.invert_ck.toggled.connect(self.routes_invert)
-        top_bar.addWidget(self.invert_ck)
+        self._reverse_btn = QPushButton("⇄ Reverse", self)
+        self._reverse_btn.setToolTip("Reverse the route direction (F8)")
+        self._reverse_btn.clicked.connect(lambda: self.routes_invert())
+        top_bar.addWidget(self._reverse_btn)
+
+        self._edit_btn = QPushButton("✏ Edit", self)
+        self._edit_btn.setToolTip("Edit the route points on the map")
+        self._edit_btn.clicked.connect(lambda: self._set_edit_mode(True))
+        top_bar.addWidget(self._edit_btn)
+
+        self._apply_btn = QPushButton("✓ Apply", self)
+        self._apply_btn.clicked.connect(self.route_edit_apply)
+        self._apply_btn.hide()
+        top_bar.addWidget(self._apply_btn)
+
+        self._cancel_btn = QPushButton("✕ Cancel", self)
+        self._cancel_btn.clicked.connect(self.route_edit_cancel)
+        self._cancel_btn.hide()
+        top_bar.addWidget(self._cancel_btn)
+
+        self._route_locked: list[QWidget] = [
+            self.p_sel,
+            btn_reload,
+            btn_load,
+            btn_del,
+            btn_save,
+            btn_clear,
+            self._reverse_btn,
+            self._new_btn,
+        ]
 
         self.dbg_ck = QCheckBox("Nav log", self)
         self.dbg_ck.setChecked(bool(self.app_cfg.navigator.debug))
@@ -429,7 +456,9 @@ class MapTab(QWidget):
         root_layout.addWidget(self._tune_container)
 
         # --- Interactive Map Canvas / Scene ---
-        self.map_widget = InteractiveMapWidget(enable_route_editing=True, parent=self)
+        # Route editing is off until the Edit button is pressed: by default the
+        # left button pans and the route cannot be changed by an accidental click.
+        self.map_widget = InteractiveMapWidget(enable_route_editing=False, parent=self)
         self.map_widget.scene.on_route_changed = self.routes_refresh
         self.map_widget.set_on_center(self._center_vehicle)
         root_layout.addWidget(self.map_widget, stretch=1)
@@ -466,9 +495,9 @@ class MapTab(QWidget):
         _compact_label(self.map_status)
         info_bar.addWidget(self.map_status, stretch=1)
 
-        hint = QLabel("LMB: Add | Drag: Move | RMB: Del | Drag map: Pan | Wheel: Zoom", self)
-        hint.setStyleSheet("color: #606060; font-size: 8pt;")
-        info_bar.addWidget(hint)
+        self._hint_lbl = QLabel("LMB: Pan | Wheel: Zoom | ✏ Edit to modify the route", self)
+        self._hint_lbl.setStyleSheet("color: #606060; font-size: 8pt;")
+        info_bar.addWidget(self._hint_lbl)
         bot_box.addLayout(info_bar)
 
         root_layout.addLayout(bot_box)
@@ -703,7 +732,12 @@ class MapTab(QWidget):
 
     # --- Presets & Route Editing Logic ---
     def preset_reload(self) -> None:
-        """Reload list of presets for the active map."""
+        """Reload list of presets for the active map.
+
+        The preset used in the last session is selected again, and its route is
+        loaded when no route is set (fresh start), so the studio opens ready to
+        drive.
+        """
         map_name = self.get_map_name()
         self.preset_mgr = PresetManager(subdir=f"data/presets/{map_name}")
         names = self.preset_mgr.list_presets()
@@ -715,42 +749,54 @@ class MapTab(QWidget):
                 self.p_sel.setCurrentText(last)
             else:
                 self.p_sel.setCurrentIndex(0)
+            if not self.route_pts:
+                self.preset_load_sel(persist=False)
 
-    def preset_save(self) -> None:
-        name = self.p_name.text().strip()
+    def _ask_preset_name(self, title: str, ok_text: str, initial: str = "") -> str | None:
+        """Ask for a preset name (field + OK/Cancel), or None when cancelled."""
+        dialog = QInputDialog(self)
+        dialog.setWindowTitle(title)
+        dialog.setLabelText("Preset name:")
+        dialog.setOkButtonText(ok_text)
+        dialog.setCancelButtonText("Cancel")
+        dialog.setTextValue(initial)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+        name = dialog.textValue().strip()
         if not name:
-            QMessageBox.warning(self, "Presets", "Enter a preset name")
-            return
-        path = self.preset_mgr.preset_path(name)
-        if os.path.exists(path):
-            QMessageBox.information(
-                self, "Presets", f'Preset "{name}" already exists. Use "Update" to overwrite.'
-            )
-            return
+            QMessageBox.warning(self, title, "Enter a preset name")
+            return None
+        return name
+
+    def _save_route_to_preset(self, name: str) -> bool:
+        """Write the current route points to the preset and select it."""
         try:
             self.preset_mgr.save_preset(name, self.route_pts)
         except Exception as exc:
             QMessageBox.critical(self, "Presets", f"Failed to save preset: {exc}")
-            return
+            return False
         self.app_cfg.navigator.last_preset = name
+        self.save_cfg()
         self.preset_reload()
         self.p_sel.setCurrentText(name)
+        return True
 
-    def preset_overwrite(self) -> None:
-        name = self.p_name.text().strip() or self.p_sel.currentText().strip()
-        if not name:
-            QMessageBox.warning(self, "Presets", "Select or enter a preset name to overwrite")
+    def preset_save(self) -> None:
+        """Save the current route under a new name (Save As)."""
+        current = self.p_sel.currentText().strip()
+        name = self._ask_preset_name("Save route as", "Save", current)
+        if name is None:
             return
-        try:
-            self.preset_mgr.save_preset(name, self.route_pts)
-        except Exception as exc:
-            QMessageBox.critical(self, "Presets", f"Failed to update preset: {exc}")
-            return
-        self.app_cfg.navigator.last_preset = name
-        self.preset_reload()
-        self.p_sel.setCurrentText(name)
+        if name != current and os.path.exists(self.preset_mgr.preset_path(name)):
+            res = QMessageBox.question(
+                self, "Presets", f'Preset "{name}" already exists. Overwrite?'
+            )
+            if res != QMessageBox.StandardButton.Yes:
+                return
+        self._save_route_to_preset(name)
 
-    def preset_load_sel(self) -> None:
+    def preset_load_sel(self, persist: bool = True) -> None:
+        """Load the selected preset; `persist` remembers it for the next start."""
         name = self.p_sel.currentText().strip()
         if not name:
             return
@@ -760,8 +806,9 @@ class MapTab(QWidget):
             QMessageBox.critical(self, "Presets", f'Failed to read preset "{name}": {exc}')
             return
         self.route_pts = pts
-        self.p_name.setText(name)
         self.app_cfg.navigator.last_preset = name
+        if persist:
+            self.save_cfg()
         self.routes_refresh()
 
     def preset_delete(self) -> None:
@@ -774,14 +821,70 @@ class MapTab(QWidget):
         self.preset_mgr.delete_preset(name)
         self.preset_reload()
 
+    def _set_edit_mode(self, editing: bool) -> None:
+        """Toggle the route editor: points change only while Edit is active."""
+        if editing:
+            if self._edit_snapshot is None:
+                self._edit_snapshot = [list(p) for p in self.route_pts]
+            self.map_widget.view.set_route_mode(True)
+        else:
+            self._edit_snapshot = None
+            self.map_widget.view.set_route_mode(False)
+        self._set_route_controls_enabled()
+        self._hint_lbl.setText(
+            "LMB: Add point | Middle-drag: Pan | Wheel: Zoom | ✓ Apply / ✕ Cancel"
+            if editing
+            else "LMB: Pan | Wheel: Zoom | ✏ Edit to modify the route"
+        )
+
+    def route_edit_apply(self) -> None:
+        """Commit the edited route, save it to the selected preset, leave the editor."""
+        name = self.p_sel.currentText().strip()
+        self._set_edit_mode(False)
+        if name:
+            self._save_route_to_preset(name)
+        self.routes_refresh()
+
+    def route_edit_cancel(self) -> None:
+        """Restore the route as it was when Edit was pressed."""
+        snapshot = self._edit_snapshot
+        self._set_edit_mode(False)
+        if snapshot is not None:
+            self.route_pts = snapshot
+
+    def route_new(self) -> None:
+        """Create a new empty route preset after asking for a name."""
+        name = self._ask_preset_name("New route", "Create")
+        if name is None:
+            return
+        if os.path.exists(self.preset_mgr.preset_path(name)):
+            QMessageBox.information(
+                self,
+                "New route",
+                f'Preset "{name}" already exists. Load it or use "Save As" to overwrite.',
+            )
+            return
+        self.route_pts = []
+        if not self._save_route_to_preset(name):
+            return
+        self._set_edit_mode(True)
+
     def routes_clear(self) -> None:
         self.route_pts = []
         self.routes_refresh()
 
-    def routes_invert(self) -> None:
+    def routes_invert(self, silent: bool = False) -> None:
+        if self._edit_snapshot is not None:
+            self.routes_status.setText("Finish editing (Apply or Cancel) before reversing")
+            self.routes_status.setStyleSheet("color: #ffaa00;")
+            return
         if self.driver is not None:
-            QMessageBox.information(self, "Routes", "Stop the autopilot before inverting the route")
-            self.invert_ck.setChecked(False)
+            if not silent:
+                QMessageBox.information(
+                    self, "Routes", "Stop the autopilot before inverting the route"
+                )
+            self.routes_status.setText("Stop the autopilot before inverting the route")
+            self.routes_status.setStyleSheet("color: #ffaa00;")
             return
         pts = list(reversed(self.route_pts))
         self.route_pts = pts
@@ -802,6 +905,17 @@ class MapTab(QWidget):
             f"Route: {len(self.route_pts)} pts | ~{int(length_m)} m ({time_txt} at {int(speed_cap)} km/h)"
         )
 
+    def _set_route_controls_enabled(self) -> None:
+        """Route controls are locked while editing or while the autopilot drives."""
+        editing = self._edit_snapshot is not None
+        locked = editing or self.driver is not None
+        for widget in self._route_locked:
+            widget.setEnabled(not locked)
+        self._edit_btn.setVisible(not editing)
+        self._edit_btn.setEnabled(not locked)
+        self._apply_btn.setVisible(editing)
+        self._cancel_btn.setVisible(editing)
+
     def _set_follow_state(self, running: bool) -> None:
         if running:
             self.follow_btn.setText("⏸ Pause (F6)")
@@ -811,6 +925,7 @@ class MapTab(QWidget):
             self.follow_btn.setObjectName("SuccessButton")
         self.follow_btn.style().unpolish(self.follow_btn)
         self.follow_btn.style().polish(self.follow_btn)
+        self._set_route_controls_enabled()
 
     def follow_toggle(self, silent: bool = False) -> None:
         """Start or stop the background FollowDriver thread."""
@@ -820,6 +935,15 @@ class MapTab(QWidget):
             self._set_follow_state(False)
             self.routes_status.setText("Autopilot stopped")
             self.routes_status.setStyleSheet("color: #88c0d0;")
+            return
+
+        if self._edit_snapshot is not None:
+            self.routes_status.setText("Finish editing (Apply or Cancel) before starting")
+            self.routes_status.setStyleSheet("color: #ffaa00;")
+            if not silent:
+                QMessageBox.information(
+                    self, "Routes", "Finish editing (Apply or Cancel) before starting"
+                )
             return
 
         if len(self.route_pts) < 2:
