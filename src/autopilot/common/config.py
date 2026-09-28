@@ -136,7 +136,6 @@ class NavigatorConfig(BaseModel):
         description="Steering yaw-authority scale override; None uses the profile value",
     )
     arrive_r: float = Field(default=25.0, ge=1.0, description="Waypoint arrival radius (px)")
-    slow_r: float = Field(default=350.0, ge=1.0, description="Deceleration radius (px)")
     dead: float = Field(default=3.0, ge=0.0, description="Steering dead-zone (deg)")
     turn_deg: float = Field(
         default=25.0,
@@ -184,7 +183,11 @@ class NavigatorConfig(BaseModel):
     )
     xte_m: float = Field(default=4.0, ge=0.0, description="Cross-track error limit (meters)")
     poll: float = Field(default=0.033, ge=0.001, description="Navigation tick rate in seconds")
-    brake_d: float = Field(default=260.0, ge=1.0, description="Braking distance threshold (px)")
+    brake_d: float = Field(
+        default=260.0,
+        ge=1.0,
+        description="Legacy braking-distance constant, used only when the speed planner is off",
+    )
     dead_off: float | None = Field(default=None, description="Steering release dead-zone (deg)")
     stop_speed_kmh: float = Field(
         default=2.0,

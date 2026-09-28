@@ -15,7 +15,6 @@ class SteeringController:
         self,
         dead: float = 6.0,
         dead_off: float = 2.0,
-        lead_t: float = 0.18,
         settle_t: float = 0.80,
         imp_k: float = 0.70,
         w_est: float = 18.0,
@@ -27,7 +26,6 @@ class SteeringController:
     ) -> None:
         self.dead = max(float(dead), 6.0)
         self.dead_off = max(float(dead_off), 2.0)
-        self.lead_t = float(lead_t)
         self.settle_t = float(settle_t)
         self.imp_k = float(imp_k)
         self.w_est = float(w_est)

@@ -37,7 +37,6 @@ class FollowDriver(threading.Thread):
         loc: Any,
         pts: Sequence[tuple[float, float]],
         arrive_r: float | None = None,
-        slow_r: float | None = None,
         dead: float | None = None,
         poll: float | None = None,
         kb: Any = None,
@@ -70,7 +69,6 @@ class FollowDriver(threading.Thread):
         self.loc = loc
         self.pts = list(pts)
         self.arrive_r = float(arrive_r if arrive_r is not None else self.nav_cfg.arrive_r)
-        self.slow_r = float(slow_r if slow_r is not None else self.nav_cfg.slow_r)
         base_dead = dead if dead is not None else self.nav_cfg.dead
         self.dead = max(float(base_dead), 6.0)
         self.poll = float(poll if poll is not None else self.nav_cfg.poll)
@@ -210,10 +208,6 @@ class FollowDriver(threading.Thread):
         return self.speed_ctrl._vmax_px
 
     @property
-    def _runaway(self) -> bool:
-        return self.speed_ctrl.runaway
-
-    @property
     def _braking(self) -> bool:
         return self.speed_ctrl.is_braking
 
@@ -302,9 +296,17 @@ class FollowDriver(threading.Thread):
         self._last_t = now
 
     def _final_brake_dist(self) -> float:
-        """Distance to the final waypoint at which full-stop braking begins."""
-        mv = self.path.mv
-        return (max(mv, 0.0) ** 2 / (2.0 * self.brake_d) + 12.0) * 1.5
+        """Distance to the final waypoint at which full-stop braking begins.
+
+        Physical stopping distance from the plan's braking budget, with the
+        legacy constant as fallback when no planner is configured.
+        """
+        mv = max(self.path.mv, 0.0)
+        if self.planner is not None:
+            distance = self.speed_ctrl.brake_distance_px(mv, self.planner.brake_decel)
+            if math.isfinite(distance):
+                return distance * 1.2 + 8.0
+        return (mv**2 / (2.0 * self.brake_d) + 12.0) * 1.5
 
     def _stop_thr(self) -> float:
         """Full-stop speed threshold in px/s (km/h knob + configured noise floor)."""
@@ -397,11 +399,9 @@ class FollowDriver(threading.Thread):
     def _get_telemetry_params(self) -> dict[str, Any]:
         return dict(
             arrive_r=self.arrive_r,
-            slow_r=self.slow_r,
             dead=self.dead,
             dead_off=self.dead_off,
             brake_d=self.brake_d,
-            lead_t=self.steer_ctrl.lead_t,
             settle_t=self.steer_ctrl.settle_t,
             imp_k=self.steer_ctrl.imp_k,
             w_est=self.steer_ctrl.w_est,
@@ -617,7 +617,7 @@ class FollowDriver(threading.Thread):
 
                 # Road geometry angles
                 turn_angle, road_turn = self.path.calc_road_turn(heading)
-                tgt_spd = self.speed_ctrl.calc_target_speed(road_turn, xte, xte_lim)
+                tgt_spd = self.speed_ctrl.calc_target_speed(road_turn)
                 plan_kmh = self._route_target_kmh(mp)
                 if plan_kmh is not None:
                     tgt_spd = min(tgt_spd, self.speed_ctrl.from_kmh(plan_kmh))
@@ -637,14 +637,10 @@ class FollowDriver(threading.Thread):
                 gas_w, brake_space = self.speed_ctrl.decide_throttle_and_brake(
                     mv=self.path.mv,
                     tgt_spd=tgt_spd,
-                    dist=dist,
-                    arrive_r=self.arrive_r,
-                    turn_angle=turn_angle,
                     steer=self.steer_ctrl.steer,
                     micro=self.steer_ctrl.micro,
                     road_turn=road_turn,
                     turn_min=10.0,
-                    err=err,
                     xte=xte,
                     xte_lim=xte_lim,
                 )
@@ -721,7 +717,6 @@ class FollowDriver(threading.Thread):
                             th_raw=round(float(pose["th"]), 2) if pose else None,
                             yaw_max=round(yaw_max, 1) if yaw_max else None,
                             plan_kmh=round(plan_kmh, 1) if plan_kmh is not None else None,
-                            runaway=self.speed_ctrl.runaway,
                             ang=round(self.steer_ctrl.ang, 2),
                             steer=self.steer_ctrl.steer,
                             micro=self.steer_ctrl.micro,

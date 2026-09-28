@@ -132,10 +132,9 @@ def test_follow_driver_with_typed_config():
     from autopilot.common.config import NavigatorConfig
     from autopilot.navigation.follow import FollowDriver
 
-    nav_cfg = NavigatorConfig(arrive_r=42.0, slow_r=250.0, speed_cap_kmh=65.0)
+    nav_cfg = NavigatorConfig(arrive_r=42.0, speed_cap_kmh=65.0)
     driver = FollowDriver(loc=None, pts=[(0, 0), (100, 100)], nav_cfg=nav_cfg, kb=None)
     assert driver.arrive_r == 42.0
-    assert driver.slow_r == 250.0
     assert driver.speed_cap_kmh == 65.0
     assert isinstance(driver.nav_cfg, NavigatorConfig)
 

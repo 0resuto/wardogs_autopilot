@@ -261,6 +261,21 @@ class TestStopDecision(unittest.TestCase):
         driver._last_speed_t = now + 0.25
         self.assertEqual(driver._stop_state(now + 0.25), "stopped")
 
+    def test_final_brake_distance_uses_brake_budget(self):
+        driver = self._driver()
+        assert driver.planner is not None
+        driver.path._mv = 40.0
+
+        expected = driver.speed_ctrl.brake_distance_px(40.0, driver.planner.brake_decel) * 1.2 + 8.0
+        self.assertAlmostEqual(driver._final_brake_dist(), expected, delta=1e-6)
+
+    def test_final_brake_distance_falls_back_without_planner(self):
+        driver = self._driver(speed_profile=False)
+        driver.path._mv = 40.0
+
+        expected = (40.0**2 / (2.0 * driver.brake_d) + 12.0) * 1.5
+        self.assertAlmostEqual(driver._final_brake_dist(), expected, delta=1e-6)
+
     def test_stop_timeout_is_the_emergency_exit(self):
         driver = self._driver(stop_hold=0.2, stop_confirm_s=0.3, stop_timeout=1.0)
         driver._final_t0 = 0.0
