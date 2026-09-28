@@ -184,6 +184,9 @@ class LiveLocator(threading.Thread):
 
     The result of the last processed frame is always in self.latest; the
     processing delay of the last frame is in self.latest['elapsed'] (seconds).
+    latest['good'] is True ONLY for a measured pose: the held pose of a capture
+    void and all failed frames report good=False, so consumers must not derive
+    motion or a stopped state from them.
     """
 
     def __init__(self, cfg: AppConfig | dict, mask, frame_source=None) -> None:

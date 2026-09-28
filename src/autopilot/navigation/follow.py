@@ -47,6 +47,8 @@ class FollowDriver(threading.Thread):
         turn_deg: float | None = None,
         hold_max: float | None = None,
         stop_speed_kmh: float | None = None,
+        stop_min_px_s: float | None = None,
+        stop_confirm_s: float | None = None,
         stop_hold: float | None = None,
         stop_timeout: float | None = None,
         nav_cfg: NavigatorConfig | dict[str, Any] | None = None,
@@ -82,6 +84,12 @@ class FollowDriver(threading.Thread):
         self.stop_speed_kmh = float(
             stop_speed_kmh if stop_speed_kmh is not None else self.nav_cfg.stop_speed_kmh
         )
+        self.stop_min_px_s = float(
+            stop_min_px_s if stop_min_px_s is not None else self.nav_cfg.stop_min_px_s
+        )
+        self.stop_confirm_s = float(
+            stop_confirm_s if stop_confirm_s is not None else self.nav_cfg.stop_confirm_s
+        )
         self.stop_hold = float(stop_hold if stop_hold is not None else self.nav_cfg.stop_hold)
         self.stop_timeout = float(
             stop_timeout if stop_timeout is not None else self.nav_cfg.stop_timeout
@@ -109,6 +117,7 @@ class FollowDriver(threading.Thread):
 
         self._last_mp: tuple[float, float] | None = None
         self._last_t = 0.0
+        self._last_measured_t: float | None = None
         self._heading: float | None = None
         self._lost = False
         self._dbg_n = 0
@@ -265,24 +274,37 @@ class FollowDriver(threading.Thread):
         return (max(mv, 0.0) ** 2 / (2.0 * self.brake_d) + 12.0) * 1.5
 
     def _stop_thr(self) -> float:
-        """Full-stop speed threshold in px/s (km/h knob, px floor applied)."""
+        """Full-stop speed threshold in px/s (km/h knob + configured noise floor)."""
         pm = self.speed_ctrl.px_per_m_now()
         if pm > 0:
-            return max(self.stop_speed_kmh * pm / 3.6, 6.0)
-        return 6.0
+            return max(self.stop_speed_kmh * pm / 3.6, self.stop_min_px_s)
+        return self.stop_min_px_s
 
-    def _fully_stopped(self, now: float) -> bool:
-        """True once the vehicle stayed below the stop speed long enough (or timed out)."""
-        thr = self._stop_thr()
-        if max(self.speed, self.path.mv) <= thr:
+    def _pose_fresh(self, now: float) -> bool:
+        """True when the last MEASURED pose is recent enough to trust the stop."""
+        return (
+            self._last_measured_t is not None
+            and (now - self._last_measured_t) <= self.stop_confirm_s
+        )
+
+    def _stop_state(self, now: float) -> str:
+        """Final-waypoint stop state: 'stopped', 'braking' or 'timeout'.
+
+        A full stop is only trusted while fresh measured poses keep confirming
+        it: a frozen (held) pose must not be mistaken for a stopped vehicle.
+        'timeout' is the emergency exit after stop_timeout seconds.
+        """
+        if self._pose_fresh(now) and max(self.speed, self.path.mv) <= self._stop_thr():
             if self._stop_s_t is None:
                 self._stop_s_t = now
             elif now - self._stop_s_t >= self.stop_hold:
-                return True
+                return "stopped"
         else:
             self._stop_s_t = None
         t0 = self._final_t0
-        return t0 is not None and (now - t0) >= self.stop_timeout
+        if t0 is not None and (now - t0) >= self.stop_timeout:
+            return "timeout"
+        return "braking"
 
     def _finish(self) -> None:
         """Full stop at the final waypoint: disable the autopilot (as with F7)."""
@@ -314,6 +336,8 @@ class FollowDriver(threading.Thread):
             v_cruise=self.speed_ctrl.v_cruise,
             xte_m=self.xte_m,
             stop_speed_kmh=self.stop_speed_kmh,
+            stop_min_px_s=self.stop_min_px_s,
+            stop_confirm_s=self.stop_confirm_s,
             stop_hold=self.stop_hold,
             stop_timeout=self.stop_timeout,
         )
@@ -328,8 +352,14 @@ class FollowDriver(threading.Thread):
                 if it is not None:
                     mpx = it.get("map_px")
                     ts = it.get("ts", now)
-                    if mpx is not None:
+                    # good=True marks a MEASURED pose; held (frozen) poses of a
+                    # capture void keep the last position with good=False. Held
+                    # poses are only used for aiming: feeding them to the track
+                    # would fake a zero speed and a false full stop.
+                    measured = bool(it.get("good", False))
+                    if mpx is not None and measured:
                         x, y = float(mpx[0]), float(mpx[1])
+                        self._last_measured_t = ts
                         # Ghost pose detection
                         if self.path.samples and ts > self.path.samples[-1][0]:
                             lt, lx, ly = self.path.samples[-1]
@@ -403,7 +433,20 @@ class FollowDriver(threading.Thread):
 
                 if self._final_stop:
                     self._update_speed(now, mp)
-                    if self._fully_stopped(now):
+                    stop_state = self._stop_state(now)
+                    if stop_state != "braking":
+                        if stop_state == "timeout":
+                            pose_age = (
+                                now - self._last_measured_t
+                                if self._last_measured_t is not None
+                                else -1.0
+                            )
+                            logger.warning(
+                                "[nav] final stop timeout after %.1fs "
+                                "(last measured pose %.1fs ago) — releasing keys",
+                                self.stop_timeout,
+                                pose_age,
+                            )
                         self._finish()
                         continue
                     self._rel("final_stop")

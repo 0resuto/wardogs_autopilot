@@ -121,6 +121,16 @@ class NavigatorConfig(BaseModel):
         ge=0.5,
         description="Final-waypoint full-stop speed threshold (km/h, px floor applies)",
     )
+    stop_min_px_s: float = Field(
+        default=3.0,
+        ge=0.0,
+        description="Noise floor of the full-stop speed threshold (px/s)",
+    )
+    stop_confirm_s: float = Field(
+        default=1.0,
+        ge=0.0,
+        description="Max age of a measured pose to trust the full-stop decision (s)",
+    )
     stop_hold: float = Field(
         default=0.8,
         ge=0.1,
