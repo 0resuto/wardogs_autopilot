@@ -111,7 +111,10 @@ class MapConfig(BaseModel):
     file: str = Field(default="zestafona_map.png", description="Base map file name in data/maps/")
     thumb_factor: int = Field(default=8, ge=1)
     size: int = Field(default=32768, ge=1024)
-    gray_conv: str = Field(default="luma")
+    gray_conv: str = Field(
+        default="desat",
+        description="Map palette: 'desat' (minimap material), 'luma', 'equal', 'bt709'",
+    )
     gray_gamma: float = Field(default=1.0, ge=0.1, le=3.0)
     mini_scale: float = Field(
         default=2.6544, ge=0.1, le=10.0, description="Minimap to native map pixel scale"

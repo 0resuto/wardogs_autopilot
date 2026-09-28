@@ -79,7 +79,13 @@ def map_cache_status(name: str) -> tuple[str, str]:
         with np.load(feat_path) as idx:
             sig = str(idx.get("gray_sig", [""])[0])
             n_tiles = int(idx.get("gw", 0)) * int(idx.get("gh", 0))
-            return f"Ready: mu OK, SIFT index OK ({n_tiles} tiles, {sig}), mipmaps OK", "#8ae234"
+            if sig != locator.get_store().gray_sig(name):
+                return "Cache stale: palette or map file changed — press Rebuild", "#ffaa00"
+            palette = sig.split("|")[0]
+            return (
+                f"Ready: mu OK, SIFT index OK ({n_tiles} tiles, {palette}), mipmaps OK",
+                "#8ae234",
+            )
     except Exception:
         return "Ready: mu OK, SIFT index OK, mipmaps OK", "#8ae234"
 

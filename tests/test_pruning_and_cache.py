@@ -122,10 +122,16 @@ class TestMapCacheReporting(unittest.TestCase):
         self.assertIn("No map", txt)
 
     def test_gray_signatures_match_config(self):
+        """Cache signatures must carry the active palette and the map identity."""
+        from autopilot.common.config import AppConfig
+
+        conv = AppConfig.load("config.json").map.gray_conv
         maps_dir = os.path.join(ROOT, "data", "maps")
         for name in MAP_NAMES:
             with open(os.path.join(maps_dir, f"{name}_gray.txt"), encoding="utf-8") as fh:
-                self.assertEqual(fh.read().strip(), "luma-1.000", name)
+                sig = fh.read().strip()
+            self.assertTrue(sig.startswith(f"{conv}-"), f"{name}: {sig}")
+            self.assertIn("|ms=", sig)
 
 
 if __name__ == "__main__":

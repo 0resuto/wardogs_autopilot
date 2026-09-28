@@ -37,15 +37,24 @@ def bgr_to_gray(bgr: np.ndarray, conv: str = "luma", gamma: float = 1.0) -> np.n
 
     The in-game minimap is near-monochrome but its color->gray mapping does
     NOT match OpenCV's BGR2GRAY (BT.601 luma): yellow patches come out too
-    bright and mid grays too dark under luma. 'equal' (channel average) plus
-    an optional gamma lift tracks the game much closer:
+    bright and mid grays too dark under luma. 'desat' is the exact palette of
+    the game's minimap material (luminance factors 0.3/0.59/0.11 on RGB) and
+    matches captured frames best; 'equal' plus an optional gamma lift is kept
+    as an alternative:
       luma   : B*0.114 + G*0.587 + R*0.299 (OpenCV default)
+      desat  : R*0.3 + G*0.59 + B*0.11 (minimap material palette)
       equal  : (B + G + R) / 3
       bt709  : B*0.0722 + G*0.7152 + R*0.2126
     gamma != 1.0 applies g' = 255 * (g/255)^gamma (gamma < 1 brightens mids).
     """
     if conv == "equal":
         g = bgr.astype(np.float32).mean(axis=2)
+    elif conv == "desat":
+        g = (
+            bgr[..., 2].astype(np.float32) * 0.3
+            + bgr[..., 1].astype(np.float32) * 0.59
+            + bgr[..., 0].astype(np.float32) * 0.11
+        )
     elif conv == "bt709":
         g = (
             bgr[..., 2].astype(np.float32) * 0.2126

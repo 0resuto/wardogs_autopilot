@@ -6,6 +6,7 @@ preview mipmaps, color previews) in data/maps/, and cache validation signatures.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import threading
@@ -19,6 +20,7 @@ from .. import PROJECT_ROOT
 from ..common.config import AppConfig, LocatorConfig, MapConfig, resolve_config_path
 from ..common.log import get_logger
 from .featureindex import _INDEX_NORM, load_index
+from .preprocessing import bgr_to_gray
 
 logger = get_logger("map_store")
 
@@ -188,10 +190,42 @@ class MapStore:
         self._map_cfg_cache = (path, mtime, cfg)
         return cfg
 
-    def gray_sig(self) -> str:
-        """Machine-readable ID of current map gray conversion (cache key)."""
+    def map_signature(self, name: str | None = None) -> str:
+        """File identity of the map PNG (size + mtime) used in cache checks."""
+        try:
+            st = os.stat(self.full_path(name))
+        except OSError:
+            return "missing"
+        return f"{st.st_size}-{st.st_mtime_ns}"
+
+    def gray_sig(self, name: str | None = None) -> str:
+        """Cache key: gray palette + minimap scale + map file identity.
+
+        Including the map file itself means replacing the PNG invalidates the
+        mu/preview/feature-index caches even when the palette did not change.
+        """
         c = self.map_cfg()
-        return f"{c['gray_conv']}-{float(c['gray_gamma']):.3f}"
+        return (
+            f"{c['gray_conv']}-{float(c['gray_gamma']):.3f}"
+            f"|ms={self.mini_scale(name):.4f}|{self.map_signature(name)}"
+        )
+
+    def _read_map_gray(self, name: str | None = None) -> np.ndarray | None:
+        """Map PNG -> gray in the configured palette at native/2 resolution.
+
+        Reads the color texture (not IMREAD_GRAYSCALE), so `gray_conv` and
+        `gray_gamma` actually take effect: the game's minimap palette is the
+        'desat' conversion (R*0.3 + G*0.59 + B*0.11).
+        """
+        bgr = cv2.imread(self.full_path(name), cv2.IMREAD_REDUCED_COLOR_2)
+        if bgr is None:
+            return None
+        cfg = self.map_cfg()
+        return bgr_to_gray(
+            bgr,
+            conv=str(cfg.get("gray_conv", "luma")),
+            gamma=float(cfg.get("gray_gamma", 1.0)),
+        )
 
     def gray_sig_on_disk(self, name: str | None = None) -> str | None:
         """Gray signature the on-disk mu cache was built with, or None."""
@@ -289,19 +323,20 @@ class MapStore:
         name = self._cur_name
         if all(os.path.exists(self.preview_path(name, n)) for n in PREVIEW_SIZES):
             return True
-        full = cv2.imread(self.full_path(name), cv2.IMREAD_GRAYSCALE)
+        full = self._read_map_gray(name)
         if full is None:
             return False
         self.build_previews(full)
         return True
 
     def color_map(self) -> np.ndarray:
-        """Color map of active map at COLOR_PREVIEW_SIZE^2, cached per map."""
+        """Map raster of active map at COLOR_PREVIEW_SIZE^2, cached per palette."""
         cur = self._color_map_cache.get("name")
         if cur == self._cur_name and self._color_map_cache.get("img") is not None:
             return self._color_map_cache["img"]
 
-        cache = self.cache_path(self._cur_name, f"rgb{COLOR_PREVIEW_SIZE}.npy")
+        suffix = hashlib.md5(self.gray_sig().encode("utf-8")).hexdigest()[:8]
+        cache = self.cache_path(self._cur_name, f"rgb{COLOR_PREVIEW_SIZE}_{suffix}.npy")
         img = None
         try:
             img = np.load(cache)
@@ -313,7 +348,7 @@ class MapStore:
                 cur = self._color_map_cache.get("img")
                 if cur is not None and self._color_map_cache.get("name") == self._cur_name:
                     return cur
-                reduced = cv2.imread(self.full_path(self._cur_name), cv2.IMREAD_REDUCED_GRAYSCALE_8)
+                reduced = self._read_map_gray(self._cur_name)
                 if reduced is None:
                     raise OSError(f"map not read: {self.full_path(self._cur_name)}")
                 resized = cv2.resize(
@@ -338,11 +373,8 @@ class MapStore:
         cache_mu = self.cache_path(name, "mu.npy")
         sig = self.gray_sig()
         cached_sig = self.gray_sig_on_disk(name)
-        default = "luma-1.000"
 
-        stale_sig = (cached_sig is None and sig != default) or (
-            cached_sig is not None and cached_sig != sig
-        )
+        stale_sig = cached_sig != sig
         if os.path.exists(cache_mu) and not stale_sig:
             loaded_mu: np.ndarray = np.load(cache_mu)
             self._g["mu"] = loaded_mu
@@ -351,8 +383,8 @@ class MapStore:
 
         if stale_sig:
             logger.info(
-                "[map_store] map gray changed (%s -> %s): rebuilding caches",
-                cached_sig if cached_sig else default,
+                "[map_store] map cache stale (%s -> %s): rebuilding caches",
+                cached_sig or "missing",
                 sig,
             )
 
@@ -360,12 +392,12 @@ class MapStore:
             cached_mu = self._g.get("mu")
             if cached_mu is not None and isinstance(cached_mu, np.ndarray):
                 return cached_mu
-            gray = cv2.imread(self.full_path(name), cv2.IMREAD_GRAYSCALE)
+            gray = self._read_map_gray(name)
             if gray is None:
                 raise OSError(f"full map not read: {self.full_path(name)}")
             h, _ = gray.shape[:2]
             ms = self.mini_scale()
-            side = int(round(h / ms))
+            side = int(round(h * 2 / ms))
             mu = cv2.resize(gray, (side, side), interpolation=cv2.INTER_AREA)
             self.build_previews(gray)
             del gray
@@ -395,13 +427,13 @@ class MapStore:
                 if progress_cb:
                     progress_cb("Step 1/3: Reading full map and generating mu...")
                 cache_mu = self.cache_path(name, "mu.npy")
-                gray = cv2.imread(self.full_path(name), cv2.IMREAD_GRAYSCALE)
+                gray = self._read_map_gray(name)
                 if gray is None:
                     raise OSError(f"full map not read: {self.full_path(name)}")
                 h, _ = gray.shape[:2]
 
                 ms = self.mini_scale(name)
-                side = int(round(h / ms))
+                side = int(round(h * 2 / ms))
                 mu = cv2.resize(gray, (side, side), interpolation=cv2.INTER_AREA)
                 np.save(cache_mu, mu)
                 sig = self.gray_sig()

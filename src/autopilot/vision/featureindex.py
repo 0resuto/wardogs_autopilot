@@ -97,7 +97,7 @@ def build_index(
         tile=int(tile),
         gw=int(gw),
         gh=int(gh),
-        gray_sig=np.array([locator._gray_sig()], dtype="U32"),
+        gray_sig=np.array([locator._gray_sig()], dtype="U128"),
         levels=np.asarray(levels, dtype=np.float32),
         norm=np.asarray([norm], dtype="U32"),
     )

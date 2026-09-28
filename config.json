@@ -38,7 +38,7 @@
     "file": "zestafona_map.png",
     "thumb_factor": 8,
     "size": 32768,
-    "gray_conv": "luma",
+    "gray_conv": "desat",
     "gray_gamma": 1.0,
     "mini_scale": 2.6544
   },

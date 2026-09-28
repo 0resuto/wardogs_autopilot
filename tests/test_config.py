@@ -72,6 +72,13 @@ def test_speed_roi_validation():
         CaptureConfig(speed_roi=[0, 0, 100])  # Length != 4
 
 
+def test_map_gray_palette_default():
+    """The map palette defaults to the minimap material desaturation."""
+    from autopilot.common.config import MapConfig
+
+    assert MapConfig().gray_conv == "desat"
+
+
 def test_vehicle_profile_default():
     """The Ural physics profile is enabled by default and can be disabled."""
     from autopilot.common.config import NavigatorConfig

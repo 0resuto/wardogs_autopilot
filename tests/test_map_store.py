@@ -90,6 +90,30 @@ class TestIndexLifecycle(unittest.TestCase):
             idx = self.store.get_index()
         self.assertEqual(idx.name, "zestafona")
 
+    def test_map_signature_invalidates_cache_key(self):
+        sig1 = self.store.gray_sig()
+        self.assertIn(self.store.map_signature(), sig1)
+
+        time.sleep(0.02)
+        png = os.path.join(self.tmp.name, "zestafona_map.png")
+        cv2.imwrite(png, np.full((64, 64), 200, np.uint8))
+
+        sig2 = self.store.gray_sig()
+        self.assertNotEqual(sig1, sig2)
+
+    def test_replaced_map_rebuilds_mu(self):
+        with patch.object(MapStore, "build_previews", lambda _self, _full: None):
+            self.store._g["mu"] = None
+            mu1 = self.store.load_global_map()
+
+            time.sleep(0.02)
+            png = os.path.join(self.tmp.name, "zestafona_map.png")
+            cv2.imwrite(png, np.zeros((64, 64), np.uint8))
+            self.store._g["mu"] = None
+            mu2 = self.store.load_global_map()
+
+        self.assertLess(float(mu2.mean()), float(mu1.mean()))
+
     def test_set_config_path_reads_other_file(self):
         cfg_file = os.path.join(self.tmp.name, "custom.json")
         with open(cfg_file, "w", encoding="utf-8") as fh:

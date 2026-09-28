@@ -122,13 +122,13 @@ class TestLocatorConcurrency(unittest.TestCase):
             for t in threads:
                 t.join(timeout=5.0)
 
-        locator.set_map("zestafona")
-        self.assertEqual(errors, [])
-        self.assertEqual(locator.map_name(), "zestafona")
-        idx = locator._get_index()
-        self.assertIsNotNone(idx)
-        assert idx is not None
-        self.assertEqual(idx.name, "zestafona")
+            locator.set_map("zestafona")
+            self.assertEqual(errors, [])
+            self.assertEqual(locator.map_name(), "zestafona")
+            idx = locator._get_index()
+            self.assertIsNotNone(idx)
+            assert idx is not None
+            self.assertEqual(idx.name, "zestafona")
 
 
 class TestHardwareDrivers(unittest.TestCase):
