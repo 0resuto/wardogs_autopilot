@@ -160,6 +160,9 @@ class MapLocator:
         budget: float | None = None,
         t0: float | None = None,
         feats: tuple[list[cv2.KeyPoint], np.ndarray | None] | None = None,
+        cands: list[tuple[Any, np.ndarray, np.ndarray]] | None = None,
+        prev_s: float | None = None,
+        early_inl: int = 0,
     ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
         """SIFT match of the minimap against index descriptors within radius r (or globally)."""
         start_t = t0 if t0 is not None else time.time()
@@ -203,12 +206,21 @@ class MapLocator:
         ratio = float(thr["ratio"])
         min_rate = float(thr["min_inl_rate"])
 
-        if r is None:
-            cands = idx.global_candidates(int(self.store.loc_cfg()["global_max_features"]))
-            scope = "global"
-        else:
-            cands = idx.radius_candidates(cx, cy, r)
-            scope = f"local(r={r:.0f})"
+        if cands is None:
+            if r is None:
+                cands = idx.global_candidates(int(self.store.loc_cfg()["global_max_features"]))
+            else:
+                cands = idx.radius_candidates(cx, cy, r)
+        scope = "global" if r is None else f"local(r={r:.0f})"
+        # Tracking with a known scale only needs the pyramid levels close to the
+        # previous match: the query scale changes smoothly, and matching all
+        # three levels tripled the knn cost for nothing.
+        if r is not None and prev_s is not None and len(cands) > 1:
+            keep_close = [
+                c for c in cands if abs(float(idx.levels[int(c[0])]) - prev_s) <= 0.25 * prev_s
+            ]
+            if keep_close:
+                cands = keep_close
 
         best: dict[str, Any] | None = None
         best_len: int | None = None
@@ -263,6 +275,10 @@ class MapLocator:
             if best is None or inl > int(best["inl"]):
                 best = cand_pose
                 best_len = len(d2)
+            if early_inl > 0 and inl >= early_inl:
+                # A match this strong will not be beaten by the remaining
+                # scale levels: stop paying for their knnMatch.
+                break
 
         diag["kp_pts"] = [kp.pt for kp in kp1]
         if best is None:
@@ -308,6 +324,7 @@ class MapLocator:
         t0: float | None = None,
         progress: Callable[[tuple[Any, ...]], None] | None = None,
         feats: tuple[list[cv2.KeyPoint], np.ndarray | None] | None = None,
+        prev_s: float | None = None,
     ) -> (
         tuple[dict[str, Any] | None, dict[str, Any], float, float, float]
         | tuple[None, dict[str, Any]]
@@ -338,6 +355,7 @@ class MapLocator:
         last_diag: dict[str, Any] | None = None
         discs: list[tuple[float, float, float]] = []
         global_pass = False
+        early_inl = max(10, int(cfg.get("vote_inl_skip", 40) or 40))
 
         if cx is not None and cy is not None:
             qx, qy = cx, cy
@@ -360,6 +378,9 @@ class MapLocator:
                     budget=budget,
                     t0=start_t,
                     feats=feats,
+                    cands=cands,
+                    prev_s=prev_s,
+                    early_inl=early_inl,
                 )
                 last_diag = dd
                 if res is not None:
@@ -387,6 +408,7 @@ class MapLocator:
                 budget=budget,
                 t0=start_t,
                 feats=feats,
+                early_inl=early_inl,
             )
             last_diag = dd
             if res is not None:
@@ -417,6 +439,7 @@ class MapLocator:
         debug: Literal[True] = ...,
         budget: float | None = ...,
         progress: Callable[[tuple[Any, ...]], None] | None = ...,
+        prev_s: float | None = ...,
     ) -> tuple[dict[str, Any] | None, dict[str, Any]]: ...
 
     @overload
@@ -430,6 +453,7 @@ class MapLocator:
         debug: Literal[False] = ...,
         budget: float | None = ...,
         progress: Callable[[tuple[Any, ...]], None] | None = ...,
+        prev_s: float | None = ...,
     ) -> dict[str, Any] | None: ...
 
     @overload
@@ -443,6 +467,7 @@ class MapLocator:
         debug: bool = ...,
         budget: float | None = ...,
         progress: Callable[[tuple[Any, ...]], None] | None = ...,
+        prev_s: float | None = ...,
     ) -> tuple[dict[str, Any] | None, dict[str, Any]] | dict[str, Any] | None: ...
 
     def global_pose(
@@ -455,6 +480,7 @@ class MapLocator:
         debug: bool = False,
         budget: float | None = None,
         progress: Callable[[tuple[Any, ...]], None] | None = None,
+        prev_s: float | None = None,
     ) -> tuple[dict[str, Any] | None, dict[str, Any]] | dict[str, Any] | None:
         """Estimate player position on WHOLE map in native map px via feature index."""
         t0 = time.time()
@@ -538,6 +564,7 @@ class MapLocator:
                 t0=t0,
                 progress=progress,
                 feats=(_kf, _df),
+                prev_s=prev_s,
             )
             if fp is not None and len(fp) == 5 and fp[0] is not None:
                 break
@@ -707,6 +734,7 @@ def global_pose(
     debug: Literal[True] = ...,
     budget: float | None = ...,
     progress: Callable[[tuple[Any, ...]], None] | None = ...,
+    prev_s: float | None = ...,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]: ...
 
 
@@ -720,6 +748,7 @@ def global_pose(
     debug: Literal[False] = ...,
     budget: float | None = ...,
     progress: Callable[[tuple[Any, ...]], None] | None = ...,
+    prev_s: float | None = ...,
 ) -> dict[str, Any] | None: ...
 
 
@@ -733,6 +762,7 @@ def global_pose(
     debug: bool = ...,
     budget: float | None = ...,
     progress: Callable[[tuple[Any, ...]], None] | None = ...,
+    prev_s: float | None = ...,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]] | dict[str, Any] | None: ...
 
 
@@ -745,6 +775,7 @@ def global_pose(
     debug: bool = False,
     budget: float | None = None,
     progress: Callable[[tuple[Any, ...]], None] | None = None,
+    prev_s: float | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]] | dict[str, Any] | None:
     return _DEFAULT_LOCATOR.global_pose(
         mm,
@@ -755,6 +786,7 @@ def global_pose(
         debug=debug,
         budget=budget,
         progress=progress,
+        prev_s=prev_s,
     )
 
 

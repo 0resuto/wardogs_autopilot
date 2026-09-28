@@ -121,6 +121,168 @@ class TestTrainSetThinning(unittest.TestCase):
         self.assertEqual(thinned, [8])
 
 
+class _CountingBF:
+    """BFMatcher proxy counting knnMatch calls (cv2 attrs are read-only)."""
+
+    def __init__(self, real) -> None:
+        self.real = real
+        self.calls = 0
+
+    def knnMatch(self, *args, **kwargs):
+        self.calls += 1
+        return self.real.knnMatch(*args, **kwargs)
+
+
+class _MultiIndex:
+    """Index stub with several (level, pts, desc) candidate sets."""
+
+    def __init__(self, sets: list[tuple[float, np.ndarray, np.ndarray]]) -> None:
+        # like FeatureIndex: (level_index, pts, desc) with a levels array
+        self.levels = np.asarray([lv for lv, _p, _d in sets], np.float32)
+        self.sets = [(i, pts, desc) for i, (_lv, pts, desc) in enumerate(sets)]
+        self.radius_calls = 0
+
+    def total_features(self) -> int:
+        return sum(len(desc) for _li, _pts, desc in self.sets)
+
+    def radius_candidates(self, _cx: float, _cy: float, _r: float):
+        self.radius_calls += 1
+        return list(self.sets)
+
+    def global_candidates(self, _cap: int):
+        return list(self.sets)
+
+
+def _matchable_set(n_pts: int = 8):
+    """(pts, desc) that matches the 8-descriptor query by a pure translation."""
+    base = np.tile(np.arange(1, 9, dtype=np.float32)[:, None], (1, 128))
+    desc = base + np.arange(n_pts, dtype=np.float32)[:, None] * 1e-3
+    idx = np.arange(n_pts, dtype=np.float32) * 5.0
+    pts = np.stack([idx + 10.0, idx + 3.0], axis=1)
+    return pts, desc
+
+
+class TestSearchOptimizations(unittest.TestCase):
+    def setUp(self):
+        self.engine = locator.MapLocator()
+        self.kp = [cv2.KeyPoint(float(i * 5), float(i * 5), 5.0) for i in range(8)]
+        self.d1 = np.tile(np.arange(1, 9, dtype=np.float32)[:, None], (1, 128))
+        self.thr = dict(ratio=0.8, min_inl=2, min_inl_rate=0.0)
+
+    def _run(self, idx, **kwargs):
+        return self.engine._pose_via_index(
+            np.zeros((32, 32), np.uint8),
+            None,
+            idx,
+            0.0,
+            0.0,
+            450.0,
+            thr=self.thr,
+            feats=(self.kp, self.d1),
+            **kwargs,
+        )
+
+    def test_radius_candidates_are_computed_once_per_step(self):
+        idx = _MultiIndex([(1.0, *_matchable_set())])
+        self.engine._index_find(
+            np.zeros((32, 32), np.uint8),
+            None,
+            idx,
+            100.0,
+            100.0,
+            min_inl=2,
+            feats=(self.kp, self.d1),
+        )
+
+        self.assertEqual(idx.radius_calls, 1)
+
+    def test_strong_first_match_stops_the_scan(self):
+        idx = _MultiIndex([(1.0, *_matchable_set()), (0.8, *_matchable_set())])
+        spy = _CountingBF(self.engine.bf)
+        self.engine.bf = spy  # type: ignore[assignment]
+
+        pose, diag = self._run(idx, early_inl=4)
+
+        self.assertIsNotNone(pose)
+        self.assertEqual(spy.calls, 1)
+
+    def test_zero_early_exit_keeps_scanning_all_sets(self):
+        idx = _MultiIndex([(1.0, *_matchable_set()), (0.8, *_matchable_set())])
+        spy = _CountingBF(self.engine.bf)
+        self.engine.bf = spy  # type: ignore[assignment]
+
+        pose, _diag = self._run(idx, early_inl=0)
+
+        self.assertIsNotNone(pose)
+        self.assertEqual(spy.calls, 2)
+
+    def test_previous_scale_prunes_far_levels(self):
+        idx = _MultiIndex([(1.0, *_matchable_set()), (0.6, *_matchable_set())])
+        spy = _CountingBF(self.engine.bf)
+        self.engine.bf = spy  # type: ignore[assignment]
+
+        pose, _diag = self._run(idx, prev_s=1.0, early_inl=0)
+
+        self.assertIsNotNone(pose)
+        self.assertEqual(spy.calls, 1)
+
+
+class TestTileGatherCache(unittest.TestCase):
+    def _index(self):
+        from autopilot.vision.featureindex import FeatureIndex
+
+        class _Data(dict):
+            @property
+            def files(self):
+                return list(self.keys())
+
+        pts = np.array([[0.0, 0.0], [10.0, 0.0], [600.0, 0.0]], np.float32)
+        desc = np.zeros((3, 128), np.float32)
+        tile = np.array([0, 0, 1], np.int32)  # tx=1 in row 0
+        data = _Data(
+            ms=np.array(2.0),
+            mu_h=np.array(1024),
+            mu_w=np.array(1024),
+            tile=np.array(512),
+            levels=np.array([1.0], np.float32),
+            norm=np.array(["raw"]),
+            pts_lv0=pts,
+            desc_lv0=desc,
+            tile_lv0=tile,
+        )
+        return FeatureIndex("t", data)
+
+    def test_same_tile_rect_reuses_the_gather(self):
+        idx = self._index()
+        li = idx._levels[0]
+
+        first = idx.radius_candidates(5.0, 5.0, 100.0)
+        cached = li["_tile_cache"]
+        second = idx.radius_candidates(5.0, 5.0, 100.0)
+
+        self.assertIsNotNone(cached)
+        self.assertIs(li["_tile_cache"], cached)
+        self.assertEqual(len(first[0][1]), len(second[0][1]))
+        np.testing.assert_array_equal(first[0][1], second[0][1])
+
+    def test_moving_center_updates_the_distance_filter(self):
+        idx = self._index()
+
+        near = idx.radius_candidates(0.0, 0.0, 20.0)
+        farther = idx.radius_candidates(10.0, 0.0, 5.0)
+
+        self.assertEqual(len(near[0][1]), 2)  # (0,0) and (10,0)
+        self.assertEqual(len(farther[0][1]), 1)  # only (10,0)
+
+    def test_far_tile_is_not_cached_into_the_query(self):
+        idx = self._index()
+
+        found = idx.radius_candidates(600.0, 0.0, 20.0)
+
+        self.assertEqual(len(found[0][1]), 1)
+        np.testing.assert_array_equal(found[0][1][0], [600.0, 0.0])
+
+
 class TestTrackerFrameError(unittest.TestCase):
     """A per-frame locator error must not kill the tracking thread."""
 

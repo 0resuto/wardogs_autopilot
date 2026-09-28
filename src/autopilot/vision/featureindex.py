@@ -217,12 +217,14 @@ class FeatureIndex:
             Wimg = max(1, int(round(self.mu_w * f)))
             Himg = max(1, int(round(self.mu_h * f)))
             gw_k, gh_k = _grid_dims(Wimg, Himg, self.tile)
+            tile = np.asarray(data["tile_lv%d" % k], np.int32)
             self._levels.append(
                 dict(
                     level=float(f),
                     pts=np.asarray(data["pts_lv%d" % k], np.float32),
                     desc=np.asarray(data["desc_lv%d" % k], np.float32),
-                    tile=np.asarray(data["tile_lv%d" % k], np.int32),
+                    tile=tile,
+                    _tile_cache=None,  # (key, pts, desc) of the last tile gather
                     img_w=Wimg,
                     img_h=Himg,
                     gw=gw_k,
@@ -233,7 +235,14 @@ class FeatureIndex:
         self._levels.sort(key=lambda lv: len(lv["desc"]), reverse=True)
 
     def _tile_range(self, cx, cy, r):
-        """Level indices whose tiles overlap the circle in mu coords."""
+        """Level indices whose tiles overlap the circle in mu coords.
+
+        The per-tile point gather is cached per level by tile rectangle: while
+        tracking, the radius query covers the same tiles frame after frame, and
+        re-gathering ~15k descriptor rows (7 MB) each time was pure waste. The
+        exact distance filter still runs on every call because the center moves
+        inside the tiles.
+        """
         q = []
         for li in self._levels:
             f = li["level"]
@@ -244,14 +253,26 @@ class FeatureIndex:
             tx1 = min(li["gw"] - 1, int((cfx + cr) / self.tile))
             ty0 = max(0, int((cfy - cr) / self.tile))
             ty1 = min(li["gh"] - 1, int((cfy + cr) / self.tile))
-            ids = [ty * li["gw"] + tx for ty in range(ty0, ty1 + 1) for tx in range(tx0, tx1 + 1)]
-            if ids:
+            if tx1 < tx0 or ty1 < ty0:
+                continue
+            key = (tx0, tx1, ty0, ty1)
+            cached = li.get("_tile_cache")
+            if cached is not None and cached[0] == key:
+                pts_t, desc_t = cached[1], cached[2]
+            else:
+                ids = [
+                    ty * li["gw"] + tx for ty in range(ty0, ty1 + 1) for tx in range(tx0, tx1 + 1)
+                ]
                 keep = np.isin(li["tile"], ids)
-                pts = li["pts"][keep]
-                if len(pts):
-                    d = np.hypot(pts[:, 0] - cx, pts[:, 1] - cy)
-                    sel = d <= r
-                    q.append((li, pts[sel], li["desc"][keep][sel]))
+                pts_t = li["pts"][keep]
+                desc_t = li["desc"][keep]
+                li["_tile_cache"] = (key, pts_t, desc_t)
+            if len(pts_t) == 0:
+                continue
+            d = np.hypot(pts_t[:, 0] - cx, pts_t[:, 1] - cy)
+            sel = d <= r
+            if np.any(sel):
+                q.append((li, pts_t[sel], desc_t[sel]))
         return q
 
     def total_features(self, level=None):

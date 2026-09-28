@@ -253,6 +253,7 @@ class LiveLocator(threading.Thread):
         self.phase = "loading map..."
         self._prev_xy: tuple[float, float] | None = None
         self._prev_th: float = 0.0
+        self._prev_s: float | None = None  # last matched scale (level pruning)
         self._good_xy: tuple[float, float] | None = None  # last accurate (SIFT) position
         self._stop = threading.Event()
         self._poll = 0.03
@@ -355,6 +356,7 @@ class LiveLocator(threading.Thread):
                 debug=True,
                 budget=3.0,
                 progress=self._search_progress,
+                prev_s=self._prev_s,
             )
             self._last_frame_error = None
             return res
@@ -545,6 +547,7 @@ class LiveLocator(threading.Thread):
                         self._prev_th = cand[2]
                         self._good_xy = (cand[0], cand[1])
                         self._good_pose = pose
+                        self._prev_s = float((pose or {}).get("s") or self._prev_s or 1.0)
                         mp = (cand[0], cand[1])
                     else:
                         self._prev_xy = (cand[0], cand[1])  # bridge only

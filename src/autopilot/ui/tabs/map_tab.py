@@ -223,6 +223,17 @@ class MapTab(QWidget):
         self._add_tune_field(l_trk, grp_trk, "inl", "min_inl_local", 4, 26, is_int=True)
         self._add_tune_field(l_trk, grp_trk, "inl%", "min_inl_rate_local", 0.0, 34)
         self._add_tune_field(l_trk, grp_trk, "rad", "track_radius", 900, 38, is_int=True)
+        self._add_tune_field(
+            l_trk,
+            grp_trk,
+            "kps",
+            "max_kp_frame",
+            1200,
+            40,
+            is_int=True,
+            tip="Keypoints kept per frame (response-ranked): lower = less latency,\n"
+            "higher = more robust in low-texture areas",
+        )
         tune_row.addWidget(grp_trk)
 
         # 2. Re-Acquisition
@@ -589,6 +600,7 @@ class MapTab(QWidget):
             "heading_gate_deg": ("locator", 0, 180, int, "head gate in [0 .. 180] deg"),
             "vote_inl_skip": ("locator", 1, 200, int, "skip in [1 .. 200] inl"),
             "hold_frames": ("locator", 0, 30, int, "hold in [0 .. 30] frames"),
+            "max_kp_frame": ("locator", 100, 6000, int, "TRACK max kp in [100 .. 6000]"),
             "yaw_gain": ("navigator", 0.05, 5.0, float, "VEH gain in [0.05 .. 5.0]"),
             "corner_lat_g": ("navigator", 0.05, 1.5, float, "VEH lat g in [0.05 .. 1.5]"),
             "brake_g": ("navigator", 0.05, 2.0, float, "VEH brake g in [0.05 .. 2.0]"),
