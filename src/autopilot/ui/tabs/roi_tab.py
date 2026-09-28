@@ -113,6 +113,7 @@ class RoiTab(QWidget):
         self.on_map_rebuilt = on_map_rebuilt
 
         self.roi_vars: dict[str, _StringVarCompat] = {}
+        self._pick_target = "minimap"
         self._roi_pick_busy = False
         self._cache_rebuild_busy = False
         self._snap_busy = False
@@ -207,6 +208,63 @@ class RoiTab(QWidget):
         coord_row.addWidget(self.status_lbl, stretch=1)
         roi_layout.addLayout(coord_row)
         layout.addWidget(card_roi)
+
+        card_speed = QGroupBox("Speedometer (OCR)", self)
+        speed_layout = QVBoxLayout(card_speed)
+        speed_layout.setContentsMargins(12, 14, 12, 12)
+        speed_layout.setSpacing(8)
+
+        speed_top = QHBoxLayout()
+        speed_top.setSpacing(8)
+        speed_guide = QLabel(
+            "1. Select a box around the speed digits only (units and labels are ignored)",
+            card_speed,
+        )
+        speed_guide.setStyleSheet("color: #a0a0a0;")
+        speed_top.addWidget(speed_guide, stretch=1)
+
+        self.pick_speed_btn = QPushButton("⛶ Pick speed zone", card_speed)
+        self.pick_speed_btn.clicked.connect(self.pick_speed_roi)
+        speed_top.addWidget(self.pick_speed_btn)
+
+        self.disable_speed_btn = QPushButton("Disable", card_speed)
+        self.disable_speed_btn.clicked.connect(self.disable_speed_roi)
+        speed_top.addWidget(self.disable_speed_btn)
+        speed_layout.addLayout(speed_top)
+
+        saved_speed = self.cfg.get("capture", {}).get("speed_roi")
+        speed_row = QHBoxLayout()
+        speed_row.setSpacing(6)
+        speed_coord_title = QLabel("Coordinates (px):", card_speed)
+        speed_coord_title.setStyleSheet("color: #88c0d0; font-weight: bold;")
+        speed_row.addWidget(speed_coord_title)
+
+        self.speed_inputs: dict[str, QLineEdit] = {}
+        self.speed_vars: dict[str, _StringVarCompat] = {}
+        for i, name in enumerate(("x", "y", "w", "h")):
+            lbl = QLabel(name.upper(), card_speed)
+            lbl.setStyleSheet("color: #b0b0b0;")
+            speed_row.addWidget(lbl)
+            val = str(saved_speed[i]) if saved_speed and i < len(saved_speed) else "0"
+            inp = QLineEdit(val, card_speed)
+            inp.setFixedWidth(54)
+            speed_row.addWidget(inp)
+            self.speed_inputs[name] = inp
+            self.speed_vars[name] = _StringVarCompat(val)
+
+        speed_apply_btn = QPushButton("Apply", card_speed)
+        speed_apply_btn.setFixedWidth(64)
+        speed_apply_btn.clicked.connect(self.apply_speed_roi)
+        speed_row.addWidget(speed_apply_btn)
+
+        self.speed_status_lbl = QLabel(
+            "enabled" if saved_speed else "disabled",
+            card_speed,
+        )
+        self.speed_status_lbl.setStyleSheet("color: #8ae234;" if saved_speed else "color: #8a8a8a;")
+        speed_row.addWidget(self.speed_status_lbl, stretch=1)
+        speed_layout.addLayout(speed_row)
+        layout.addWidget(card_speed)
 
         # Card 2: Map Cache & SIFT Feature Index Management
         card_cache = QGroupBox("Map Cache & SIFT Feature Index", self)
@@ -313,6 +371,20 @@ class RoiTab(QWidget):
         p3_box.addWidget(self.sift_preview_lbl, stretch=1)
         panels_row.addLayout(p3_box, stretch=1)
 
+        p4_box = QVBoxLayout()
+        p4_box.setSpacing(4)
+        self.speed_title_lbl = QLabel("Speed OCR", card_prev)
+        self.speed_title_lbl.setStyleSheet("color: #88c0d0; font-weight: bold; font-size: 9pt;")
+        self.speed_preview_lbl = QLabel(card_prev)
+        self.speed_preview_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.speed_preview_lbl.setStyleSheet(
+            "background-color: #1a1a1a; border-radius: 4px; border: 1px solid #2a2a2a;"
+        )
+        self.speed_preview_lbl.setMinimumSize(120, 120)
+        p4_box.addWidget(self.speed_title_lbl)
+        p4_box.addWidget(self.speed_preview_lbl, stretch=1)
+        panels_row.addLayout(p4_box, stretch=1)
+
         prev_layout.addLayout(panels_row, stretch=1)
         layout.addWidget(card_prev, stretch=1)
 
@@ -341,13 +413,25 @@ class RoiTab(QWidget):
                 self.status_lbl.setText(f"Failed to open mask folder: {exc}")
                 self.status_lbl.setStyleSheet("color: #ff3b3b;")
 
+    def _pick_status_label(self) -> QLabel:
+        return self.status_lbl if self._pick_target == "minimap" else self.speed_status_lbl
+
     def pick_roi(self) -> None:
         """Capture screen asynchronously and launch interactive ROI selector."""
+        self._start_pick("minimap")
+
+    def pick_speed_roi(self) -> None:
+        """Same as pick_roi, but the picked box is stored as capture.speed_roi."""
+        self._start_pick("speed")
+
+    def _start_pick(self, target: str) -> None:
         if self._roi_pick_busy:
             return
+        self._pick_target = target
         self._roi_pick_busy = True
-        self.status_lbl.setText("Grabbing the screen...")
-        self.status_lbl.setStyleSheet("color: #88c0d0;")
+        label = self._pick_status_label()
+        label.setText("Grabbing the screen...")
+        label.setStyleSheet("color: #88c0d0;")
 
         cap = self.get_cap()
         if cap is None:
@@ -380,8 +464,9 @@ class RoiTab(QWidget):
 
     def _roi_pick_fail(self, exc: str) -> None:
         self._roi_pick_busy = False
-        self.status_lbl.setText(f"Screen grab failed: {exc}")
-        self.status_lbl.setStyleSheet("color: #ff3b3b;")
+        label = self._pick_status_label()
+        label.setText(f"Screen grab failed: {exc}")
+        label.setStyleSheet("color: #ff3b3b;")
 
     def _roi_pick_open(self, bgr: np.ndarray, mon: Any) -> None:
         self._roi_pick_busy = False
@@ -397,6 +482,15 @@ class RoiTab(QWidget):
     def _roi_done(self, roi: list[int]) -> None:
         self._selector = None
         x, y, w, h = roi
+        if self._pick_target == "speed":
+            for name, val in zip(("x", "y", "w", "h"), (x, y, w, h), strict=True):
+                self.speed_inputs[name].setText(str(val))
+                self.speed_vars[name].set(str(val))
+            self._apply_speed_roi_values(roi)
+            self.speed_status_lbl.setText(f"OK: [{x}, {y}, {w}, {h}] — saved to config.json")
+            self.speed_status_lbl.setStyleSheet("color: #8ae234;")
+            return
+
         for name, val in zip(("x", "y", "w", "h"), (x, y, w, h), strict=True):
             self.coord_inputs[name].setText(str(val))
             self.roi_vars[name].set(str(val))
@@ -407,8 +501,59 @@ class RoiTab(QWidget):
 
     def _roi_cancelled(self) -> None:
         self._selector = None
-        self.status_lbl.setText("Selection cancelled")
-        self.status_lbl.setStyleSheet("color: #8a8a8a;")
+        label = self._pick_status_label()
+        label.setText("Selection cancelled")
+        label.setStyleSheet("color: #8a8a8a;")
+
+    def apply_speed_roi(self) -> None:
+        """Parse and validate the speedometer ROI entry fields."""
+        try:
+            roi = [
+                int(self.speed_inputs[n].text().strip() or self.speed_vars[n].get().strip())
+                for n in ("x", "y", "w", "h")
+            ]
+        except ValueError:
+            self.speed_status_lbl.setText("Error: integers are required")
+            self.speed_status_lbl.setStyleSheet("color: #ff3b3b;")
+            return
+
+        x, y, w, h = roi
+        if x < 0 or y < 0 or w < 8 or h < 8:
+            self.speed_status_lbl.setText("Error: x>=0, y>=0, w>=8, h>=8 required")
+            self.speed_status_lbl.setStyleSheet("color: #ff3b3b;")
+            return
+
+        for name, val in zip(("x", "y", "w", "h"), (x, y, w, h), strict=True):
+            self.speed_inputs[name].setText(str(val))
+            self.speed_vars[name].set(str(val))
+
+        self._apply_speed_roi_values(roi)
+        self.speed_status_lbl.setText(f"OK: {roi}")
+        self.speed_status_lbl.setStyleSheet("color: #8ae234;")
+
+    def disable_speed_roi(self) -> None:
+        """Turn the speedometer OCR off (capture.speed_roi = None)."""
+        for name in ("x", "y", "w", "h"):
+            self.speed_inputs[name].setText("0")
+            self.speed_vars[name].set("0")
+        self._apply_speed_roi_values(None)
+        self.speed_status_lbl.setText("disabled")
+        self.speed_status_lbl.setStyleSheet("color: #8a8a8a;")
+
+    def _apply_speed_roi_values(self, roi: list[int] | None) -> None:
+        self.cfg.setdefault("capture", {})["speed_roi"] = roi
+        self.save_cfg()
+
+        loc = self.get_loc()
+        if loc is not None:
+            if hasattr(loc, "set_speed_roi"):
+                loc.set_speed_roi(roi)
+            elif hasattr(loc, "cfg") and isinstance(loc.cfg, dict):
+                loc.cfg.setdefault("capture", {})["speed_roi"] = roi
+            if hasattr(loc, "app_cfg") and hasattr(loc.app_cfg, "capture"):
+                loc.app_cfg.capture.speed_roi = roi
+
+        self.update_preview()
 
     def apply_roi(self) -> None:
         """Parse coordinate entries, validate bounds, and update configuration."""
@@ -608,6 +753,44 @@ class RoiTab(QWidget):
         self.sift_title_lbl.setText(f"SIFT Features ({n_kp} pts, {n_inl} inl)")
         self.sift_title_lbl.setStyleSheet(f"color: {col_hex}; font-weight: bold; font-size: 9pt;")
         set_panel(self.sift_preview_lbl, p3)
+
+        # 4. Speedometer OCR
+        speed_frame = latest.get("speed_frame") if latest else None
+        speed_kmh = latest.get("speed_kmh") if latest else None
+        speed_ok = bool(latest.get("speed_ok")) if latest else False
+        if speed_frame is not None and speed_frame.size > 0:
+            p4 = (
+                cv2.cvtColor(speed_frame, cv2.COLOR_GRAY2BGR)
+                if speed_frame.ndim == 2
+                else speed_frame.copy()
+            )
+            speed_mask = latest.get("speed_mask") if latest else None
+            if speed_mask is not None and speed_mask.size > 0:
+                overlay = p4.copy()
+                overlay[speed_mask > 0] = (0, 180, 0)
+                cv2.addWeighted(overlay, 0.45, p4, 0.55, 0, p4)
+            speed_boxes = (latest.get("speed_boxes") or ()) if latest else ()
+            for box in speed_boxes:
+                bx, by, bw, bh = box
+                cv2.rectangle(p4, (bx, by), (bx + bw, by + bh), (0, 255, 255), 1)
+            if speed_ok and speed_kmh is not None:
+                self.speed_title_lbl.setText(f"Speed OCR: {speed_kmh} km/h")
+                self.speed_title_lbl.setStyleSheet(
+                    "color: #7ce06a; font-weight: bold; font-size: 9pt;"
+                )
+            else:
+                self.speed_title_lbl.setText("Speed OCR: —")
+                self.speed_title_lbl.setStyleSheet(
+                    "color: #ffaa00; font-weight: bold; font-size: 9pt;"
+                )
+        else:
+            p4 = np.full((60, 160, 3), 26, np.uint8)
+            if self.cfg.get("capture", {}).get("speed_roi"):
+                self.speed_title_lbl.setText("Speed OCR: waiting")
+            else:
+                self.speed_title_lbl.setText("Speed OCR: disabled")
+            self.speed_title_lbl.setStyleSheet("color: #8a8a8a; font-weight: bold; font-size: 9pt;")
+        set_panel(self.speed_preview_lbl, p4)
 
     def save_debug_frame(self) -> None:
         """Capture live diagnostic snapshot asynchronously."""

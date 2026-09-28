@@ -41,6 +41,9 @@ ATLAS_META_PATH = os.path.join(HUD_DIR, "barlow_atlas.json")
 MIN_COMPONENT_H = 6
 UPSCALE_TARGET_H = 64
 
+GlyphBox = tuple[int, int, int, int]
+LabeledGlyph = tuple[GlyphBox, str, float, float]
+
 
 def fit_glyph(gray: np.ndarray, out_w: int = GLYPH_W, out_h: int = GLYPH_H) -> np.ndarray:
     """Scale a cropped glyph into the canonical cell, aspect preserved, centered."""
@@ -107,13 +110,21 @@ class DigitAtlas:
 
 @dataclass(frozen=True)
 class SpeedReading:
-    """One frame of the speedometer ROI: recognized number or a rejection."""
+    """One frame of the speedometer ROI: recognized number or a rejection.
+
+    frame/mask/boxes carry the debug view of the same processing pass (the
+    upscaled gray frame, its bright-text mask and the accepted glyph boxes),
+    used by the UI preview.
+    """
 
     kmh: int | None
     score: float
     margin: float
     digits: int
     detail: str = ""
+    frame: np.ndarray | None = None
+    mask: np.ndarray | None = None
+    boxes: tuple[tuple[int, int, int, int], ...] = ()
 
     @property
     def ok(self) -> bool:
@@ -192,25 +203,29 @@ class SpeedRecognizer:
             gray = cv2.resize(gray, None, fx=factor, fy=factor, interpolation=cv2.INTER_CUBIC)
 
         binary = self._binarize(gray)
-        boxes = self._components(binary)
-        row = self._digit_row(boxes)
+
+        def reject(detail: str) -> SpeedReading:
+            return SpeedReading(None, 0.0, 0.0, 0, detail, frame=gray, mask=binary)
+
+        row = self._digit_row(self._components(binary))
         if not row:
-            return SpeedReading(None, 0.0, 0.0, 0, "no glyphs")
+            return reject("no glyphs")
 
         max_h = max(b[3] for b in row)
         row = [b for b in row if b[3] >= 0.55 * max_h]
         if not row:
-            return SpeedReading(None, 0.0, 0.0, 0, "no glyphs")
+            return reject("no glyphs")
 
-        runs: list[list[tuple[str, float, float]]] = []
-        current: list[tuple[str, float, float]] = []
+        runs: list[list[LabeledGlyph]] = []
+        current: list[LabeledGlyph] = []
         ignored = 0
-        for x, y, w, h in row:
+        for box in row:
+            x, y, w, h = box
             crop = gray[max(0, y - 1) : y + h + 1, max(0, x - 1) : x + w + 1]
             label, score, margin = self.atlas.match(fit_glyph(crop))
             confident = score >= self.min_score and margin >= self.min_margin
             if confident and label in DIGITS:
-                current.append((label, score, margin))
+                current.append((box, label, score, margin))
             else:
                 if confident or current:
                     ignored += 1
@@ -221,16 +236,19 @@ class SpeedRecognizer:
             runs.append(current)
 
         if not runs:
-            return SpeedReading(None, 0.0, 0.0, 0, f"no confident digits ({len(row)} glyphs)")
+            return reject(f"no confident digits ({len(row)} glyphs)")
         run = max(runs, key=len)
         if len(run) > MAX_DIGITS:
-            return SpeedReading(None, 0.0, 0.0, 0, f"digit run too long ({len(run)})")
+            return reject(f"digit run too long ({len(run)})")
 
-        text = "".join(label for label, _score, _margin in run)
-        score = min(s for _label, s, _margin in run)
-        margin = min(m for _label, _score, m in run)
+        text = "".join(label for _box, label, _score, _margin in run)
+        score = min(s for _box, _label, s, _margin in run)
+        margin = min(m for _box, _label, _score, m in run)
+        boxes = tuple(box for box, _label, _score, _margin in run)
         detail = f"{text} (ignored {ignored})" if ignored else text
-        return SpeedReading(int(text), score, margin, len(run), detail)
+        return SpeedReading(
+            int(text), score, margin, len(run), detail, frame=gray, mask=binary, boxes=boxes
+        )
 
 
 class SpeedFilter:

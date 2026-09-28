@@ -174,12 +174,20 @@ class _CaptureProducer(threading.Thread):
                         mask=ui,
                         speed_kmh=None,
                         speed_ok=False,
+                        speed_frame=None,
+                        speed_mask=None,
+                        speed_boxes=(),
                     )
                     if speed_roi and cap is not None and self.speed_sensor.available:
                         speed_frame = cap.grab_region(speed_roi)
                         kmh, ok = self.speed_sensor.update(speed_frame, item["ts"])
+                        reading = self.speed_sensor.last_reading
                         item["speed_kmh"] = kmh
                         item["speed_ok"] = ok
+                        if reading is not None:
+                            item["speed_frame"] = reading.frame
+                            item["speed_mask"] = reading.mask
+                            item["speed_boxes"] = reading.boxes
                     try:
                         self._queue.get_nowait()  # drop the stale frame
                     except queue.Empty:
@@ -388,6 +396,9 @@ class LiveLocator(threading.Thread):
                         good=False,
                         speed_kmh=None,
                         speed_ok=False,
+                        speed_frame=None,
+                        speed_mask=None,
+                        speed_boxes=(),
                         elapsed=0.0,
                         diag=dict(reject="capture_error", detail=f"Screen capture: {self.error}"),
                     )
@@ -484,6 +495,9 @@ class LiveLocator(threading.Thread):
                                     good=False,
                                     speed_kmh=item.get("speed_kmh"),
                                     speed_ok=bool(item.get("speed_ok", False)),
+                                    speed_frame=item.get("speed_frame"),
+                                    speed_mask=item.get("speed_mask"),
+                                    speed_boxes=item.get("speed_boxes", ()),
                                     elapsed=elapsed,
                                     diag=diag,
                                 )
@@ -542,6 +556,9 @@ class LiveLocator(threading.Thread):
                                 good=False,
                                 speed_kmh=item.get("speed_kmh"),
                                 speed_ok=bool(item.get("speed_ok", False)),
+                                speed_frame=item.get("speed_frame"),
+                                speed_mask=item.get("speed_mask"),
+                                speed_boxes=item.get("speed_boxes", ()),
                                 elapsed=elapsed,
                                 diag=d2,
                             )
@@ -558,6 +575,9 @@ class LiveLocator(threading.Thread):
                     good=good,
                     speed_kmh=item.get("speed_kmh"),
                     speed_ok=bool(item.get("speed_ok", False)),
+                    speed_frame=item.get("speed_frame"),
+                    speed_mask=item.get("speed_mask"),
+                    speed_boxes=item.get("speed_boxes", ()),
                     elapsed=elapsed,
                     diag=diag,
                 )

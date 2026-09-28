@@ -110,6 +110,61 @@ class TestRoiValidation(unittest.TestCase):
         self.assertEqual(self.saved, 1)
 
 
+class _FakeLocator:
+    def __init__(self) -> None:
+        self.speed_rois: list[list[int] | None] = []
+        self.mmap_rois: list[list[int]] = []
+
+    def set_speed_roi(self, roi) -> None:
+        self.speed_rois.append(roi)
+
+    def set_roi(self, roi) -> None:
+        self.mmap_rois.append(roi)
+
+
+class TestSpeedRoiValidation(unittest.TestCase):
+    def setUp(self):
+        self.cfg = AppConfig().to_dict()
+        self.saved = 0
+        self.loc = _FakeLocator()
+        self.tab = RoiTab(
+            None,
+            self.cfg,
+            save_cfg_fn=self._on_save,
+            screen_cap_supplier=lambda: None,
+            loc_thread_supplier=lambda: self.loc,
+        )
+
+    def _on_save(self):
+        self.saved += 1
+
+    def test_typed_speed_roi_is_validated_and_applied(self):
+        self.tab.speed_inputs["w"].setText("5")
+        self.tab.apply_speed_roi()
+        self.assertIn("Error:", self.tab.speed_status_lbl.text())
+        self.assertEqual(self.saved, 0)
+
+        for name, value in (("x", "640"), ("y", "20"), ("w", "60"), ("h", "30")):
+            self.tab.speed_inputs[name].setText(value)
+        self.tab.apply_speed_roi()
+        self.assertIn("OK:", self.tab.speed_status_lbl.text())
+        self.assertEqual(self.cfg["capture"]["speed_roi"], [640, 20, 60, 30])
+        self.assertEqual(self.loc.speed_rois[-1], [640, 20, 60, 30])
+        self.assertEqual(self.tab.speed_vars["w"].get(), "60")
+        self.assertEqual(self.saved, 1)
+
+    def test_disable_clears_speed_roi(self):
+        for name, value in (("x", "640"), ("y", "20"), ("w", "60"), ("h", "30")):
+            self.tab.speed_inputs[name].setText(value)
+        self.tab.apply_speed_roi()
+
+        self.tab.disable_speed_roi()
+
+        self.assertIsNone(self.cfg["capture"]["speed_roi"])
+        self.assertEqual(self.loc.speed_rois[-1], None)
+        self.assertEqual(self.tab.speed_status_lbl.text(), "disabled")
+
+
 class TestPresetSanitization(unittest.TestCase):
     def test_traversal_is_neutralized(self):
         manager = PresetManager()
