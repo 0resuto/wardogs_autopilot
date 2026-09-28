@@ -122,11 +122,20 @@ class VehicleModel:
         """Steering rate multiplier at a speed (>0)."""
         return max(1e-3, self._interp(self.steer_speed_curve, speed_kmh))
 
-    def yaw_rate_max_deg_s(self, speed_kmh: float) -> float:
-        """Maximum yaw rate (deg/s) from the model at the given speed."""
+    def yaw_rate_max_deg_s(self, speed_kmh: float, lat_accel_mps2: float | None = None) -> float:
+        """Maximum yaw rate (deg/s) from the model at the given speed.
+
+        The steering geometry (bicycle model) sets the kinematic ceiling, but
+        the tires cannot hold more than the lateral grip budget: above it the
+        real yaw rate is `a_lat / v`. Pass the budget to get the capped value.
+        """
         v = max(0.0, speed_kmh) / 3.6
         angle_rad = math.radians(self.steer_angle_max_deg) * self.steer_limit(speed_kmh)
-        return math.degrees(self.yaw_gain * v * math.tan(angle_rad) / self.wheelbase_m)
+        yaw = math.degrees(self.yaw_gain * v * math.tan(angle_rad) / self.wheelbase_m)
+        if lat_accel_mps2 is not None and lat_accel_mps2 > 0.0 and v > 1e-3:
+            grip_limit = math.degrees(lat_accel_mps2 / v)
+            yaw = min(yaw, grip_limit)
+        return yaw
 
     def corner_speed_kmh(self, radius_m: float, lat_accel_mps2: float) -> float:
         """Speed limit for a corner of the given radius (m/s^2 lateral budget)."""

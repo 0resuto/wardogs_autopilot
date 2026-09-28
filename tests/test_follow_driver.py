@@ -322,7 +322,7 @@ class TestVehicleAuthority(unittest.TestCase):
         nav = NavigatorConfig(**nav_kwargs)
         return FollowDriver(loc=None, pts=[(0.0, 0.0), (1.0, 0.0)], nav_cfg=nav, kb=None)
 
-    def test_profile_is_loaded_and_authority_scales_with_speed(self):
+    def test_profile_is_loaded_and_authority_is_grip_limited(self):
         driver = self._driver()
         self.assertIsNotNone(driver.vehicle_model)
         assert driver.vehicle_model is not None
@@ -331,7 +331,16 @@ class TestVehicleAuthority(unittest.TestCase):
         slow = driver._yaw_rate_max(5.0)
         fast = driver._yaw_rate_max(80.0)
         assert slow is not None and fast is not None
-        self.assertGreater(fast, slow)
+        self.assertGreater(slow, fast)
+
+    def test_authority_scales_with_lateral_budget(self):
+        low_budget = self._driver(corner_lat_g=0.2)
+        high_budget = self._driver(corner_lat_g=0.6)
+
+        slow = low_budget._yaw_rate_max(50.0)
+        fast = high_budget._yaw_rate_max(50.0)
+        assert slow is not None and fast is not None
+        self.assertAlmostEqual(fast / slow, 3.0, delta=1e-6)
 
     def test_profile_can_be_disabled(self):
         driver = self._driver(vehicle_profile="")
@@ -344,8 +353,8 @@ class TestVehicleAuthority(unittest.TestCase):
         assert base.vehicle_model is not None and tuned.vehicle_model is not None
         self.assertAlmostEqual(tuned.vehicle_model.yaw_gain, 2.0, delta=1e-9)
 
-        base_yaw = base._yaw_rate_max(50.0)
-        tuned_yaw = tuned._yaw_rate_max(50.0)
+        base_yaw = base._yaw_rate_max(5.0)
+        tuned_yaw = tuned._yaw_rate_max(5.0)
         assert base_yaw is not None and tuned_yaw is not None
         self.assertAlmostEqual(tuned_yaw, base_yaw * 2.0, delta=1e-6)
 

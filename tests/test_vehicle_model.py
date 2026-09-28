@@ -71,6 +71,25 @@ class TestUralProfile(unittest.TestCase):
         self.assertGreater(fast, slow)
         self.assertAlmostEqual(self.model.yaw_rate_max_deg_s(0.0), 0.0, delta=1e-9)
 
+    def test_yaw_rate_is_grip_limited(self):
+        speed_kmh = 50.0
+        v = speed_kmh / 3.6
+        lat = 0.35 * 9.80665
+
+        capped = self.model.yaw_rate_max_deg_s(speed_kmh, lat_accel_mps2=lat)
+        uncapped = self.model.yaw_rate_max_deg_s(speed_kmh)
+
+        self.assertAlmostEqual(capped, math.degrees(lat / v), delta=1e-6)
+        self.assertLess(capped, uncapped)
+
+    def test_low_speed_authority_stays_geometric(self):
+        lat = 0.35 * 9.80665
+        self.assertAlmostEqual(
+            self.model.yaw_rate_max_deg_s(5.0, lat_accel_mps2=lat),
+            self.model.yaw_rate_max_deg_s(5.0),
+            delta=1e-6,
+        )
+
     def test_corner_and_brake_helpers(self):
         self.assertAlmostEqual(
             self.model.corner_speed_kmh(50.0, 3.0),

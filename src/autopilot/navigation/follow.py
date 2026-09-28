@@ -333,10 +333,13 @@ class FollowDriver(threading.Thread):
         return self._kmh(self.path.mv)
 
     def _yaw_rate_max(self, speed_kmh: float) -> float | None:
-        """Model yaw-rate authority at a speed (None when no profile is loaded)."""
+        """Grip-limited yaw authority at a speed (None when no profile is loaded)."""
         if self.vehicle_model is None:
             return None
-        return self.vehicle_model.yaw_rate_max_deg_s(speed_kmh)
+        lat_accel = (
+            self.planner.lat_accel if self.planner is not None else self.nav_cfg.corner_lat_g * G
+        )
+        return self.vehicle_model.yaw_rate_max_deg_s(speed_kmh, lat_accel_mps2=lat_accel)
 
     def _route_target_kmh(self, mp: tuple[float, float]) -> float | None:
         """Planned corner/braking speed limit ahead (None when disabled)."""

@@ -1,6 +1,12 @@
-"""Steering controller with yaw-turn inertia and impulse micro-corrections."""
+"""Steering controller with yaw-turn inertia and impulse micro-corrections.
+
+Pulse durations get a light random jitter and micro-pulses vary by a tick, so
+the injected input does not look like perfectly periodic machine taps.
+"""
 
 from __future__ import annotations
+
+import random
 
 
 def wrap180(deg: float) -> float:
@@ -23,6 +29,7 @@ class SteeringController:
         pulse_on: int = 2,
         turn_deg: float = 25.0,
         hold_max: float = 8.0,
+        jitter: float = 0.1,
     ) -> None:
         self.dead = max(float(dead), 6.0)
         self.dead_off = max(float(dead_off), 2.0)
@@ -31,12 +38,14 @@ class SteeringController:
         self.w_est = float(w_est)
         self.t_min = float(t_min)
         self.t_max = float(t_max)
-        self.pulse_on = int(pulse_on)
+        self.pulse_on = max(1, int(pulse_on))
         self.turn_deg = float(turn_deg)
         self.hold_max = float(hold_max)
+        self.jitter = max(0.0, min(0.5, float(jitter)))
 
         self.steer = 0  # -1=A, 0=neutral, +1=D
         self.steer_ph = 0  # micro-pulse tick counter
+        self.micro_ticks = self.pulse_on  # length of the current micro-pulse
         self.micro = False  # micro-tap mode
         self.hold = False  # continuous steering on large errors
         self.hold_err0 = 0.0  # |err| at hold-mode engagement
@@ -55,6 +64,7 @@ class SteeringController:
         """Reset steering state to neutral."""
         self.steer = 0
         self.steer_ph = 0
+        self.micro_ticks = self.pulse_on
         self.micro = False
         self.hold = False
         self.hold_err0 = 0.0
@@ -96,6 +106,13 @@ class SteeringController:
             min(self.t_max, abs(err) * self.imp_k / rate),
         )
 
+    def _impulse_end(self, now: float, err: float, yaw_rate_max: float | None) -> float:
+        """Jittered impulse end time (hold mode keeps its fixed safety timeout)."""
+        if self.hold:
+            return now + self.hold_max
+        base = min(self.calc_impulse(abs(err), yaw_rate_max), self.t_max)
+        return now + base * random.uniform(1.0 - self.jitter, 1.0 + self.jitter)
+
     def step(
         self,
         now: float,
@@ -121,11 +138,7 @@ class SteeringController:
                     self.micro = False
                     self.hold = self.big_n >= 2
                     self.hold_err0 = abs(err)
-                    self.imp_end = now + (
-                        self.hold_max
-                        if self.hold
-                        else min(self.calc_impulse(abs(err), yaw_rate_max), self.t_max)
-                    )
+                    self.imp_end = self._impulse_end(now, err, yaw_rate_max)
                     self.press_t0 = now
                     self.press_h0 = heading
                     self.hold_t0 = now
@@ -134,11 +147,7 @@ class SteeringController:
                     self.micro = False
                     self.hold = self.big_n >= 2
                     self.hold_err0 = abs(err)
-                    self.imp_end = now + (
-                        self.hold_max
-                        if self.hold
-                        else min(self.calc_impulse(abs(err), yaw_rate_max), self.t_max)
-                    )
+                    self.imp_end = self._impulse_end(now, err, yaw_rate_max)
                     self.press_t0 = now
                     self.press_h0 = heading
                     self.hold_t0 = now
@@ -175,22 +184,24 @@ class SteeringController:
                 self.steer = 1
                 self.steer_ph = 0
                 self.micro = True
+                self.micro_ticks = random.choice((self.pulse_on, self.pulse_on + 1))
                 self.hold_t0 = now
                 self.settle_mh = mh_t
             elif err < -self.dead_off:
                 self.steer = -1
                 self.steer_ph = 0
                 self.micro = True
+                self.micro_ticks = random.choice((self.pulse_on, self.pulse_on + 1))
                 self.hold_t0 = now
                 self.settle_mh = mh_t
 
         press_steer = False
         if self.steer != 0:
             if self.micro:
-                if self.steer_ph < self.pulse_on:
+                if self.steer_ph < self.micro_ticks:
                     press_steer = True
                 self.steer_ph += 1
-                if self.steer_ph >= self.pulse_on:
+                if self.steer_ph >= self.micro_ticks:
                     self.force_release(now, mh_t)
             else:
                 press_steer = True
