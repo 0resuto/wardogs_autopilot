@@ -32,7 +32,7 @@ logger = get_logger("map_tab")
 
 
 class _StringVarCompat:
-    """Compatibility shim for tests checking Tkinter StringVar."""
+    """String holder mirroring the entry widgets for tests."""
 
     def __init__(self, value: str = "") -> None:
         self._val = str(value)

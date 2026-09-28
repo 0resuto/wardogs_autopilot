@@ -66,6 +66,5 @@ module = [
     "mss",
     "mss.*",
     "serial",
-    "PIL",
 ]
 ignore_missing_imports = true

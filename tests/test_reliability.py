@@ -20,6 +20,8 @@ from ctypes import wintypes
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import numpy as np
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if os.path.join(ROOT, "src") not in sys.path:
     sys.path.insert(0, os.path.join(ROOT, "src"))
@@ -136,6 +138,34 @@ class TestHardwareDrivers(unittest.TestCase):
         cap.close()
         self.assertIsNone(cap._sct)
         cap.close()
+
+    def test_screen_capture_grab_falls_back_on_bad_monitor_index(self):
+        cap = ScreenCapture.__new__(ScreenCapture)
+        cap.monitor_index = 99
+        cap.region = None
+        cap.monitors = [{"left": 0, "top": 0, "width": 10, "height": 10}]
+        recorded: dict[str, int] = {}
+
+        class _FakeSct:
+            def grab(self, monitor):
+                recorded.update(monitor)
+                return np.zeros((4, 4, 4), np.uint8)
+
+        cap._sct = _FakeSct()
+
+        frame = cap.grab()
+        self.assertEqual(frame.shape, (4, 4, 3))
+        self.assertEqual(recorded["left"], 0)
+
+    def test_screen_capture_grab_without_monitors_raises(self):
+        cap = ScreenCapture.__new__(ScreenCapture)
+        cap.monitor_index = 0
+        cap.region = None
+        cap.monitors = []
+        cap._sct = object()
+
+        with self.assertRaises(OSError):
+            cap.grab()
 
     def test_arduino_key_driver_drains_input_buffer(self):
         mock_ser = MagicMock()

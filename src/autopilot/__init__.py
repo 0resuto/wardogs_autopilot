@@ -7,7 +7,7 @@ Package layout
 - ``autopilot.hardware``   screen capture (mss) and Arduino key input
 - ``autopilot.vision``     map matching, tracker, and feature indexing
 - ``autopilot.navigation`` route-following autopilot (FollowDriver)
-- ``autopilot.ui``         Tkinter "studio" GUI
+- ``autopilot.ui``         PySide6 "studio" GUI
 """
 
 import os

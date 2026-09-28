@@ -33,7 +33,7 @@ MAX_KP_DRAW = 300
 
 
 class _StringVarCompat:
-    """Compatibility shim for Tkinter StringVar in tests."""
+    """String holder mirroring the entry widgets for tests."""
 
     def __init__(self, value: str = "") -> None:
         self._val = str(value)

@@ -4,7 +4,7 @@
 ![OpenCV](https://img.shields.io/badge/OpenCV-SIFT-5C3EE8.svg)
 ![Arduino](https://img.shields.io/badge/Arduino-ATmega32U4-00979D.svg)
 ![Pydantic](https://img.shields.io/badge/Pydantic-2.0+-E92063.svg)
-![Tkinter](https://img.shields.io/badge/GUI-Tkinter-FFD43B.svg)
+![PySide6](https://img.shields.io/badge/GUI-PySide6-41CD52.svg)
 
 Autonomous delivery autopilot for WARDOGS.
 This project captures the in-game minimap, localizes the vehicle on full game maps using offline SIFT feature indexes, and drives the supply truck with WASD/Space keystrokes injected through an Arduino Micro that emulates a USB HID keyboard.
@@ -12,7 +12,8 @@ This project captures the in-game minimap, localizes the vehicle on full game ma
 ## Features
 - **SIFT Feature Index Localization**: Radius-based search on multi-scale tile feature indexes (`*_feat.npz`), delivering ~0.2 px precision in ~1.5s cold start and sub-second tracking.
 - **Hardware-Level Input Injection**: Arduino Micro emulates real USB keyboard keypresses, bypassing OS-level software injection restrictions. 200 ms watchdog auto-releases keys on connection loss.
-- **Interactive Studio GUI**: Tkinter desktop studio with minimap ROI calibration, real-time map viewer with pan/zoom, visual waypoint route editor, map cache & SIFT index management, and global hotkeys (**F6** toggle follow, **F7** emergency stop).
+- **Interactive Studio GUI**: PySide6 desktop studio with minimap ROI calibration, real-time map viewer with pan/zoom, visual waypoint route editor, map cache & SIFT index management, and global hotkeys (**F6** toggle follow, **F7** emergency stop).
+- **HUD Speed OCR**: reads the in-game speedometer from its own ROI using a digit atlas rendered from the game font (no OCR dependency); the final stop trusts the measured speed over the position-derived estimate.
 - **Multi-Map Support**: Three game maps (Zestafona, Bakurani, Ozeti) with automatic mipmap pyramids and grayscale signature tracking for cache invalidation.
 - **Vote-Gated Relocalization**: Configurable inlier voting across multiple frames prevents false-positive jumps during map matching.
 
@@ -48,7 +49,7 @@ flowchart LR
         Locator["SIFT Matcher<br/>FeatureIndex"]
         Tracker["Position Tracker<br/>LiveLocator thread"]
         Nav["Navigation<br/>FollowDriver"]
-        UI["Studio GUI<br/>Tkinter"]
+        UI["Studio GUI<br/>PySide6"]
 
         Locator -->|Pose + heading| Tracker
         Tracker -->|Position stream| Nav
@@ -95,14 +96,15 @@ wardogs-autopilot/
 ├── data/
 │   ├── maps/                   # Map catalog, SIFT indexes (*_feat.npz), mipmaps
 │   ├── masks/                  # Minimap static mask (mm_mask.png)
+│   ├── hud/                    # Barlow font + digit atlas for the speed OCR
 │   └── presets/                # Saved waypoint route JSON presets
 ├── src/autopilot/              # Main application package
 │   ├── common/                 # Typed config (Pydantic), logging & crash reporting
 │   ├── hardware/               # ScreenCapture (mss) & ArduinoKeyDriver (serial)
 │   ├── navigation/             # FollowDriver, PathTracker, Speed & Steering controllers
-│   ├── ui/                     # Tkinter studio GUI, interactive canvas, tab controllers
-│   └── vision/                 # MapStore, FeatureIndex, SIFT matcher, position tracker
-├── tests/                      # 33 unit & regression tests
+│   ├── ui/                     # PySide6 studio GUI, interactive map view, tab controllers
+│   └── vision/                 # MapStore, FeatureIndex, SIFT matcher, tracker, speed OCR
+├── tests/                      # 90+ unit & regression tests
 └── tools/                      # Developer CLI utilities
     ├── download_map.py         # Map asset downloader from GitHub Releases
     ├── nav_dbg.py              # Navigation trace inspector & tailer
@@ -114,7 +116,7 @@ wardogs-autopilot/
 - **Vision**: Python 3.11, OpenCV (SIFT), NumPy
 - **Hardware**: Arduino Micro (ATmega32U4), PySerial
 - **Capture**: mss (multi-monitor screen grab)
-- **GUI**: Tkinter
+- **GUI**: PySide6 (Qt)
 - **Config & Validation**: Pydantic 2.0
 - **Testing**: Pytest, Ruff, mypy
 
@@ -193,7 +195,7 @@ The Python driver communicates with the Arduino Micro over USB Serial (115200 ba
 ## Running Tests
 
 ```bash
-# Full test suite (33 tests):
+# Full test suite:
 pytest
 
 # Lint & code quality:

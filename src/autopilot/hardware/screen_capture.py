@@ -55,8 +55,11 @@ class ScreenCapture:
     def grab(self) -> np.ndarray:
         """BGR (HxWx3). Without ROI - the whole target monitor."""
         if self.region is None:
-            mon = self.monitors[self.monitor_index]
-            raw = self._sct.grab(mon)
+            monitors = self.monitors or []
+            if not monitors:
+                raise OSError("screen capture: no monitors reported by mss")
+            index = self.monitor_index if 0 <= self.monitor_index < len(monitors) else 0
+            raw = self._sct.grab(monitors[index])
         else:
             raw = self._sct.grab(self.region)
         return np.array(raw)[:, :, :3].copy()

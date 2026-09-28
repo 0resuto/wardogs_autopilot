@@ -172,15 +172,6 @@ class NavigatorConfig(BaseModel):
     last_preset: str = Field(default="")
 
 
-class WindowConfig(BaseModel):
-    """Tkinter window geometry and state."""
-
-    model_config = ConfigDict(extra="allow")
-
-    geometry: str = Field(default="1030x932+3374+396")
-    zoomed: bool = Field(default=False)
-
-
 class DebugConfig(BaseModel):
     """Debugging options."""
 
@@ -198,7 +189,6 @@ class AppConfig(BaseModel):
     locator: LocatorConfig = Field(default_factory=LocatorConfig)
     map: MapConfig = Field(default_factory=MapConfig)
     navigator: NavigatorConfig = Field(default_factory=NavigatorConfig)
-    window: WindowConfig = Field(default_factory=WindowConfig)
     debug: DebugConfig = Field(default_factory=DebugConfig)
     cfg_path: str = Field(default="config.json", alias="_cfg_path")
 
