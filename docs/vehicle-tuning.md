@@ -64,6 +64,20 @@ running autopilot live and writes them to `config.json`.
 3. A comfortable truck default is around `lat g` 0.3-0.4 and `brake g`
    0.4-0.5; adjust from there.
 
+## Automatic fitting
+
+After a few logged runs:
+
+```bash
+python tools/calibrate_vehicle.py output/nav_dbg_*.jsonl
+python tools/calibrate_vehicle.py output/nav_dbg_*.jsonl --write
+```
+
+The report gives `px_per_m`, measured/suggested `brake_g` and a suggested
+`yaw_gain`; `--write` stores the suggestions into `config.json` (`yaw_gain`
+and `brake_g`, atomically). `px_per_m` is informational: the runtime keeps
+estimating the scale by itself.
+
 ## Log fields worth watching
 
 `ocr` (measured km/h), `plan_kmh` (planned limit), `tgt` (final target px/s),
