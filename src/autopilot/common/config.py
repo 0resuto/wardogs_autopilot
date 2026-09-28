@@ -13,6 +13,16 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from .. import PROJECT_ROOT
+
+
+def resolve_config_path(path: str | Path) -> Path:
+    """Absolute config path: relative paths are rooted at the project root."""
+    candidate = Path(path)
+    if not candidate.is_absolute():
+        candidate = Path(PROJECT_ROOT) / candidate
+    return candidate
+
 
 class CaptureConfig(BaseModel):
     """Minimap capture and monitor settings."""
@@ -198,8 +208,13 @@ class AppConfig(BaseModel):
 
     @classmethod
     def load(cls, path: str | Path = "config.json") -> AppConfig:
-        """Load and validate configuration from a JSON file."""
-        cfg_path = Path(path)
+        """Load and validate configuration from a JSON file.
+
+        Relative paths are resolved against the project root (where
+        config.json lives), so the app behaves the same regardless of the
+        working directory.
+        """
+        cfg_path = resolve_config_path(path)
         with open(cfg_path, encoding="utf-8") as f:
             data = json.load(f)
         cfg = cls.model_validate(data)

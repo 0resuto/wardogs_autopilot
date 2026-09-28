@@ -1,10 +1,40 @@
 """Unit tests for Pydantic configuration schema and logging setup."""
 
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
-from autopilot.common.config import AppConfig, CaptureConfig, LocatorConfig
+from autopilot.common.config import (
+    AppConfig,
+    CaptureConfig,
+    LocatorConfig,
+    resolve_config_path,
+)
 from autopilot.common.log import get_logger, setup_logging
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_relative_config_path_is_rooted_at_project_root():
+    """A relative --config path always points into the project root."""
+    assert resolve_config_path("config.json") == ROOT / "config.json"
+
+    absolute = ROOT / "output" / "other.json"
+    assert resolve_config_path(absolute) == absolute
+
+
+def test_config_roundtrip_to_custom_path(tmp_path):
+    """load/save keep using the same (custom) file instead of config.json."""
+    target = tmp_path / "custom.json"
+    AppConfig().save(target)
+
+    cfg = AppConfig.load(target)
+    assert Path(cfg.cfg_path) == target
+
+    cfg.capture.fps = 33
+    cfg.save()
+    assert AppConfig.load(target).capture.fps == 33
 
 
 def test_app_config_load():

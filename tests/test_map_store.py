@@ -1,8 +1,10 @@
 """Regression tests for MapStore: feature-index cache lifecycle and rebuilds."""
 
+import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -87,6 +89,23 @@ class TestIndexLifecycle(unittest.TestCase):
         with patch.object(map_store_mod, "load_index", self._fake_load_index):
             idx = self.store.get_index()
         self.assertEqual(idx.name, "zestafona")
+
+    def test_set_config_path_reads_other_file(self):
+        cfg_file = os.path.join(self.tmp.name, "custom.json")
+        with open(cfg_file, "w", encoding="utf-8") as fh:
+            json.dump({"locator": {"global_max_features": 12345}}, fh)
+
+        self.store.set_config_path(cfg_file)
+        self.assertEqual(self.store.config_path(), os.path.abspath(cfg_file))
+        self.assertEqual(self.store.loc_cfg()["global_max_features"], 12345)
+
+        time.sleep(0.02)
+        with open(cfg_file, "w", encoding="utf-8") as fh:
+            json.dump({"locator": {"global_max_features": 54321}}, fh)
+        self.assertEqual(self.store.loc_cfg()["global_max_features"], 54321)
+
+        self.store.set_config_path(None)
+        self.assertTrue(self.store.config_path().endswith("config.json"))
 
     def test_failed_rebuild_restores_active_map(self):
         self.store.set_map("zestafona")

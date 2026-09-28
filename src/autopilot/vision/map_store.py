@@ -16,7 +16,7 @@ import cv2
 import numpy as np
 
 from .. import PROJECT_ROOT
-from ..common.config import AppConfig, LocatorConfig, MapConfig
+from ..common.config import AppConfig, LocatorConfig, MapConfig, resolve_config_path
 from ..common.log import get_logger
 from .featureindex import _INDEX_NORM, load_index
 
@@ -38,17 +38,29 @@ class MapStore:
         full_dir: str = FULL_DIR,
         data_maps_dir: str = DATA_MAPS,
         default_map: str = "zestafona",
+        config_path: str | None = None,
     ) -> None:
         self.full_dir = full_dir
         self.data_maps_dir = data_maps_dir
         self._cur_name = default_map
+        self._config_path = str(
+            resolve_config_path(config_path or os.path.join(ROOT, "config.json"))
+        )
         self._map_lock = threading.Lock()
         self._cache_lock = threading.Lock()
 
         self._g: dict[str, Any] = {"mu": None, "ms": 2.6544}
         self._color_map_cache: dict[str, Any] = {"name": None, "img": None}
-        self._loc_cfg_cache: tuple[float | None, dict[str, Any] | None] = (None, None)
-        self._map_cfg_cache: tuple[float | None, dict[str, Any] | None] = (None, None)
+        self._loc_cfg_cache: tuple[str | None, float | None, dict[str, Any] | None] = (
+            None,
+            None,
+            None,
+        )
+        self._map_cfg_cache: tuple[str | None, float | None, dict[str, Any] | None] = (
+            None,
+            None,
+            None,
+        )
 
     # ---------- Path helpers ----------
 
@@ -125,40 +137,55 @@ class MapStore:
 
     # ---------- Config caches ----------
 
+    def set_config_path(self, path: str | None) -> None:
+        """Point the store at another config file (e.g. a --config path)."""
+        new_path = str(resolve_config_path(path or os.path.join(ROOT, "config.json")))
+        if new_path == self._config_path:
+            return
+        self._config_path = new_path
+        self._loc_cfg_cache = (None, None, None)
+        self._map_cfg_cache = (None, None, None)
+
+    def config_path(self) -> str:
+        """Absolute path of the config file this store reads settings from."""
+        return self._config_path
+
     def loc_cfg(self) -> dict[str, Any]:
-        """'locator' block of config.json, cached by file mtime."""
-        path = os.path.join(ROOT, "config.json")
+        """'locator' block of the active config file, cached by path + mtime."""
+        path = self._config_path
         mtime = None
         try:
             mtime = os.path.getmtime(path)
         except OSError:
             pass
-        if self._loc_cfg_cache[0] == mtime and self._loc_cfg_cache[1] is not None:
-            return self._loc_cfg_cache[1]
+        cache = self._loc_cfg_cache
+        if cache[0] == path and cache[1] == mtime and cache[2] is not None:
+            return cache[2]
 
         try:
             cfg = AppConfig.load(path).locator.model_dump()
         except Exception:
             cfg = LocatorConfig().model_dump()
-        self._loc_cfg_cache = (mtime, cfg)
+        self._loc_cfg_cache = (path, mtime, cfg)
         return cfg
 
     def map_cfg(self) -> dict[str, Any]:
-        """'map' block of config.json, cached by file mtime."""
-        path = os.path.join(ROOT, "config.json")
+        """'map' block of the active config file, cached by path + mtime."""
+        path = self._config_path
         mtime = None
         try:
             mtime = os.path.getmtime(path)
         except OSError:
             pass
-        if self._map_cfg_cache[0] == mtime and self._map_cfg_cache[1] is not None:
-            return self._map_cfg_cache[1]
+        cache = self._map_cfg_cache
+        if cache[0] == path and cache[1] == mtime and cache[2] is not None:
+            return cache[2]
 
         try:
             cfg = AppConfig.load(path).map.model_dump()
         except Exception:
             cfg = MapConfig().model_dump()
-        self._map_cfg_cache = (mtime, cfg)
+        self._map_cfg_cache = (path, mtime, cfg)
         return cfg
 
     def gray_sig(self) -> str:

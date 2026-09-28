@@ -6,7 +6,6 @@ and the three primary tabs: Capture Zone (ROI), Map Diagnostics, and Routes.
 
 from __future__ import annotations
 
-import os
 import sys
 import threading
 from typing import Any
@@ -24,7 +23,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import PROJECT_ROOT
 from ..common.config import (
     AppConfig,
     CaptureConfig,
@@ -73,6 +71,7 @@ class App(QMainWindow):
         self.resize(1100, 850)
 
         self._map_store = locator.get_store()
+        self._map_store.set_config_path(self.app_cfg.cfg_path)
         self._map_name = self._cfg_map_name()
         locator.set_map(self._map_name)
 
@@ -306,8 +305,9 @@ class App(QMainWindow):
             self.routes_tab.emergency_stop()
 
     def _save_cfg(self) -> None:
+        target = self.app_cfg.cfg_path
         try:
-            app_cfg = AppConfig.load("config.json")
+            app_cfg = AppConfig.load(target)
             if "capture" in self.cfg and isinstance(self.cfg["capture"], dict):
                 app_cfg.capture = CaptureConfig(**self.cfg["capture"])
             if "locator" in self.cfg and isinstance(self.cfg["locator"], dict):
@@ -318,9 +318,9 @@ class App(QMainWindow):
                 app_cfg.navigator = NavigatorConfig(**self.cfg["navigator"])
             if "debug" in self.cfg and isinstance(self.cfg["debug"], dict):
                 app_cfg.debug = DebugConfig(**self.cfg["debug"])
-            app_cfg.save("config.json")
+            app_cfg.save(target)
         except Exception:
-            atomic_write_json(os.path.join(PROJECT_ROOT, "config.json"), self.cfg)
+            atomic_write_json(target, self.cfg)
 
     def closeEvent(self, event: Any) -> None:
         self._hotkeys.stop()

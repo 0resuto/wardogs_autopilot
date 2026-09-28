@@ -8,6 +8,7 @@ full main window with map loading and the locator thread stubbed out.
 
 import os
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -19,7 +20,7 @@ if os.path.join(ROOT, "src") not in sys.path:
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from autopilot.common.config import AppConfig  # noqa: E402
+from autopilot.common.config import AppConfig, CaptureConfig  # noqa: E402
 from autopilot.ui.presets import PresetManager  # noqa: E402
 from autopilot.ui.tabs.map_tab import MapTab  # noqa: E402
 from autopilot.ui.tabs.roi_tab import RoiTab  # noqa: E402
@@ -203,6 +204,31 @@ class TestAppSmoke(unittest.TestCase):
                 self.assertIsNotNone(app._hotkeys)
             finally:
                 app.close()
+
+    def test_app_saves_to_the_loaded_config_path(self):
+        from autopilot.ui.app import App
+        from autopilot.vision import locator
+        from autopilot.vision.tracker import LiveLocator
+
+        with tempfile.TemporaryDirectory() as tmp:
+            target = os.path.join(tmp, "custom.json")
+            AppConfig(capture=CaptureConfig(fps=11)).save(target)
+            cfg = AppConfig.load(target).to_dict()
+
+            with (
+                patch.object(LiveLocator, "start", lambda _self: None),
+                patch.object(App, "_load_map_worker", lambda _self, _name: None),
+            ):
+                app = App(cfg)
+                try:
+                    self.assertEqual(locator.get_store().config_path(), os.path.abspath(target))
+                    app.cfg["capture"]["fps"] = 17
+                    app._save_cfg()
+                finally:
+                    app.close()
+                    locator.get_store().set_config_path(None)
+
+            self.assertEqual(AppConfig.load(target).capture.fps, 17)
 
 
 if __name__ == "__main__":
