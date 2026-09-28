@@ -68,11 +68,26 @@ logger = get_logger("locator")
 
 DEFAULT_MAX_KP = 1200
 FAST_BUDGET_FRAC = 0.4
+# OpenCV's BFMatcher packs every train row index into 18 bits (1 << 18), so
+# knnMatch aborts once a candidate set reaches 262144 descriptors. A growing
+# radius search on a dense map can collect that many: thin oversized sets
+# before matching (this cv2.error used to kill the tracker thread).
+BF_MAX_TRAIN_DESC = 200_000
 
 
 def _over(t0: float, budget: float | None) -> bool:
     """Check whether frame time budget has elapsed."""
     return budget is not None and (time.time() - t0) > budget
+
+
+def _subsample_train(
+    pts: np.ndarray, desc: np.ndarray, cap: int | None = None
+) -> tuple[np.ndarray, np.ndarray]:
+    """Uniformly thin a train set, keeping points and descriptors aligned."""
+    if cap is None:
+        cap = BF_MAX_TRAIN_DESC
+    idx = np.unique(np.linspace(0, len(desc) - 1, cap).astype(np.intp))
+    return np.asarray(pts)[idx], np.asarray(desc)[idx]
 
 
 def _mark_search(
@@ -207,6 +222,8 @@ class MapLocator:
             n_tried += 1
             if d2 is None or len(d2) < 2:
                 continue
+            if len(d2) > BF_MAX_TRAIN_DESC:
+                pts, d2 = _subsample_train(pts, d2)
             kn = self.bf.knnMatch(d1, d2, k=2)
             good = [g for g, n in kn if g.distance < ratio * n.distance]
             if len(good) < 4:

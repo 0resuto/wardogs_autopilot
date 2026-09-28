@@ -115,6 +115,22 @@ class TestMapView(unittest.TestCase):
         self.assertAlmostEqual(center.x(), 500.0, delta=2.0)
         self.assertAlmostEqual(center.y(), 500.0, delta=2.0)
 
+    def test_center_button_toggles_follow_mode(self):
+        widget = InteractiveMapWidget(map_size=1000, thumb=8)
+        calls: list[int] = []
+        widget.set_on_center(lambda: calls.append(1))
+        self.assertFalse(widget.is_follow_centered())
+
+        widget.btn_center.setChecked(True)
+        self.assertTrue(widget.is_follow_centered())
+        self.assertEqual(calls, [1])
+        self.assertEqual(widget.btn_center.text(), "🎯 Following")
+
+        widget.btn_center.setChecked(False)
+        self.assertFalse(widget.is_follow_centered())
+        self.assertEqual(calls, [1])
+        self.assertEqual(widget.btn_center.text(), "🎯 Center")
+
     def test_route_mode_toggle(self):
         widget = InteractiveMapWidget(map_size=1000, thumb=8, enable_route_editing=True)
         self.assertTrue(widget.view._route_edit_mode)

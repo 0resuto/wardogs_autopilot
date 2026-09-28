@@ -108,6 +108,37 @@ class TestTuningValidation(unittest.TestCase):
         self.assertIn("Invalid VEH lat g", self.tab.tune_status.text())
         self.assertEqual(self.saved, 0)
 
+    def test_corridor_values_apply_and_validate(self):
+        self.tab.tune_inputs["xte_m"].setText("6")
+        self.tab.tune_inputs["xte_outer_m"].setText("15")
+        self.tab.tune_inputs["steer_look_s"].setText("1.2")
+        self.tab.tune_inputs["settle_s"].setText("0.5")
+        self.tab.apply_tune()
+
+        self.assertIn("applied", self.tab.tune_status.text())
+        self.assertEqual(self.tab.cfg["navigator"]["xte_m"], 6)
+        self.assertEqual(self.tab.cfg["navigator"]["xte_outer_m"], 15)
+        self.assertEqual(self.tab.cfg["navigator"]["steer_look_s"], 1.2)
+        self.assertEqual(self.tab.cfg["navigator"]["settle_s"], 0.5)
+
+        self.tab.tune_inputs["xte_outer_m"].setText("5")
+        self.tab.apply_tune()
+
+        self.assertIn("Invalid COR outer", self.tab.tune_status.text())
+
+    def test_corner_window_requires_max_above_min(self):
+        self.tab.tune_inputs["corner_min_kmh"].setText("12")
+        self.tab.tune_inputs["corner_max_kmh"].setText("25")
+        self.tab.apply_tune()
+
+        self.assertIn("applied", self.tab.tune_status.text())
+        self.assertEqual(self.tab.cfg["navigator"]["corner_max_kmh"], 25)
+
+        self.tab.tune_inputs["corner_max_kmh"].setText("10")
+        self.tab.apply_tune()
+
+        self.assertIn("Invalid VEH max km/h", self.tab.tune_status.text())
+
 
 class TestRoiValidation(unittest.TestCase):
     def setUp(self):

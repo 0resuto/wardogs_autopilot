@@ -90,22 +90,42 @@ class DigitAtlas:
 
     def match(self, cell: np.ndarray, jitter: int = 2) -> tuple[str, float, float]:
         """Best label, its correlation score and the margin to the runner-up."""
-        padded = cv2.copyMakeBorder(
-            cell, jitter, jitter, jitter, jitter, cv2.BORDER_CONSTANT, value=0
-        )
-        best_label = ""
-        best = -1.0
-        second = -1.0
-        for label, templ in zip(self.labels, self.cells, strict=True):
-            result = cv2.matchTemplate(padded, templ, cv2.TM_CCOEFF_NORMED)
-            score = float(result.max())
-            if score > best:
-                second = best
-                best = score
-                best_label = label
-            elif score > second:
-                second = score
-        return best_label, best, best - second
+        return self.match_batch([cell], jitter)[0]
+
+    def match_batch(
+        self, cells: list[np.ndarray], jitter: int = 2
+    ) -> list[tuple[str, float, float]]:
+        """Match many canonical glyph cells against the atlas in one pass per label.
+
+        Matching each glyph with its own 36 matchTemplate calls dominated the
+        frame cost whenever the ROI held no digits: segmentation then yields
+        several texture glyphs instead of 2-3 digits, so the batch keeps the
+        atlas pass count constant (36 calls per frame, not 36 per glyph) and a
+        digit-less frame costs about the same as a readable one.
+        """
+        if not cells:
+            return []
+        padded = [
+            cv2.copyMakeBorder(cell, jitter, jitter, jitter, jitter, cv2.BORDER_CONSTANT, value=0)
+            for cell in cells
+        ]
+        slot = GLYPH_W + 2 * jitter
+        strip = np.hstack(padded)
+        wins = 2 * jitter + 1
+        scores = np.empty((len(self.labels), len(cells)), np.float32)
+        for i, templ in enumerate(self.cells):
+            result = cv2.matchTemplate(strip, templ, cv2.TM_CCOEFF_NORMED)
+            for j in range(len(cells)):
+                base = j * slot
+                scores[i, j] = result[:, base : base + wins].max()
+        matches: list[tuple[str, float, float]] = []
+        for j in range(len(cells)):
+            column = scores[:, j]
+            best_i = int(np.argmax(column))
+            best = float(column[best_i])
+            second = float(np.max(np.delete(column, best_i))) if column.size > 1 else -1.0
+            matches.append((self.labels[best_i], best, best - second))
+        return matches
 
 
 @dataclass(frozen=True)
@@ -216,13 +236,15 @@ class SpeedRecognizer:
         if not row:
             return reject("no glyphs")
 
+        cells: list[np.ndarray] = []
+        for x, y, w, h in row:
+            crop = gray[max(0, y - 1) : y + h + 1, max(0, x - 1) : x + w + 1]
+            cells.append(fit_glyph(crop))
+
         runs: list[list[LabeledGlyph]] = []
         current: list[LabeledGlyph] = []
         ignored = 0
-        for box in row:
-            x, y, w, h = box
-            crop = gray[max(0, y - 1) : y + h + 1, max(0, x - 1) : x + w + 1]
-            label, score, margin = self.atlas.match(fit_glyph(crop))
+        for box, (label, score, margin) in zip(row, self.atlas.match_batch(cells), strict=True):
             confident = score >= self.min_score and margin >= self.min_margin
             if confident and label in DIGITS:
                 current.append((box, label, score, margin))

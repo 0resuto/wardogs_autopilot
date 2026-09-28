@@ -134,8 +134,8 @@ class TestFinalWaypointStop(unittest.TestCase):
             self.assertTrue(driver.is_alive())
             self.assertEqual(driver.state, "final_stop")
 
-            recover_until = time.time() + 0.9
-            while time.time() < recover_until and driver.is_alive():
+            recover_until = time.time() + 3.0
+            while time.time() < recover_until and driver.is_alive() and driver.state != "finished":
                 publish(1000.0, good=True)
                 time.sleep(0.005)
             time.sleep(0.2)
@@ -194,8 +194,8 @@ class TestFinalWaypointStop(unittest.TestCase):
             self.assertTrue(driver.is_alive())
             self.assertEqual(driver.state, "final_stop")
 
-            stop_until = time.time() + 0.5
-            while time.time() < stop_until and driver.is_alive():
+            stop_until = time.time() + 3.0
+            while time.time() < stop_until and driver.is_alive() and driver.state != "finished":
                 publish(1000.0, False, 0, True)
                 time.sleep(0.005)
             time.sleep(0.2)
@@ -205,6 +205,57 @@ class TestFinalWaypointStop(unittest.TestCase):
 
         self.assertEqual(errors, [])
         self.assertEqual(driver.state, "finished")
+
+
+class TestStaleMeasuredPose(unittest.TestCase):
+    def test_frozen_hold_pose_releases_the_wheel(self):
+        """The tracker republishes a frozen position with a fresh frame ts and
+        good=False during a capture void; the wheel must not stay locked."""
+        loc = _FakeLocator()
+        kb = _FakeKeyboard()
+        nav = NavigatorConfig(arrive_r=25.0, poll=0.01, settle_s=0.1)
+        driver = FollowDriver(loc=loc, pts=[(0.0, 0.0), (100000.0, 0.0)], nav_cfg=nav, kb=kb)
+
+        def publish(x: float, th: float, good: bool) -> None:
+            now = time.time()
+            loc.latest = dict(
+                ts=now,
+                pose=dict(th=th, s=1.0, inl=20),
+                map_px=(x, 0.0),
+                good=good,
+            )
+
+        try:
+            driver.start()
+            t0 = time.time()
+            while time.time() - t0 < 2.0:
+                publish(100.0 + 40.0 * (time.time() - t0), 90.0, True)
+                time.sleep(0.005)
+            # drive against the route -> the motion course gives a big error
+            hold_start = time.time()
+            while time.time() - hold_start < 1.2:
+                publish(200.0 - 40.0 * (time.time() - hold_start), 210.0, True)
+                time.sleep(0.005)
+            steered = any(e[0] == "keys" and ("A" in e[1] or "D" in e[1]) for e in kb.events)
+            self.assertTrue(steered)
+
+            # freeze: fresh frame timestamps, frozen position, good=False
+            kb.events.clear()
+            freeze_start = time.time()
+            while time.time() - freeze_start < 0.9:  # let the measured pose go stale
+                publish(200.0, 210.0, False)
+                time.sleep(0.005)
+
+            kb.events.clear()
+            late_start = time.time()
+            while time.time() - late_start < 0.5:
+                publish(200.0, 210.0, False)
+                time.sleep(0.005)
+        finally:
+            driver.stop()
+
+        late_steer = [e for e in kb.events if e[0] == "keys" and ("A" in e[1] or "D" in e[1])]
+        self.assertEqual(late_steer, [])
 
 
 class TestStopDecision(unittest.TestCase):
@@ -315,6 +366,24 @@ class TestSpeedPlanning(unittest.TestCase):
         self.assertIsNone(driver.planner)
         self.assertIsNone(driver._route_target_kmh((0.0, 0.0)))
 
+    def test_planner_caps_cruise_instead_of_vertex_braking(self):
+        driver = self._driver()
+        driver.speed_ctrl._vmax_px = 90.0
+
+        tgt = driver._speed_target(56.0, 55.0)
+
+        self.assertAlmostEqual(tgt, driver.speed_ctrl.from_kmh(55.0), delta=1e-6)
+        self.assertGreater(tgt, driver.speed_ctrl.v_min)
+
+    def test_legacy_vertex_heuristic_without_planner(self):
+        driver = self._driver(speed_profile=False)
+        driver.speed_ctrl._vmax_px = 90.0
+
+        tgt = driver._speed_target(56.0, None)
+
+        self.assertEqual(tgt, driver.speed_ctrl.calc_target_speed(56.0))
+        self.assertEqual(tgt, driver.speed_ctrl.v_min)
+
 
 class TestVehicleAuthority(unittest.TestCase):
     @staticmethod
@@ -372,12 +441,90 @@ class TestVehicleAuthority(unittest.TestCase):
         self.assertAlmostEqual(driver.planner.brake_decel, 0.8 * G, delta=1e-6)
         self.assertAlmostEqual(driver.planner.min_speed_kmh, 20.0, delta=1e-6)
 
+    def test_corner_window_is_wired_from_config(self):
+        driver = self._driver()
+
+        self.assertAlmostEqual(driver.speed_ctrl.corner_min_kmh, 12.0, delta=1e-9)
+        self.assertAlmostEqual(driver.speed_ctrl.corner_max_kmh, 22.0, delta=1e-9)
+
+        driver.apply_vehicle_tuning(NavigatorConfig(corner_min_kmh=15.0, corner_max_kmh=28.0))
+
+        self.assertAlmostEqual(driver.speed_ctrl.corner_min_kmh, 15.0, delta=1e-9)
+        self.assertAlmostEqual(driver.speed_ctrl.corner_max_kmh, 28.0, delta=1e-9)
+
+    def test_steer_settle_is_wired_and_live_tunable(self):
+        driver = self._driver()
+
+        self.assertAlmostEqual(driver.steer_ctrl.settle_t, 0.6, delta=1e-9)
+
+        driver.apply_vehicle_tuning(NavigatorConfig(settle_s=0.35))
+
+        self.assertAlmostEqual(driver.steer_ctrl.settle_t, 0.35, delta=1e-9)
+
+    def test_corridor_tuning_updates_the_path_live(self):
+        driver = self._driver()
+
+        driver.apply_vehicle_tuning(NavigatorConfig(xte_m=6.0, xte_outer_m=18.0, steer_look_s=1.1))
+
+        self.assertAlmostEqual(driver.xte_m, 6.0, delta=1e-9)
+        self.assertAlmostEqual(driver.xte_outer_m, 18.0, delta=1e-9)
+        self.assertAlmostEqual(driver.steer_look_s, 1.1, delta=1e-9)
+        self.assertAlmostEqual(driver.path.xte_m, 6.0, delta=1e-9)
+        self.assertAlmostEqual(driver.path.xte_outer_m, 18.0, delta=1e-9)
+        self.assertAlmostEqual(driver.path.steer_look_s, 1.1, delta=1e-9)
+
+    def test_smooth_heading_rejects_unphysical_steps(self):
+        driver = self._driver()
+        driver._heading = 0.0
+        driver._last_heading_t = 100.0
+
+        heading = driver._smooth_heading(60.0, 100.05, 45.0)
+
+        self.assertLess(abs(heading), 5.0)
+
+    def test_smooth_heading_tracks_a_plausible_turn(self):
+        driver = self._driver()
+        driver._heading = 0.0
+        driver._last_heading_t = 100.0
+        heading = 0.0
+        for i in range(10):
+            heading = driver._smooth_heading(heading + 2.0, 100.05 + i * 0.05, 45.0)
+
+        self.assertGreater(heading, 6.0)
+
     def test_speed_estimate_prefers_fresh_ocr(self):
         driver = self._driver()
         driver._speed_kmh = 42.0
         driver._last_speed_t = 100.0
 
         self.assertAlmostEqual(driver._speed_kmh_estimate(100.5), 42.0, delta=1e-6)
+
+
+class TestRouteEntrySnap(unittest.TestCase):
+    def test_engage_mid_route_targets_the_nearest_point(self):
+        loc = _FakeLocator()
+        kb = _FakeKeyboard()
+        nav = NavigatorConfig(arrive_r=5.0, poll=0.01)
+        pts = [(0.0, 0.0), (100.0, 0.0), (200.0, 0.0), (300.0, 0.0)]
+        driver = FollowDriver(loc=loc, pts=pts, nav_cfg=nav, kb=kb)
+
+        try:
+            driver.start()
+            t0 = time.time()
+            while time.time() - t0 < 2.0 and driver.path.idx != 1:
+                now = time.time()
+                loc.latest = dict(
+                    ts=now,
+                    pose=dict(th=90.0, s=1.0, inl=20),
+                    map_px=(90.0, 0.0),
+                    good=True,
+                )
+                time.sleep(0.005)
+            idx = driver.path.idx
+        finally:
+            driver.stop()
+
+        self.assertEqual(idx, 1)
 
 
 class TestKeyboardCleanup(unittest.TestCase):

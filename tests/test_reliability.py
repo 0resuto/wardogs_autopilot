@@ -202,7 +202,7 @@ class TestHardwareDrivers(unittest.TestCase):
 
 class TestHotkeyManager(unittest.TestCase):
     @staticmethod
-    def _fake_windll(pending, registered, unregistered):
+    def _fake_windll(pending, registered, unregistered, register_ok=None):
         def get_message(lpmsg, _hwnd, _lo, _hi):
             if not pending:
                 return 0
@@ -212,11 +212,19 @@ class TestHotkeyManager(unittest.TestCase):
             msg.wParam = vk
             return 1
 
+        def register(_hwnd, vk, _mods, _key):
+            if register_ok is not None and not register_ok():
+                return 0
+            registered.append(vk)
+            return 1
+
         user32 = SimpleNamespace(
             PeekMessageW=lambda *_args: 0,
-            RegisterHotKey=lambda _hwnd, vk, _mods, _key: registered.append(vk) or 1,
+            RegisterHotKey=register,
             UnregisterHotKey=lambda _hwnd, vk: unregistered.append(vk) or 1,
             GetMessageW=get_message,
+            SetTimer=lambda *_args: 1,
+            KillTimer=lambda *_args: 1,
         )
         kernel32 = SimpleNamespace(GetCurrentThreadId=lambda: 4242)
         return SimpleNamespace(user32=user32, kernel32=kernel32)
@@ -253,6 +261,32 @@ class TestHotkeyManager(unittest.TestCase):
         self.assertTrue(
             any("registration failed" in line for line in captured.output), captured.output
         )
+
+    def test_registration_is_retried_until_success(self):
+        received: list[int] = []
+        registered: list[int] = []
+        unregistered: list[int] = []
+        states: list[bool] = []
+        attempts = {"n": 0}
+
+        def register_ok() -> bool:
+            attempts["n"] += 1
+            return attempts["n"] > 2
+
+        fake = self._fake_windll(
+            [(hotkeys_mod._WM_TIMER, 1), (hotkeys_mod._WM_TIMER, 1)],
+            registered,
+            unregistered,
+            register_ok=register_ok,
+        )
+        manager = HotkeyManager(None, received.append)
+        manager.registration_changed.connect(states.append)
+
+        with patch.object(hotkeys_mod.ctypes, "windll", fake):
+            manager._walk()
+
+        self.assertEqual(registered, [hotkeys_mod._HK_F6, hotkeys_mod._HK_F7])
+        self.assertIn(True, states)
 
 
 if __name__ == "__main__":

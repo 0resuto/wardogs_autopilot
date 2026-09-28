@@ -15,16 +15,26 @@ from ..common.log import get_logger
 logger = get_logger("hotkeys")
 
 _WM_HOTKEY = 0x0312
+_WM_TIMER = 0x0113
+_WM_QUIT = 0x0012
 _HK_MOD_NOREPEAT = 0x4000
 _HK_F6 = 0x75
 _HK_F7 = 0x76
 _HK_IDS = (_HK_F6, _HK_F7)
+_HK_RETRY_MS = 3000
+_HK_TIMER_ID = 1
 
 
 class HotkeyManager(QObject):
-    """Registers F6/F7 as global Windows hotkeys and forwards presses via Qt Signal."""
+    """Registers F6/F7 as global Windows hotkeys and forwards presses via Qt Signal.
+
+    Registration is retried every few seconds while the keys are held by
+    another process (e.g. a forgotten studio instance or a stale launcher):
+    the hotkeys recover on their own instead of staying dead until restart.
+    """
 
     hotkey_triggered = Signal(int)
+    registration_changed = Signal(bool)
 
     def __init__(self, parent: Any, on_hotkey: Callable[[int], None] | None = None) -> None:
         super().__init__(parent)
@@ -32,6 +42,13 @@ class HotkeyManager(QObject):
             self.hotkey_triggered.connect(on_hotkey)
         self._thread: threading.Thread | None = None
         self._thread_id: int = 0
+        self._registered: set[int] = set()
+        self._failed: set[int] = set()
+        self._all_ok: bool | None = None
+
+    def is_ready(self) -> bool:
+        """True when both hotkeys are registered and will fire."""
+        return self._all_ok is True
 
     def start(self) -> None:
         """Spawn the message pump thread."""
@@ -48,28 +65,58 @@ class HotkeyManager(QObject):
 
         msg = wintypes.MSG()
         user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, 0)
+        self._sync_registration(user32)
+        timer_id = user32.SetTimer(None, _HK_TIMER_ID, _HK_RETRY_MS, None)
+        if not timer_id:
+            logger.warning("[studio] hotkey retry timer unavailable")
+
+        try:
+            while True:
+                if user32.GetMessageW(ctypes.byref(msg), None, 0, 0) <= 0:
+                    break
+                if msg.message == _WM_HOTKEY:
+                    self.hotkey_triggered.emit(int(msg.wParam))
+                elif msg.message == _WM_TIMER:
+                    self._sync_registration(user32)
+        finally:
+            if timer_id:
+                user32.KillTimer(None, _HK_TIMER_ID)
+            self._unregister_all(user32)
+
+    def _sync_registration(self, user32: Any) -> None:
+        """Register every missing hotkey; safe to call repeatedly (retry)."""
         for vk in _HK_IDS:
-            if not user32.RegisterHotKey(None, vk, _HK_MOD_NOREPEAT, vk):
+            if vk in self._registered:
+                continue
+            if user32.RegisterHotKey(None, vk, _HK_MOD_NOREPEAT, vk):
+                self._registered.add(vk)
+                logger.info("[studio] global hotkey F%s registered", "6" if vk == _HK_F6 else "7")
+            elif vk not in self._failed:
+                self._failed.add(vk)
                 logger.warning(
-                    "[studio] global hotkey F%s registration failed", "6" if vk == _HK_F6 else "7"
+                    "[studio] global hotkey F%s registration failed "
+                    "(possibly another studio instance) - retrying",
+                    "6" if vk == _HK_F6 else "7",
                 )
+        all_ok = len(self._registered) == len(_HK_IDS)
+        if all_ok != self._all_ok:
+            self._all_ok = all_ok
+            self.registration_changed.emit(all_ok)
 
-        while True:
-            n = user32.GetMessageW(ctypes.byref(msg), None, 0, 0)
-            if n <= 0:
-                break
-            if msg.message == _WM_HOTKEY:
-                vk = int(msg.wParam)
-                self.hotkey_triggered.emit(vk)
-
+    def _unregister_all(self, user32: Any) -> None:
         for vk in _HK_IDS:
-            user32.UnregisterHotKey(None, vk)
+            if vk in self._registered:
+                user32.UnregisterHotKey(None, vk)
+        self._registered.clear()
+        if self._all_ok is not False:
+            self._all_ok = False
+            self.registration_changed.emit(False)
 
     def stop(self) -> None:
         """Wake the pump thread with WM_QUIT and join it."""
         t = self._thread
         if t is None or not t.is_alive():
             return
-        ctypes.windll.user32.PostThreadMessageW(self._thread_id, 0x0012, 0, 0)
+        ctypes.windll.user32.PostThreadMessageW(self._thread_id, _WM_QUIT, 0, 0)
         t.join(timeout=1.0)
         self._thread = None

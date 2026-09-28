@@ -149,9 +149,11 @@ class App(QMainWindow):
         self._status_nav.setStyleSheet("color: #808080; font-weight: bold; font-size: 9pt;")
         tb_layout.addWidget(self._status_nav)
 
-        lbl_hk = QLabel("[F6] Follow   [F7] E-Stop", toolbar)
-        lbl_hk.setStyleSheet("color: #a0a0a0; font-size: 8pt;")
-        tb_layout.addWidget(lbl_hk)
+        self._hotkey_lbl = QLabel("[F6] Follow   [F7] E-Stop", toolbar)
+        self._hotkey_lbl.setStyleSheet("color: #a0a0a0; font-size: 8pt;")
+        tb_layout.addWidget(self._hotkey_lbl)
+        self._hotkeys.registration_changed.connect(self._on_hotkey_state)
+        self._on_hotkey_state(self._hotkeys.is_ready())
 
         root_layout.addWidget(toolbar)
 
@@ -298,6 +300,14 @@ class App(QMainWindow):
         except Exception as exc:
             logger.debug("Poll exception: %s", exc)
 
+    def _on_hotkey_state(self, ready: bool) -> None:
+        if ready:
+            self._hotkey_lbl.setText("[F6] Follow   [F7] E-Stop")
+            self._hotkey_lbl.setStyleSheet("color: #a0a0a0; font-size: 8pt;")
+        else:
+            self._hotkey_lbl.setText("⚠ hotkeys F6/F7 busy - retrying")
+            self._hotkey_lbl.setStyleSheet("color: #ff7c7c; font-size: 8pt;")
+
     def _on_global_hotkey(self, key_id: int) -> None:
         if key_id == _HK_F6:
             self.routes_tab.follow_toggle(silent=True)
@@ -324,6 +334,7 @@ class App(QMainWindow):
 
     def closeEvent(self, event: Any) -> None:
         self._hotkeys.stop()
+        self.routes_tab.stop_manual_record()
         self.routes_tab.emergency_stop()
         self._loc_thread.stop()
         if hasattr(self, "_cap") and hasattr(self._cap, "close"):

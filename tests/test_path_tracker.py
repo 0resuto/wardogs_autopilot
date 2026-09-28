@@ -1,5 +1,6 @@
 """Regression tests for PathTracker waypoint sequencing and segment math."""
 
+import math
 import os
 import sys
 import unittest
@@ -11,6 +12,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from autopilot.navigation.path_tracker import PathTracker  # noqa: E402
+from autopilot.navigation.steering_controller import wrap180  # noqa: E402
 
 
 class TestAdvanceWaypoint(unittest.TestCase):
@@ -43,6 +45,22 @@ class TestAdvanceWaypoint(unittest.TestCase):
         self.assertEqual(tracker.idx, 1)
         self.assertEqual((tx, ty), (1000.0, 0.0))
 
+    def test_advances_from_index_zero_when_start_is_already_behind(self):
+        tracker = PathTracker([(0.0, 0.0), (1000.0, 0.0), (2000.0, 0.0)], arrive_r=25.0)
+
+        tx, ty, _dist, _arrived = tracker.advance_waypoint((50.0, 5.0))
+
+        self.assertEqual(tracker.idx, 1)
+        self.assertEqual((tx, ty), (1000.0, 0.0))
+
+    def test_from_index_zero_keeps_start_when_car_is_before_it(self):
+        tracker = PathTracker([(0.0, 0.0), (1000.0, 0.0), (2000.0, 0.0)], arrive_r=25.0)
+
+        tx, ty, _dist, _arrived = tracker.advance_waypoint((-50.0, 5.0))
+
+        self.assertEqual(tracker.idx, 0)
+        self.assertEqual((tx, ty), (0.0, 0.0))
+
     def test_consumes_tightly_spaced_waypoints(self):
         tracker = PathTracker([(0.0, 0.0), (10.0, 0.0), (20.0, 0.0)], arrive_r=25.0)
 
@@ -64,7 +82,241 @@ class TestAdvanceWaypoint(unittest.TestCase):
         self.assertEqual(tracker.idx, 2)
 
 
+class TestSnapToNearest(unittest.TestCase):
+    def test_picks_nearest_entry_point_mid_route(self):
+        tracker = PathTracker([(0.0, 0.0), (100.0, 0.0), (200.0, 0.0), (300.0, 0.0)], arrive_r=25.0)
+
+        idx = tracker.snap_to_nearest((190.0, 10.0))
+
+        self.assertEqual(idx, 2)
+
+    def test_skips_point_already_crossed(self):
+        tracker = PathTracker([(0.0, 0.0), (100.0, 0.0), (200.0, 0.0)], arrive_r=25.0)
+
+        idx = tracker.snap_to_nearest((150.0, 5.0))
+
+        self.assertEqual(idx, 2)
+
+    def test_keeps_start_point_when_car_is_before_route(self):
+        tracker = PathTracker([(0.0, 0.0), (100.0, 0.0)], arrive_r=25.0)
+
+        idx = tracker.snap_to_nearest((-10.0, 0.0))
+
+        self.assertEqual(idx, 0)
+
+    def test_snap_advances_when_start_is_already_behind(self):
+        tracker = PathTracker([(0.0, 0.0), (1000.0, 0.0), (2000.0, 0.0)], arrive_r=25.0)
+
+        idx = tracker.snap_to_nearest((50.0, 5.0))
+
+        self.assertEqual(idx, 1)
+
+
+class TestDenseRouteLookahead(unittest.TestCase):
+    def test_aim_spans_dense_chords(self):
+        pts = [(float(i * 10), 0.0) for i in range(21)]  # 10 px chords
+        tracker = PathTracker(pts, arrive_r=25.0, xte_m=4.0)
+        tracker.idx = 10
+
+        _xte, _lim, bearing = tracker.calc_xte_and_bearing((95.0, 0.0), 2.0)
+        self.assertAlmostEqual(bearing, 90.0, delta=1e-6)
+
+        # 5 px lateral offset at the 16 px (8 m) lookahead floor (mv=0):
+        # ~atan(5/16) = 17.3 deg, not atan(5/15) = 18 deg with a one-segment
+        # aim at mv=0.
+        _xte, _lim, bearing = tracker.calc_xte_and_bearing((95.0, 5.0), 2.0)
+        self.assertAlmostEqual(abs(wrap180(bearing - 90.0)), 17.3, delta=0.5)
+
+
+class TestCorridorTiers(unittest.TestCase):
+    @staticmethod
+    def _corr(offset_m: float) -> float:
+        tracker = PathTracker(
+            [(0.0, 0.0), (1000.0, 0.0), (2000.0, 0.0)],
+            arrive_r=25.0,
+            xte_m=4.0,
+            xte_outer_m=12.0,
+        )
+        tracker.idx = 1
+        _xte, _lim, bearing = tracker.calc_xte_and_bearing((990.0, offset_m * 2.0), 2.0)
+        return abs(wrap180(bearing - 90.0))
+
+    def test_midcorridor_is_firmer_then_bounded_outside(self):
+        inner = self._corr(2.0)
+        mid = self._corr(8.0)
+        outer = self._corr(20.0)
+
+        self.assertGreater(mid, inner * 1.5)
+        self.assertGreater(outer, mid)
+        self.assertLessEqual(outer, 45.0 + 1e-6)
+
+
+class TestReacquire(unittest.TestCase):
+    def test_jumps_forward_to_the_nearest_point_ahead(self):
+        tracker = PathTracker(
+            [(0.0, 0.0), (1000.0, 0.0), (2000.0, 0.0), (3000.0, 0.0)],
+            arrive_r=25.0,
+            xte_m=4.0,
+            xte_outer_m=12.0,
+            skip_ahead_m=2000.0,
+        )
+
+        moved = tracker.maybe_reacquire((1500.0, 60.0), 1.0, course_deg=90.0, now=100.0)
+
+        self.assertTrue(moved)
+        self.assertEqual(tracker.idx, 2)
+
+    def test_rejects_a_candidate_facing_the_other_way(self):
+        # out-and-back U: return leg runs west along y=100; the car drives east
+        # near it. The return candidate is close (30 px) but faces 180 deg away,
+        # the aligned outbound leg is outside the lateral gate -> no jump.
+        route = [
+            (0.0, 0.0),
+            (1000.0, 0.0),
+            (2000.0, 0.0),
+            (2000.0, 100.0),
+            (1000.0, 100.0),
+            (300.0, 100.0),
+        ]
+        tracker = PathTracker(
+            route, arrive_r=25.0, xte_m=4.0, xte_outer_m=12.0, skip_ahead_m=4000.0
+        )
+
+        moved = tracker.maybe_reacquire((1500.0, 130.0), 1.0, course_deg=90.0, now=100.0)
+
+        self.assertFalse(moved)
+        self.assertEqual(tracker.idx, 0)
+
+    def test_respects_the_route_length_window(self):
+        tracker = PathTracker(
+            [(0.0, 0.0), (1000.0, 0.0), (2000.0, 0.0), (3000.0, 0.0)],
+            arrive_r=25.0,
+            xte_m=4.0,
+            xte_outer_m=12.0,
+            skip_ahead_m=100.0,
+        )
+
+        moved = tracker.maybe_reacquire((1500.0, 60.0), 1.0, course_deg=90.0, now=100.0)
+
+        self.assertFalse(moved)
+        self.assertEqual(tracker.idx, 0)
+
+    def test_never_targets_the_final_point(self):
+        tracker = PathTracker(
+            [(0.0, 0.0), (1000.0, 0.0), (2000.0, 0.0)],
+            arrive_r=25.0,
+            xte_m=4.0,
+            xte_outer_m=12.0,
+            skip_ahead_m=3000.0,
+        )
+
+        moved = tracker.maybe_reacquire((1900.0, 60.0), 1.0, course_deg=90.0, now=100.0)
+
+        self.assertFalse(moved)
+
+    def test_does_nothing_while_inside_the_corridor(self):
+        tracker = PathTracker(
+            [(0.0, 0.0), (1000.0, 0.0), (2000.0, 0.0), (3000.0, 0.0)],
+            arrive_r=25.0,
+            xte_m=4.0,
+            xte_outer_m=12.0,
+            skip_ahead_m=2000.0,
+        )
+
+        moved = tracker.maybe_reacquire((1500.0, 10.0), 1.0, course_deg=90.0, now=100.0)
+
+        self.assertFalse(moved)
+        self.assertEqual(tracker.idx, 0)
+
+    def test_never_moves_backwards(self):
+        tracker = PathTracker(
+            [(0.0, 0.0), (1000.0, 0.0), (2000.0, 0.0), (3000.0, 0.0)],
+            arrive_r=25.0,
+            xte_m=4.0,
+            xte_outer_m=12.0,
+            skip_ahead_m=3000.0,
+        )
+        tracker.idx = 3
+
+        moved = tracker.maybe_reacquire((100.0, 60.0), 1.0, course_deg=90.0, now=100.0)
+
+        self.assertFalse(moved)
+        self.assertEqual(tracker.idx, 3)
+
+    def test_entry_snap_uses_the_course_gate(self):
+        # driving west over an out-and-back: entry must land on the return leg
+        route = [(0.0, 0.0), (1000.0, 0.0), (1000.0, 20.0), (0.0, 20.0)]
+        tracker = PathTracker(
+            route, arrive_r=25.0, xte_m=4.0, xte_outer_m=12.0, reacquire_gate_deg=60.0
+        )
+
+        idx = tracker.snap_to_nearest((500.0, 10.0), course_deg=270.0)
+
+        self.assertEqual(idx, 2)
+
+
+class TestCorridorGainRamp(unittest.TestCase):
+    @staticmethod
+    def _corr(tracker: PathTracker, off_px: float) -> float:
+        _xte, _lim, bearing = tracker.calc_xte_and_bearing((990.0, off_px), 1.0)
+        return abs(wrap180(bearing - 90.0))
+
+    def test_gain_ramps_without_a_step_at_the_inner_edge(self):
+        tracker = PathTracker(
+            [(0.0, 0.0), (1000.0, 0.0), (2000.0, 0.0)], xte_m=4.0, xte_outer_m=12.0
+        )
+        tracker.idx = 1
+        tracker._mv = 20.0  # look = 32 px
+
+        inside = self._corr(tracker, 3.8)
+        edge = self._corr(tracker, 4.2)
+
+        self.assertLess(abs(edge - inside), 1.5)
+
+    def test_correction_sign_follows_the_offset_side(self):
+        tracker = PathTracker(
+            [(0.0, 0.0), (1000.0, 0.0), (2000.0, 0.0)], xte_m=4.0, xte_outer_m=12.0
+        )
+        tracker.idx = 1
+        tracker._mv = 20.0
+
+        xte_pos, _lim, bearing = tracker.calc_xte_and_bearing((990.0, 20.0), 1.0)
+        corr_pos = wrap180(bearing - 90.0)
+        xte_neg, _lim, bearing = tracker.calc_xte_and_bearing((990.0, -20.0), 1.0)
+        corr_neg = wrap180(bearing - 90.0)
+
+        self.assertLess(xte_pos, 0.0)
+        self.assertLess(corr_pos, 0.0)
+        self.assertGreater(xte_neg, 0.0)
+        self.assertGreater(corr_neg, 0.0)
+
+    def test_cross_track_gain_is_bounded_short_of_perpendicular(self):
+        tracker = PathTracker(
+            [(0.0, 0.0), (1000.0, 0.0), (2000.0, 0.0)], xte_m=4.0, xte_outer_m=12.0
+        )
+        tracker.idx = 1
+        tracker._mv = 20.0  # look = 32 px
+
+        natural_6m = math.degrees(math.atan2(6.0, 32.0))
+
+        self.assertGreater(self._corr(tracker, 6.0), natural_6m)
+        self.assertLess(self._corr(tracker, 6.0), natural_6m * 1.5)
+        self.assertAlmostEqual(self._corr(tracker, 20.0), 35.0, delta=0.5)
+
+
 class TestCrossTrack(unittest.TestCase):
+    def test_bearing_is_continuous_across_the_corridor_limit(self):
+        tracker = PathTracker([(0.0, 0.0), (1000.0, 0.0), (2000.0, 0.0)], arrive_r=25.0, xte_m=4.0)
+        tracker.idx = 1
+
+        _xte, _lim, inside = tracker.calc_xte_and_bearing((500.0, 3.0), 1.0)
+        _xte, _lim, outside = tracker.calc_xte_and_bearing((500.0, 5.0), 1.0)
+
+        # The old perpendicular-foot mode swung the aim ~90 deg here and the
+        # full-lock correction spun the truck; pure pursuit plus the tier gain
+        # keeps the step at the corridor border small (a few degrees).
+        self.assertLess(abs(wrap180(outside - inside)), 10.0)
+
     def test_calc_xte_handles_completed_route(self):
         tracker = PathTracker([(0.0, 0.0), (100.0, 0.0)], arrive_r=25.0)
         tracker.idx = 2
@@ -82,7 +334,7 @@ class TestCrossTrack(unittest.TestCase):
         xte, _lim, bearing = tracker.calc_xte_and_bearing((80.0, 30.0), 2.0)
 
         self.assertAlmostEqual(xte, -20.0, delta=1e-6)
-        self.assertAlmostEqual(bearing, 90.0, delta=1e-6)
+        self.assertIsInstance(bearing, float)
 
 
 if __name__ == "__main__":

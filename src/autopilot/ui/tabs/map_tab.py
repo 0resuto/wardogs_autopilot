@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -24,6 +25,7 @@ from PySide6.QtWidgets import (
 from ...common.config import AppConfig, LocatorConfig, NavigatorConfig
 from ...common.log import get_logger
 from ...navigation.follow import FollowDriver
+from ...navigation.manual_record import ManualDriveRecorder
 from ...vision import locator
 from ..map_view import InteractiveMapWidget
 from ..presets import PresetManager
@@ -42,6 +44,14 @@ class _StringVarCompat:
 
     def set(self, val: str) -> None:
         self._val = str(val)
+
+
+def _compact_label(label: QLabel) -> None:
+    """Let dynamic status text clip instead of forcing the window to grow."""
+    label.setMinimumWidth(0)
+    policy = label.sizePolicy()
+    policy.setHorizontalPolicy(QSizePolicy.Policy.Ignored)
+    label.setSizePolicy(policy)
 
 
 class MapTab(QWidget):
@@ -80,6 +90,7 @@ class MapTab(QWidget):
 
         self.preset_mgr = PresetManager()
         self.driver: FollowDriver | None = None
+        self._manual_rec: ManualDriveRecorder | None = None
 
         self.tune_vars: dict[str, _StringVarCompat] = {}
         self.tune_inputs: dict[str, QLineEdit] = {}
@@ -111,6 +122,12 @@ class MapTab(QWidget):
         self.p_sel = QComboBox(self)
         self.p_sel.setFixedWidth(130)
         top_bar.addWidget(self.p_sel)
+
+        btn_reload = QPushButton("⟳", self)
+        btn_reload.setFixedWidth(28)
+        btn_reload.setToolTip("Reload the preset list (e.g. after route_from_manual.py)")
+        btn_reload.clicked.connect(self.preset_reload)
+        top_bar.addWidget(btn_reload)
 
         btn_load = QPushButton("Load", self)
         btn_load.clicked.connect(self.preset_load_sel)
@@ -144,6 +161,14 @@ class MapTab(QWidget):
         self.dbg_ck = QCheckBox("Nav log", self)
         self.dbg_ck.setChecked(bool(self.app_cfg.navigator.debug))
         top_bar.addWidget(self.dbg_ck)
+
+        self._manual_rec_ck = QCheckBox("⏺ Record my driving", self)
+        self._manual_rec_ck.setToolTip(
+            "Temporary: log your own W/A/S/D/SPACE presses and poses to "
+            "output/manual_dbg_*.jsonl while driving by hand"
+        )
+        self._manual_rec_ck.toggled.connect(self.toggle_manual_record)
+        top_bar.addWidget(self._manual_rec_ck)
 
         top_bar.addStretch()
 
@@ -210,6 +235,7 @@ class MapTab(QWidget):
 
         self.tune_status = QLabel("", self._tune_container)
         self.tune_status.setStyleSheet("color: #8ae234; font-weight: 500;")
+        _compact_label(self.tune_status)
         btn_box.addWidget(self.tune_status)
         tune_row.addLayout(btn_box)
 
@@ -222,17 +248,158 @@ class MapTab(QWidget):
         l_veh = QHBoxLayout(grp_veh)
         l_veh.setContentsMargins(6, 10, 6, 6)
         l_veh.setSpacing(4)
-        self._add_tune_field(l_veh, grp_veh, "gain", "yaw_gain", 1.0, 38, section="navigator")
-        self._add_tune_field(l_veh, grp_veh, "lat g", "corner_lat_g", 0.35, 38, section="navigator")
-        self._add_tune_field(l_veh, grp_veh, "brake g", "brake_g", 0.45, 38, section="navigator")
         self._add_tune_field(
-            l_veh, grp_veh, "min km/h", "corner_min_kmh", 12.0, 40, section="navigator"
+            l_veh,
+            grp_veh,
+            "gain",
+            "yaw_gain",
+            1.0,
+            38,
+            section="navigator",
+            tip="Yaw-authority scale of the model (see tools/calibrate_vehicle.py)",
         )
         self._add_tune_field(
-            l_veh, grp_veh, "ahead m", "plan_ahead_m", 200.0, 40, section="navigator"
+            l_veh,
+            grp_veh,
+            "lat g",
+            "corner_lat_g",
+            0.35,
+            38,
+            section="navigator",
+            tip="Lateral grip budget for planning corner speeds: v = sqrt(lat_g*9.81*R).\n"
+            "Lower = slower corners (if it slides wide), higher = faster (but the planner\n"
+            "may outrun what the steering can hold).",
         )
-        self._add_tune_field(l_veh, grp_veh, "cut m", "corner_cut_m", 15.0, 38, section="navigator")
+        self._add_tune_field(
+            l_veh,
+            grp_veh,
+            "brake g",
+            "brake_g",
+            0.45,
+            38,
+            section="navigator",
+            tip="Braking deceleration budget for planning when to brake before a corner.\n"
+            "Higher = brakes later/harder. Measured value from your runs: ~0.5g\n"
+            "(python tools/calibrate_vehicle.py output/nav_dbg_*.jsonl).",
+        )
+        self._add_tune_field(
+            l_veh,
+            grp_veh,
+            "min km/h",
+            "corner_min_kmh",
+            12.0,
+            40,
+            section="navigator",
+            tip="Lower edge of the steady-corner hold window (km/h)",
+        )
+        self._add_tune_field(
+            l_veh,
+            grp_veh,
+            "max km/h",
+            "corner_max_kmh",
+            22.0,
+            40,
+            section="navigator",
+            tip="Upper edge of the steady-corner hold window: inside the window the\n"
+            "driver neither accelerates nor brakes (no more brake/gas hunting)",
+        )
+        self._add_tune_field(
+            l_veh,
+            grp_veh,
+            "ahead m",
+            "plan_ahead_m",
+            200.0,
+            40,
+            section="navigator",
+            tip="Speed planning horizon along the route (meters)",
+        )
+        self._add_tune_field(
+            l_veh,
+            grp_veh,
+            "cut m",
+            "corner_cut_m",
+            15.0,
+            38,
+            section="navigator",
+            tip="Distance over which a sharp vertex is rounded by the planner",
+        )
         tune_row2.addWidget(grp_veh)
+
+        grp_corr = QGroupBox("Corridors", self._tune_container)
+        l_corr = QHBoxLayout(grp_corr)
+        l_corr.setContentsMargins(6, 10, 6, 6)
+        l_corr.setSpacing(4)
+        self._add_tune_field(
+            l_corr,
+            grp_corr,
+            "inner m",
+            "xte_m",
+            4.0,
+            38,
+            section="navigator",
+            tip="Inner corridor (normal driving). Deviations beyond it get firmer corrections.",
+        )
+        self._add_tune_field(
+            l_corr,
+            grp_corr,
+            "outer m",
+            "xte_outer_m",
+            12.0,
+            38,
+            section="navigator",
+            tip="Outer corridor (warning). Past it the driver slows down and steers hardest.",
+        )
+        self._add_tune_field(
+            l_corr,
+            grp_corr,
+            "look s",
+            "steer_look_s",
+            1.6,
+            34,
+            section="navigator",
+            tip="Steering lookahead in seconds of travel: the aim point ahead on the route.\n"
+            "Lower = tighter line and more active steering; higher = smoother, cuts curves.",
+        )
+        self._add_tune_field(
+            l_corr,
+            grp_corr,
+            "settle s",
+            "settle_s",
+            0.6,
+            34,
+            section="navigator",
+            tip="Pause after a completed steering hold before the next one (s).\n"
+            "Lower = more frequent corrections; higher = smoother but a dead wheel\n"
+            "for that long after each correction. At speed the pause is also capped\n"
+            "by distance (8 m), so it shortens automatically.",
+        )
+        self._add_tune_field(
+            l_corr,
+            grp_corr,
+            "lead s",
+            "steer_lead_s",
+            0.25,
+            34,
+            section="navigator",
+            tip="Release anticipation in seconds: how much heading change still arrives\n"
+            "through the pose/key latency after the wheel is released. Raise it if the\n"
+            "car systematically overshoots, lower it if it releases too early.",
+        )
+        self._add_tune_field(
+            l_corr,
+            grp_corr,
+            "skip m",
+            "skip_ahead_m",
+            150.0,
+            40,
+            section="navigator",
+            tip="Route re-acquisition window (m). Only when the car is outside the outer\n"
+            "corridor: the active point may jump forward to the nearest route point\n"
+            "within this route length (it never jumps backwards or to the final point).\n"
+            "0 disables the re-acquisition.",
+        )
+        tune_row2.addWidget(grp_corr)
+
         tune_row2.addStretch()
         tune_vbox.addLayout(tune_row2)
 
@@ -249,6 +416,7 @@ class MapTab(QWidget):
         self.dbg_text.setStyleSheet(
             "background-color: #252526; color: #ffcf6a; padding: 2px 6px; border-radius: 4px;"
         )
+        _compact_label(self.dbg_text)
         dbg_bar.addWidget(self.dbg_text, stretch=1)
 
         copy_btn = QPushButton("Copy", self._tune_container)
@@ -267,6 +435,10 @@ class MapTab(QWidget):
         root_layout.addWidget(self.map_widget, stretch=1)
 
         # --- Bottom Command & Navigation Control Center ---
+        bot_box = QVBoxLayout()
+        bot_box.setContentsMargins(0, 0, 0, 0)
+        bot_box.setSpacing(2)
+
         bot_bar = QHBoxLayout()
         bot_bar.setSpacing(8)
 
@@ -282,18 +454,54 @@ class MapTab(QWidget):
 
         self.routes_status = QLabel("", self)
         self.routes_status.setStyleSheet("color: #88c0d0; font-weight: bold;")
+        _compact_label(self.routes_status)
         bot_bar.addWidget(self.routes_status, stretch=1)
+        bot_box.addLayout(bot_bar)
+
+        info_bar = QHBoxLayout()
+        info_bar.setSpacing(8)
 
         self.map_status = QLabel("", self)
         self.map_status.setStyleSheet("color: #a0a0a0; font-size: 8pt;")
-        bot_bar.addWidget(self.map_status)
+        _compact_label(self.map_status)
+        info_bar.addWidget(self.map_status, stretch=1)
 
         hint = QLabel("LMB: Add | Drag: Move | RMB: Del | Drag map: Pan | Wheel: Zoom", self)
         hint.setStyleSheet("color: #606060; font-size: 8pt;")
-        bot_bar.addWidget(hint)
+        info_bar.addWidget(hint)
+        bot_box.addLayout(info_bar)
 
-        root_layout.addLayout(bot_bar)
+        root_layout.addLayout(bot_box)
         self.preset_reload()
+
+    def toggle_manual_record(self, enabled: bool) -> None:
+        """Start/stop recording the user's own driving (temporary tuning aid)."""
+        if not enabled:
+            self.stop_manual_record()
+            return
+        loc = self.get_loc()
+        if loc is None:
+            self._manual_rec_ck.setChecked(False)
+            return
+        params = dict(
+            source="manual",
+            map=self.get_map_name(),
+            vehicle=self.app_cfg.navigator.vehicle_profile,
+            speed_cap_kmh=self.app_cfg.navigator.speed_cap_kmh,
+        )
+        self._manual_rec = ManualDriveRecorder(
+            loc=loc, route=self.route_pts, params=params, out_dir="output"
+        )
+        self._manual_rec.start()
+
+    def stop_manual_record(self) -> None:
+        """Stop manual-driving recording if it is running."""
+        rec = self._manual_rec
+        if rec is not None:
+            rec.stop()
+            self._manual_rec = None
+        if self._manual_rec_ck.isChecked():
+            self._manual_rec_ck.setChecked(False)
 
     def toggle_tuning_panel(self) -> None:
         """Toggle visibility of locator tuning controls."""
@@ -311,6 +519,7 @@ class MapTab(QWidget):
         width: int,
         is_int: bool = False,
         section: str = "locator",
+        tip: str = "",
     ) -> None:
         lbl = QLabel(lbl_text, parent)
         lbl.setStyleSheet("color: #a0a0a0;")
@@ -321,6 +530,9 @@ class MapTab(QWidget):
         val = str(int(value) if is_int else value)
         inp = QLineEdit(val, parent)
         inp.setFixedWidth(width)
+        if tip:
+            lbl.setToolTip(tip)
+            inp.setToolTip(tip)
         layout.addWidget(inp)
         self.tune_inputs[var_name] = inp
         self.tune_vars[var_name] = _StringVarCompat(val)
@@ -352,8 +564,15 @@ class MapTab(QWidget):
             "corner_lat_g": ("navigator", 0.05, 1.5, float, "VEH lat g in [0.05 .. 1.5]"),
             "brake_g": ("navigator", 0.05, 2.0, float, "VEH brake g in [0.05 .. 2.0]"),
             "corner_min_kmh": ("navigator", 0.0, 79.0, float, "VEH min km/h in [0 .. 79]"),
+            "corner_max_kmh": ("navigator", 0.0, 79.0, float, "VEH max km/h in [0 .. 79]"),
             "plan_ahead_m": ("navigator", 20.0, 1000.0, float, "VEH ahead m in [20 .. 1000]"),
             "corner_cut_m": ("navigator", 4.0, 60.0, float, "VEH cut m in [4 .. 60]"),
+            "xte_m": ("navigator", 1.0, 30.0, float, "COR inner m in [1 .. 30]"),
+            "xte_outer_m": ("navigator", 4.0, 60.0, float, "COR outer m in [4 .. 60]"),
+            "steer_look_s": ("navigator", 0.4, 4.0, float, "COR look s in [0.4 .. 4.0]"),
+            "settle_s": ("navigator", 0.1, 2.0, float, "COR settle s in [0.1 .. 2.0]"),
+            "steer_lead_s": ("navigator", 0.0, 1.0, float, "COR lead s in [0.0 .. 1.0]"),
+            "skip_ahead_m": ("navigator", 0.0, 1000.0, float, "COR skip m in [0 .. 1000]"),
         }
         parsed: dict[str, dict[str, Any]] = {"locator": {}, "navigator": {}}
         for name, (section, lo, hi, typ, desc) in ranges.items():
@@ -371,6 +590,16 @@ class MapTab(QWidget):
                 self.tune_status.setStyleSheet("color: #ff7c7c;")
                 return
             parsed[section][name] = v
+
+        if parsed["navigator"]["xte_outer_m"] <= parsed["navigator"]["xte_m"]:
+            self.tune_status.setText("Invalid COR outer m must be greater than inner m")
+            self.tune_status.setStyleSheet("color: #ff7c7c;")
+            return
+
+        if parsed["navigator"]["corner_max_kmh"] <= parsed["navigator"]["corner_min_kmh"]:
+            self.tune_status.setText("Invalid VEH max km/h must be greater than min km/h")
+            self.tune_status.setStyleSheet("color: #ff7c7c;")
+            return
 
         for values in parsed.values():
             for name, val in values.items():
@@ -448,6 +677,8 @@ class MapTab(QWidget):
         heading = self._disp_th
 
         self.map_widget.scene.update_vehicle(mp[0], mp[1], heading)
+        if self.map_widget.is_follow_centered():
+            self.map_widget.view.center_on_coords(mp[0], mp[1])
         speed_txt = ""
         if last_loc.get("speed_ok") and last_loc.get("speed_kmh") is not None:
             speed_txt = f" | v={last_loc['speed_kmh']} km/h"
@@ -598,6 +829,7 @@ class MapTab(QWidget):
                 QMessageBox.warning(self, "Routes", "Route not set (at least 2 points required)")
             return
 
+        self.stop_manual_record()
         loc_thread = self.get_loc()
         nav_cfg = self.app_cfg.navigator
         try:

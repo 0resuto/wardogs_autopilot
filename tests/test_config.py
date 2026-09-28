@@ -87,6 +87,17 @@ def test_vehicle_profile_default():
     assert NavigatorConfig(vehicle_profile="").vehicle_profile == ""
 
 
+def test_navigator_window_edges_stay_ordered():
+    """Hand-edited config windows must not invert (a zero span breaks guidance)."""
+    from autopilot.common.config import NavigatorConfig
+
+    cfg = NavigatorConfig(xte_m=10.0, xte_outer_m=5.0)
+    assert cfg.xte_outer_m == 10.0
+
+    cfg = NavigatorConfig(corner_min_kmh=30.0, corner_max_kmh=20.0)
+    assert cfg.corner_max_kmh == 30.0
+
+
 def test_yaw_gain_override_validation():
     """yaw_gain is optional (profile value) and bounded when set."""
     from autopilot.common.config import NavigatorConfig

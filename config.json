@@ -7,6 +7,12 @@
       1009,
       336,
       277
+    ],
+    "speed_roi": [
+      1043,
+      1243,
+      52,
+      21
     ]
   },
   "locator": {
@@ -45,28 +51,44 @@
   "navigator": {
     "key_source": "arduino",
     "port": "COM6",
+    "vehicle_profile": "ural",
+    "yaw_gain": 2.039,
     "arrive_r": 25.0,
-    "slow_r": 350.0,
     "dead": 3.0,
     "turn_deg": 25.0,
     "hold_max": 8.0,
     "speed_cap_kmh": 79.0,
-    "xte_m": 4.0,
+    "speed_profile": true,
+    "corner_lat_g": 0.9,
+    "brake_g": 0.5,
+    "corner_min_kmh": 18.0,
+    "corner_max_kmh": 32.0,
+    "plan_ahead_m": 200.0,
+    "corner_cut_m": 15.0,
+    "xte_m": 1.0,
+    "xte_outer_m": 5.0,
+    "steer_look_s": 1.6,
+    "settle_s": 0.5,
+    "steer_lead_s": 0.45,
+    "skip_ahead_m": 150.0,
     "poll": 0.033,
     "brake_d": 260.0,
     "dead_off": null,
     "stop_speed_kmh": 2.0,
+    "stop_min_px_s": 3.0,
+    "stop_confirm_s": 1.0,
     "stop_hold": 0.8,
     "stop_timeout": 5.0,
     "debug": false,
-    "last_preset": "test"
-  },
-  "window": {
-    "geometry": "1030x932+3374+396",
-    "zoomed": false
+    "last_preset": "test",
+    "slow_r": 350.0
   },
   "debug": {
     "collect_fail_logs": false
   },
-  "_cfg_path": "config.json"
+  "_cfg_path": "C:\\Users\\ORESUTO_PC\\Desktop\\wardogs-autopilot\\config.json",
+  "window": {
+    "geometry": "1030x932+3374+396",
+    "zoomed": false
+  }
 }

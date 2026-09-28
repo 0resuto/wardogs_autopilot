@@ -10,6 +10,7 @@ import queue
 import sys
 import threading
 import unittest
+import unittest.mock
 
 import cv2
 import numpy as np
@@ -26,6 +27,7 @@ from autopilot.vision.hud_speed import (  # noqa: E402
     SpeedReading,
     SpeedRecognizer,
     SpeedSensor,
+    fit_glyph,
 )
 
 
@@ -119,6 +121,36 @@ class TestDigitRecognition(unittest.TestCase):
         frame = _compose(self.atlas, "1234", 1.5, seed=11)
         reading = self.recognizer.read(frame)
         self.assertFalse(reading.ok)
+
+    def test_batch_matching_equals_per_glyph_matching(self):
+        cells = [
+            self.atlas.cells[self.atlas.labels.index("4")],
+            np.roll(self.atlas.cells[self.atlas.labels.index("K")], 1, axis=0),
+            fit_glyph(np.random.default_rng(11).integers(0, 255, (21, 13), dtype=np.uint8)),
+        ]
+        for single, batched in zip(
+            [self.atlas.match(c) for c in cells], self.atlas.match_batch(cells), strict=True
+        ):
+            self.assertEqual(single[0], batched[0])
+            self.assertAlmostEqual(single[1], batched[1], places=5)
+            self.assertAlmostEqual(single[2], batched[2], places=5)
+
+    def test_frame_matching_costs_one_atlas_pass(self):
+        """A multi-glyph row (digits + unit letters) must not multiply matches."""
+        frame = _compose(self.atlas, "44KMH", 1.4, seed=5)
+        real_match = cv2.matchTemplate
+        calls: list[int] = []
+
+        def counting(*args, **kwargs):
+            calls.append(1)
+            return real_match(*args, **kwargs)
+
+        with unittest.mock.patch.object(cv2, "matchTemplate", side_effect=counting):
+            reading = self.recognizer.read(frame)
+
+        self.assertTrue(reading.ok, reading.detail)
+        self.assertEqual(reading.kmh, 44)
+        self.assertEqual(len(calls), len(self.atlas.labels))
 
 
 class TestRealCapture(unittest.TestCase):

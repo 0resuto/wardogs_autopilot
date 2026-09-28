@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .. import PROJECT_ROOT
 
@@ -170,7 +170,13 @@ class NavigatorConfig(BaseModel):
     corner_min_kmh: float = Field(
         default=12.0,
         ge=0.0,
-        description="Minimum planned speed at the sharpest corner (km/h)",
+        description="Lower edge of the steady-corner hold window (km/h)",
+    )
+    corner_max_kmh: float = Field(
+        default=22.0,
+        ge=0.0,
+        description="Upper edge of the steady-corner hold window: inside it the driver "
+        "neither accelerates nor brakes (km/h)",
     )
     plan_ahead_m: float = Field(
         default=200.0,
@@ -184,7 +190,49 @@ class NavigatorConfig(BaseModel):
         le=60.0,
         description="Distance over which a sharp vertex is rounded (meters)",
     )
-    xte_m: float = Field(default=4.0, ge=0.0, description="Cross-track error limit (meters)")
+    xte_m: float = Field(default=4.0, ge=0.0, description="Inner corridor half-width (meters)")
+    xte_outer_m: float = Field(
+        default=12.0,
+        ge=4.0,
+        description="Outer corridor half-width: past it the driver slows down and steers firmly",
+    )
+    steer_look_s: float = Field(
+        default=1.6,
+        ge=0.4,
+        le=4.0,
+        description="Steering lookahead in seconds of travel (lower = tighter line, more active)",
+    )
+    settle_s: float = Field(
+        default=0.6,
+        ge=0.1,
+        le=2.0,
+        description="Pause after a completed steering hold before the next one (s); "
+        "shorter = more active corrections",
+    )
+    steer_lead_s: float = Field(
+        default=0.25,
+        ge=0.0,
+        le=1.0,
+        description="Steering release anticipation in seconds: how much heading change is "
+        "expected to arrive through the latency before the wheel takes effect",
+    )
+    skip_ahead_m: float = Field(
+        default=150.0,
+        ge=0.0,
+        le=1000.0,
+        description="Route re-acquisition window (m): outside the outer corridor the "
+        "active point may jump forward within this route length (0 disables)",
+    )
+
+    @model_validator(mode="after")
+    def _clamp_corridor_and_corner_windows(self) -> NavigatorConfig:
+        """Keep window edges ordered even when config.json is edited by hand."""
+        if self.xte_outer_m < self.xte_m:
+            self.xte_outer_m = self.xte_m
+        if self.corner_max_kmh < self.corner_min_kmh:
+            self.corner_max_kmh = self.corner_min_kmh
+        return self
+
     poll: float = Field(default=0.033, ge=0.001, description="Navigation tick rate in seconds")
     brake_d: float = Field(
         default=260.0,

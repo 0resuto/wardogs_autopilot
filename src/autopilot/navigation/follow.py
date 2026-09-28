@@ -81,6 +81,10 @@ class FollowDriver(threading.Thread):
             speed_cap_kmh if speed_cap_kmh is not None else self.nav_cfg.speed_cap_kmh
         )
         self.xte_m = float(xte_m if xte_m is not None else self.nav_cfg.xte_m)
+        self.xte_outer_m = max(self.xte_m, float(self.nav_cfg.xte_outer_m))
+        self.steer_look_s = float(self.nav_cfg.steer_look_s)
+        self.steer_lead_s = float(self.nav_cfg.steer_lead_s)
+        self.skip_ahead_m = float(self.nav_cfg.skip_ahead_m)
         self.dbg = bool(debug if debug is not None else self.nav_cfg.debug)
         self.stop_speed_kmh = float(
             stop_speed_kmh if stop_speed_kmh is not None else self.nav_cfg.stop_speed_kmh
@@ -126,11 +130,25 @@ class FollowDriver(threading.Thread):
             if self.nav_cfg.speed_profile
             else None
         )
-        self.path = PathTracker(self.pts, arrive_r=self.arrive_r, xte_m=self.xte_m)
-        self.speed_ctrl = SpeedController(speed_cap_kmh=self.speed_cap_kmh, brake_d=self.brake_d)
+        self.path = PathTracker(
+            self.pts,
+            arrive_r=self.arrive_r,
+            xte_m=self.xte_m,
+            xte_outer_m=self.xte_outer_m,
+            steer_look_s=self.steer_look_s,
+            skip_ahead_m=self.skip_ahead_m,
+        )
+        self.speed_ctrl = SpeedController(
+            speed_cap_kmh=self.speed_cap_kmh,
+            brake_d=self.brake_d,
+            corner_min_kmh=self.nav_cfg.corner_min_kmh,
+            corner_max_kmh=self.nav_cfg.corner_max_kmh,
+        )
         self.steer_ctrl = SteeringController(
             dead=self.dead,
             dead_off=self.dead_off,
+            settle_t=self.nav_cfg.settle_s,
+            ant_s=self.steer_lead_s,
             turn_deg=(turn_deg if turn_deg is not None else self.nav_cfg.turn_deg),
             hold_max=(hold_max if hold_max is not None else self.nav_cfg.hold_max),
         )
@@ -150,7 +168,9 @@ class FollowDriver(threading.Thread):
         self._last_speed_t: float | None = None
         self._speed_kmh = 0.0
         self._heading: float | None = None
+        self._last_heading_t = 0.0
         self._lost = False
+        self._route_snapped = False
         self._dbg_n = 0
         self._stop_ev = threading.Event()
         self._final_stop = False
@@ -251,7 +271,8 @@ class FollowDriver(threading.Thread):
     def _push_pose(self, ts: float, x: float, y: float) -> bool:
         added = self.path.push_pose(ts, x, y)
         if added:
-            self.speed_ctrl.update_scale(self.path.mv)
+            ocr = self._speed_kmh if self._speed_fresh(ts) else None
+            self.speed_ctrl.update_scale(self.path.mv, ocr_kmh=ocr)
         return added
 
     def _pose_at(self, now: float) -> tuple[float, float] | None:
@@ -326,6 +347,26 @@ class FollowDriver(threading.Thread):
         """True when the last OCR speedometer reading is recent enough to trust."""
         return self._last_speed_t is not None and (now - self._last_speed_t) <= self.stop_confirm_s
 
+    def _smooth_heading(self, src: float, now: float, yaw_max: float | None) -> float:
+        """Low-pass the heading source, rate-limited by the physical yaw.
+
+        The motion-course source occasionally steps by tens of degrees (a
+        localization glitch or a slip): feeding that into `err` made the relay
+        flip sides. The truck cannot yaw faster than the grip-limited model
+        value, so any faster change is rejected instead of tracked.
+        """
+        src = float(src) % 360.0
+        dt = now - self._last_heading_t
+        self._last_heading_t = now
+        if self._heading is None or dt <= 1e-3 or dt > 0.5:
+            self._heading = src
+            return self._heading
+        dd = wrap180(src - self._heading)
+        lim = max(10.0, (yaw_max or 45.0) * 1.6) * dt
+        step = max(-lim, min(lim, dd * 0.5))
+        self._heading = (self._heading + step) % 360.0
+        return self._heading
+
     def _speed_kmh_estimate(self, now: float) -> float:
         """Best available speed for model lookups: OCR when fresh, else the track."""
         if self._speed_fresh(now):
@@ -350,6 +391,21 @@ class FollowDriver(threading.Thread):
             return None
         return self.planner.target_speed_kmh(mp, self.pts, self.path.idx, px_per_m)
 
+    def _speed_target(self, road_turn: float, plan_kmh: float | None) -> float:
+        """Speed target in px/s: the planner caps cruise when it is enabled.
+
+        The legacy vertex-angle heuristic applies the corner speed the moment
+        any vertex enters its ~200 px horizon, which braked the whole approach
+        to every waypoint; with the planner the baseline is cruise speed and
+        the planned limit (distance- and brake-aware) does the capping.
+        """
+        if plan_kmh is not None:
+            return min(
+                self.speed_ctrl.calc_target_speed(0.0),
+                self.speed_ctrl.from_kmh(plan_kmh),
+            )
+        return self.speed_ctrl.calc_target_speed(road_turn)
+
     def apply_vehicle_tuning(self, cfg: NavigatorConfig) -> None:
         """Apply live vehicle/planner tuning changed in the UI."""
         if self.vehicle_model is not None and cfg.yaw_gain is not None:
@@ -360,6 +416,21 @@ class FollowDriver(threading.Thread):
             self.planner.min_speed_kmh = max(0.0, cfg.corner_min_kmh)
             self.planner.lookahead_m = max(10.0, cfg.plan_ahead_m)
             self.planner.cut_m = max(1.0, cfg.corner_cut_m)
+        self.xte_m = max(0.0, float(cfg.xte_m))
+        self.xte_outer_m = max(self.xte_m, float(cfg.xte_outer_m))
+        self.steer_look_s = max(0.4, float(cfg.steer_look_s))
+        self.path.xte_m = self.xte_m
+        self.path.xte_outer_m = self.xte_outer_m
+        self.path.steer_look_s = self.steer_look_s
+        self.speed_ctrl.corner_min_kmh = max(0.0, float(cfg.corner_min_kmh))
+        self.speed_ctrl.corner_max_kmh = max(
+            self.speed_ctrl.corner_min_kmh, float(cfg.corner_max_kmh)
+        )
+        self.steer_ctrl.settle_t = max(0.1, min(2.0, float(cfg.settle_s)))
+        self.steer_ctrl.ant_s = max(0.0, min(1.0, float(cfg.steer_lead_s)))
+        self.steer_lead_s = self.steer_ctrl.ant_s
+        self.skip_ahead_m = max(0.0, float(cfg.skip_ahead_m))
+        self.path.skip_ahead_m = self.skip_ahead_m
 
     def _stop_state(self, now: float) -> str:
         """Final-waypoint stop state: 'stopped', 'braking' or 'timeout'.
@@ -415,6 +486,11 @@ class FollowDriver(threading.Thread):
             speed_cap_kmh=self.speed_cap_kmh,
             v_cruise=self.speed_ctrl.v_cruise,
             xte_m=self.xte_m,
+            xte_outer_m=self.xte_outer_m,
+            steer_look_s=self.path.steer_look_s,
+            settle_s=self.steer_ctrl.settle_t,
+            corner_max_kmh=self.speed_ctrl.corner_max_kmh,
+            skip_ahead_m=self.path.skip_ahead_m,
             stop_speed_kmh=self.stop_speed_kmh,
             stop_min_px_s=self.stop_min_px_s,
             stop_confirm_s=self.stop_confirm_s,
@@ -493,6 +569,36 @@ class FollowDriver(threading.Thread):
                     self._rel("wait_pose")
                     self._wait(0.3)
                     continue
+
+                course = (
+                    self._heading
+                    if self._heading is not None
+                    else (float(pose["th"]) if pose.get("th") is not None else None)
+                )
+
+                # Route entry, once per run: engage at the nearest point instead
+                # of U-turning back to pts[0] when F6 is pressed mid-route.
+                if not self._route_snapped:
+                    self.path.snap_to_nearest(mp, course_deg=course)
+                    self._route_snapped = True
+                    px, py = self.pts[self.path.idx]
+                    logger.info(
+                        "[nav] route entry at point %d/%d (dist=%.0fm)",
+                        self.path.idx + 1,
+                        len(self.pts),
+                        self._m(math.hypot(px - mp[0], py - mp[1])),
+                    )
+
+                # Forward re-acquisition after an excursion (outside the outer
+                # corridor only): jump the index to the nearest route point
+                # ahead instead of chasing a stale one.
+                if self.path.maybe_reacquire(mp, self._px_per_m_now(), course, now):
+                    logger.info(
+                        "[nav] re-acquired route at point %d/%d",
+                        self.path.idx + 1,
+                        len(self.pts),
+                    )
+                    self._dbg_tick(dict(kind="reacquire", t=round(now, 4), idx=self.path.idx))
 
                 # Advance waypoints
                 final_seg = len(self.pts) > 1 and self.path.idx >= len(self.pts) - 1
@@ -610,25 +716,39 @@ class FollowDriver(threading.Thread):
                 else:
                     heading_src = self.path.mh or 0.0
 
-                if self._heading is None:
-                    self._heading = heading_src
-                else:
-                    dd = wrap180(heading_src - self._heading)
-                    self._heading = (self._heading + dd * 0.5) % 360.0
-                heading = self._heading
+                # Steering state machine (speed-dependent yaw authority)
+                yaw_max = self._yaw_rate_max(self._speed_kmh_estimate(now))
+                heading = self._smooth_heading(heading_src, now, yaw_max)
                 err = wrap180(bearing - heading)
 
                 # Road geometry angles
                 turn_angle, road_turn = self.path.calc_road_turn(heading)
-                tgt_spd = self.speed_ctrl.calc_target_speed(road_turn)
                 plan_kmh = self._route_target_kmh(mp)
-                if plan_kmh is not None:
-                    tgt_spd = min(tgt_spd, self.speed_ctrl.from_kmh(plan_kmh))
+                tgt_spd = self._speed_target(road_turn, plan_kmh)
+                outside_outer = abs(xte) > self.xte_outer_m * self._px_per_m_now()
+                if outside_outer:
+                    # Far outside the corridor: bleed speed while steering back.
+                    rejoin_kmh = max(self.nav_cfg.corner_min_kmh, 10.0)
+                    tgt_spd = min(tgt_spd, self.speed_ctrl.from_kmh(rejoin_kmh))
 
-                # Steering state machine (speed-dependent yaw authority)
-                yaw_max = self._yaw_rate_max(self._speed_kmh_estimate(now))
+                # Age of the last MEASURED pose: the tracker republishes a
+                # frozen position with a fresh frame timestamp during a capture
+                # void, so the frame age alone cannot gate the wheel.
+                steer_pose_age = (
+                    (now - self._last_measured_t) if self._last_measured_t is not None else None
+                )
+                raw_heading = float(pose["th"]) % 360.0 if pose.get("th") is not None else None
                 steer_action = self.steer_ctrl.step(
-                    now, err, heading, self.path.mh, self.path.mh_t, yaw_rate_max=yaw_max
+                    now,
+                    err,
+                    heading,
+                    self.path.mh,
+                    self.path.mh_t,
+                    yaw_rate_max=yaw_max,
+                    fresh_sample=bool(new_sample),
+                    pose_age=steer_pose_age,
+                    mv_mps=self._m(self.path.mv),
+                    heading_meas=raw_heading,
                 )
                 keys: dict[str, bool] = {}
                 if steer_action == 1:
@@ -646,13 +766,13 @@ class FollowDriver(threading.Thread):
                     turn_min=10.0,
                     xte=xte,
                     xte_lim=xte_lim,
+                    hold_window=not outside_outer,
                 )
 
                 if brake_space:
+                    # Keep A/D: dropping the wheel here left the vehicle unable
+                    # to catch a slide until it slowed down to the target.
                     keys["SPACE"] = True
-                    keys.pop("A", None)
-                    keys.pop("D", None)
-                    self.steer_ctrl.force_release(now, self.path.mh_t)
                 elif gas_w:
                     keys["W"] = True
 
@@ -716,11 +836,13 @@ class FollowDriver(threading.Thread):
                             speed=round(self.speed, 1),
                             ocr=round(self._speed_kmh, 1) if self._speed_fresh(now) else None,
                             v=round(self.path.mv, 1),
+                            pxm=round(self._px_per_m_now(), 3),
                             good=bool(it.get("good", False)) if it else False,
                             th_raw=round(float(pose["th"]), 2) if pose else None,
                             yaw_max=round(yaw_max, 1) if yaw_max else None,
                             plan_kmh=round(plan_kmh, 1) if plan_kmh is not None else None,
                             ang=round(self.steer_ctrl.ang, 2),
+                            lead=round(self.steer_ctrl.last_lead, 1),
                             steer=self.steer_ctrl.steer,
                             micro=self.steer_ctrl.micro,
                             braking=bool(brake_space),

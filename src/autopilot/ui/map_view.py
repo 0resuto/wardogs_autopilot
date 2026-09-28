@@ -160,9 +160,11 @@ class InteractiveMapWidget(QWidget):
         btn_fit.clicked.connect(self.view.fit_view)
         self.toolbar_layout.addWidget(btn_fit)
 
-        btn_center = QPushButton("🎯 Center", tb)
-        btn_center.clicked.connect(self._on_center_click)
-        self.toolbar_layout.addWidget(btn_center)
+        self.btn_center = QPushButton("🎯 Center", tb)
+        self.btn_center.setCheckable(True)
+        self.btn_center.setToolTip("Follow the vehicle position on the map")
+        self.btn_center.toggled.connect(self._on_follow_toggled)
+        self.toolbar_layout.addWidget(self.btn_center)
 
         if enable_route_editing:
             self.btn_mode = QPushButton("✏ Route Mode", tb)
@@ -184,6 +186,15 @@ class InteractiveMapWidget(QWidget):
 
     def set_on_center(self, callback: Any) -> None:
         self._on_center_cb = callback
+
+    def is_follow_centered(self) -> bool:
+        """Whether the view should keep re-centering on the current vehicle position."""
+        return self.btn_center.isChecked()
+
+    def _on_follow_toggled(self, checked: bool) -> None:
+        self.btn_center.setText("🎯 Following" if checked else "🎯 Center")
+        if checked:
+            self._on_center_click()
 
     def _on_center_click(self) -> None:
         if self._on_center_cb:

@@ -271,6 +271,7 @@ class LiveLocator(threading.Thread):
         self._hold_left: int | None = None  # frames of black-frame hold still left
         self._last_fail_save: float = 0.0  # time of the last fail-frame dump (throttle)
         self._counts: collections.Counter[str] = collections.Counter()  # reject reason tally
+        self._last_frame_error: str | None = None  # dedup for per-frame error logging
         self.search_now: tuple[Any, ...] | str | None = (
             None  # sector being searched right now ('disc'/'global')
         )
@@ -335,6 +336,35 @@ class LiveLocator(threading.Thread):
         if isinstance(self.cfg, dict):
             self.cfg.setdefault("debug", {})["collect_fail_logs"] = enabled
         logger.info("[tracker] fail-frame collection %s", "enabled" if enabled else "disabled")
+
+    def _frame_pose(
+        self, mm: np.ndarray, ui_mask: np.ndarray | None
+    ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+        """One localization pass; a locator/cv2 failure degrades to a bad frame.
+
+        Without this guard a single native matching error escaped run() and
+        killed the whole locator thread: the preview froze on the last frame
+        and tracking stopped for good.
+        """
+        try:
+            res = locator.global_pose(
+                mm,
+                ui_mask,
+                prev_xy=self._prev_xy,
+                prev_th=self._prev_th,
+                debug=True,
+                budget=3.0,
+                progress=self._search_progress,
+            )
+            self._last_frame_error = None
+            return res
+        except Exception as exc:  # noqa: BLE001
+            tag = f"{type(exc).__name__}: {exc}"
+            if tag != self._last_frame_error:
+                self._last_frame_error = tag
+                logger.error("[tracker] locator frame error: %s", tag)
+                crashlog.log("locator frame error", exc)
+            return None, dict(reject="locator_error", detail=tag[:300])
 
     def _search_progress(self, region):
         """Live callback from the locator: the sector searched at this instant.
@@ -419,15 +449,7 @@ class LiveLocator(threading.Thread):
                 # seconds (low-texture areas); with a budget the
                 # localization returns within max 3 s and the thread does
                 # not hang along with it (nor did steer and UI)
-                pose, diag = locator.global_pose(
-                    mm,
-                    self.mask,
-                    prev_xy=self._prev_xy,
-                    prev_th=self._prev_th,
-                    debug=True,
-                    budget=3.0,
-                    progress=self._search_progress,
-                )
+                pose, diag = self._frame_pose(mm, self.mask)
                 self.search_now = None  # the frame's search is done
                 self._count_reject(diag)
                 slow = time.time() - t0
