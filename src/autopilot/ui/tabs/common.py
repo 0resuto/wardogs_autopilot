@@ -39,6 +39,51 @@ def compact_label(label: QLabel) -> None:
     label.setSizePolicy(policy)
 
 
+class RoiTabBase(_BaseQt):
+    """Interface shared by the Capture tab mixins (annotations and stubs only)."""
+
+    cfg: dict[str, Any]
+    save_cfg: Callable[[], None]
+    get_cap: Callable[[], Any]
+    get_loc: Callable[[], Any]
+    on_map_rebuilt: Callable[[str], None] | None
+    roi_vars: dict[str, StringVarCompat]
+    speed_vars: dict[str, StringVarCompat]
+    coord_inputs: dict[str, QLineEdit]
+    speed_inputs: dict[str, QLineEdit]
+    status_lbl: Any
+    speed_status_lbl: Any
+    preview_lbl: Any
+    _cache_map_sel: Any
+    _cache_status_lbl: Any
+    _cache_download_btn: Any
+    _cache_rebuild_btn: Any
+    _cache_rebuild_busy: bool
+    _cache_download_busy: bool
+    raw_title_lbl: Any
+    mask_title_lbl: Any
+    sift_title_lbl: Any
+    speed_title_lbl: Any
+    raw_preview_lbl: Any
+    mask_preview_lbl: Any
+    sift_preview_lbl: Any
+    speed_preview_lbl: Any
+    save_status_lbl: Any
+    save_snap_btn: Any
+    open_snap_btn: Any
+    _snap_busy: bool
+    _last_snapshot_dir: str | None
+    sig_cache_progress: Any
+    sig_cache_done: Any
+    sig_cache_failed: Any
+    sig_download_done: Any
+    sig_download_failed: Any
+    sig_save_done: Any
+    sig_save_failed: Any
+
+    def update_preview(self) -> None: ...
+
+
 class MapTabBase(_BaseQt):
     """Interface shared by the Map tab mixins (annotations and stubs only).
 

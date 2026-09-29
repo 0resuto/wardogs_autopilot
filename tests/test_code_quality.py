@@ -590,7 +590,7 @@ class TestMapDownloadUi(unittest.TestCase):
             app.close()
 
     def test_download_worker_reports_success_and_failure(self):
-        from autopilot.ui.tabs import roi_tab as roi_tab_mod
+        from autopilot.ui.tabs import roi_cache as roi_cache_mod
         from autopilot.vision import asset_sync
 
         app = self._app()
@@ -603,7 +603,7 @@ class TestMapDownloadUi(unittest.TestCase):
 
             with (
                 patch.object(asset_sync, "download_map", lambda *_a, **_k: True),
-                patch.object(roi_tab_mod.QMessageBox, "information", lambda *_a, **_k: None),
+                patch.object(roi_cache_mod.QMessageBox, "information", lambda *_a, **_k: None),
             ):
                 app.roi_tab._cache_download_worker("zestafona", {"repo": "x/y", "tag": "v"})
 
@@ -612,7 +612,7 @@ class TestMapDownloadUi(unittest.TestCase):
 
             with (
                 patch.object(asset_sync, "download_map", lambda *_a, **_k: False),
-                patch.object(roi_tab_mod.QMessageBox, "critical", lambda *_a, **_k: None),
+                patch.object(roi_cache_mod.QMessageBox, "critical", lambda *_a, **_k: None),
             ):
                 app.roi_tab._cache_download_worker("zestafona", {"repo": "x/y", "tag": "v"})
 
