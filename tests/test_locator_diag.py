@@ -20,6 +20,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from autopilot.common.config import AppConfig  # noqa: E402
+from autopilot.vision import index_search as index_search_mod  # noqa: E402
 from autopilot.vision import locator  # noqa: E402
 from autopilot.vision import tracker as tracker_mod  # noqa: E402
 from autopilot.vision.tracker import LiveLocator  # noqa: E402
@@ -100,8 +101,8 @@ class TestTrainSetThinning(unittest.TestCase):
             return pts2, desc2
 
         with (
-            patch.object(locator, "BF_MAX_TRAIN_DESC", 8),
-            patch.object(locator, "_subsample_train", side_effect=_spy) as mock,
+            patch.object(index_search_mod, "BF_MAX_TRAIN_DESC", 8),
+            patch.object(index_search_mod, "_subsample_train", side_effect=_spy) as mock,
         ):
             pose, diag = engine._pose_via_index(
                 np.zeros((32, 32), np.uint8),
@@ -224,7 +225,7 @@ class TestSearchOptimizations(unittest.TestCase):
     def test_strong_first_match_stops_the_scan(self):
         idx = _MultiIndex([(1.0, *_matchable_set()), (0.8, *_matchable_set())])
         spy = _CountingBF(self.engine.bf)
-        self.engine.bf = spy  # type: ignore[assignment]
+        self.engine.bf = spy
 
         pose, diag = self._run(idx, early_inl=4)
 
@@ -234,7 +235,7 @@ class TestSearchOptimizations(unittest.TestCase):
     def test_zero_early_exit_keeps_scanning_all_sets(self):
         idx = _MultiIndex([(1.0, *_matchable_set()), (0.8, *_matchable_set())])
         spy = _CountingBF(self.engine.bf)
-        self.engine.bf = spy  # type: ignore[assignment]
+        self.engine.bf = spy
 
         pose, _diag = self._run(idx, early_inl=0)
 
@@ -244,8 +245,8 @@ class TestSearchOptimizations(unittest.TestCase):
     def test_early_break_uses_its_own_config_key(self):
         idx = _MultiIndex([(1.0, *_matchable_set()), (0.8, *_matchable_set())])
         spy = _CountingBF(self.engine.bf)
-        self.engine.bf = spy  # type: ignore[assignment]
-        self.engine.store = _CfgStore({"early_inl": 4, "vote_inl_skip": 999})  # type: ignore[assignment]
+        self.engine.bf = spy
+        self.engine.store = _CfgStore({"early_inl": 4, "vote_inl_skip": 999})
 
         pose = self.engine._index_find(
             np.zeros((32, 32), np.uint8),
@@ -263,8 +264,8 @@ class TestSearchOptimizations(unittest.TestCase):
     def test_vote_skip_does_not_stop_the_scan(self):
         idx = _MultiIndex([(1.0, *_matchable_set()), (0.8, *_matchable_set())])
         spy = _CountingBF(self.engine.bf)
-        self.engine.bf = spy  # type: ignore[assignment]
-        self.engine.store = _CfgStore({"vote_inl_skip": 4})  # type: ignore[assignment]
+        self.engine.bf = spy
+        self.engine.store = _CfgStore({"vote_inl_skip": 4})
 
         pose = self.engine._index_find(
             np.zeros((32, 32), np.uint8),
@@ -282,7 +283,7 @@ class TestSearchOptimizations(unittest.TestCase):
     def test_previous_scale_prunes_far_levels(self):
         idx = _MultiIndex([(1.0, *_matchable_set()), (0.6, *_matchable_set())])
         spy = _CountingBF(self.engine.bf)
-        self.engine.bf = spy  # type: ignore[assignment]
+        self.engine.bf = spy
 
         pose, _diag = self._run(idx, prev_s=1.0, early_inl=0)
 
