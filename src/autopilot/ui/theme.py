@@ -358,6 +358,21 @@ QWidget#MapHud {
     border-radius: 10px;
 }
 
+QWidget#Sidebar {
+    background-color: $GLASS_CARD;
+    border: 1px solid $BORDER;
+    border-radius: 12px;
+}
+
+QScrollArea#SideScroll, QScrollArea#SideScroll QWidget#qt_scrollarea_viewport {
+    background: transparent;
+    border: none;
+}
+
+QStackedWidget {
+    background: transparent;
+}
+
 QLabel#StatusBadge {
     background-color: rgba(56,58,68,0.60);
     border: 1px solid $BORDER;

@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QVBoxLayout,
+    QWidget,
 )
 
 from ... import PROJECT_ROOT, crashlog
@@ -33,6 +34,7 @@ class RoiDiagnosticsMixin(RoiTabBase):
     def _build_diagnostics_card(self, layout: QVBoxLayout) -> None:
         # Live capture diagnostic card
         card_prev = QGroupBox("Live Capture Diagnostic", self)
+        self.diagnostics_card = card_prev
         prev_layout = QVBoxLayout(card_prev)
         prev_layout.setContentsMargins(10, 12, 10, 10)
         prev_layout.setSpacing(6)
@@ -126,6 +128,13 @@ class RoiDiagnosticsMixin(RoiTabBase):
 
         # Backward compatibility alias
         self.preview_lbl = self.raw_preview_lbl
+
+    def detach_diagnostics(self) -> QWidget:
+        """Release the live preview card for the always-visible right pane."""
+        layout = self.layout()
+        if layout is not None:
+            layout.removeWidget(self.diagnostics_card)
+        return self.diagnostics_card
 
     def _panel_placeholder(self, lbl: QLabel, text: str) -> None:
         """Muted text instead of an empty black rectangle."""

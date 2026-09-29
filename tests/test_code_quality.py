@@ -551,12 +551,17 @@ class TestAppSmoke(unittest.TestCase):
         ):
             app = App(AppConfig())
             try:
-                self.assertEqual(app.nb.count(), 2)
+                # persistent sidebar with its own sections
+                self.assertEqual(app.side_tabs.count(), 2)
+                self.assertEqual(app.side_tabs.tabText(1), "Map")
+                self.assertEqual(app.side_stack.count(), 2)
+                self.assertIs(app.side_stack.widget(1), app.map_tab)
                 self.assertIs(app.routes_tab, app.map_tab)
                 self.assertIsNotNone(app._loc_thread)
                 self.assertIsNotNone(app._hotkeys)
-                self.assertEqual(app.nb.currentIndex(), 1)
-                self.assertEqual(app.nb.tabText(1), "Map")
+                # the map canvas and the live preview live in the right pane
+                self.assertTrue(app.right_pane.isAncestorOf(app.map_tab.map_widget))
+                self.assertTrue(app.right_pane.isAncestorOf(app.roi_tab.diagnostics_card))
             finally:
                 app.close()
 

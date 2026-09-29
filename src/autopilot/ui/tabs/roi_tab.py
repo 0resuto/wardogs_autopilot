@@ -31,7 +31,7 @@ from ... import PROJECT_ROOT
 from ..icons import icon
 from ..roi_selector import RoiSelector
 from ..theme import BLUE, GREEN, RED, TEXT_DIM, TEXT_MUTED
-from .common import StringVarCompat
+from .common import StringVarCompat, compact_label
 from .roi_cache import RoiCacheMixin, map_cache_status
 from .roi_diagnostics import RoiDiagnosticsMixin
 
@@ -99,22 +99,27 @@ class RoiTab(RoiCacheMixin, RoiDiagnosticsMixin, QWidget):
         self._build_speed_card(layout)
         self._build_cache_card(layout)
         self._build_diagnostics_card(layout)
+        layout.addStretch()  # keep the sidebar content top-aligned
 
     def _build_roi_card(self, layout: QVBoxLayout) -> None:
         # Card 1: Minimap Capture Area
-        card_roi = QGroupBox("Minimap Screen Capture Area", self)
+        card_roi = QGroupBox("Minimap Capture", self)
         roi_layout = QVBoxLayout(card_roi)
         roi_layout.setContentsMargins(12, 14, 12, 12)
         roi_layout.setSpacing(8)
 
-        top_row = QHBoxLayout()
         guide_lbl = QLabel(
-            "1. Open minimap in-game (M key)   2. Drag selection box   3. Enter to confirm, Esc to cancel",
+            "1. Open minimap in-game (M key)\n2. Drag selection box\n"
+            "3. Enter to confirm, Esc to cancel",
             card_roi,
         )
         guide_lbl.setStyleSheet(f"color: {TEXT_MUTED};")
-        top_row.addWidget(guide_lbl, stretch=1)
+        guide_lbl.setWordWrap(True)
+        compact_label(guide_lbl)
+        roi_layout.addWidget(guide_lbl)
 
+        top_row = QHBoxLayout()
+        top_row.setSpacing(6)
         cap = self.get_cap()
         if cap and len(cap.monitors) > 2:
             mon_lbl = QLabel("Monitor:", card_roi)
@@ -122,6 +127,7 @@ class RoiTab(RoiCacheMixin, RoiDiagnosticsMixin, QWidget):
             top_row.addWidget(mon_lbl)
 
             self._mon_sel = QComboBox(card_roi)
+            self._mon_sel.setFixedWidth(104)
             for i in range(1, len(cap.monitors)):
                 m = cap.monitors[i]
                 self._mon_sel.addItem(f"{i}: {m['width']}x{m['height']}")
@@ -131,49 +137,60 @@ class RoiTab(RoiCacheMixin, RoiDiagnosticsMixin, QWidget):
             self._mon_sel.currentIndexChanged.connect(self._on_monitor_changed)
             top_row.addWidget(self._mon_sel)
 
-        self.pick_btn = QPushButton("Pick zone on screen", card_roi)
+        self.pick_btn = QPushButton("Pick zone", card_roi)
         self.pick_btn.setObjectName("AccentButton")
         self.pick_btn.setIcon(icon("crop"))
+        self.pick_btn.setToolTip("Pick the minimap capture zone on screen")
         self.pick_btn.clicked.connect(self.pick_roi)
         top_row.addWidget(self.pick_btn)
 
-        self.mask_btn = QPushButton("Open mask folder", card_roi)
+        self.mask_btn = QPushButton("", card_roi)
         self.mask_btn.setIcon(icon("folder"))
+        self.mask_btn.setFixedWidth(34)
         self.mask_btn.setToolTip("Open folder containing minimap mask (mm_mask.png)")
         self.mask_btn.clicked.connect(self.open_mask_folder)
         top_row.addWidget(self.mask_btn)
+        top_row.addStretch()
         roi_layout.addLayout(top_row)
 
-        coord_row = QHBoxLayout()
-        coord_row.setSpacing(6)
         coord_title = QLabel("Coordinates (px):", card_roi)
         coord_title.setStyleSheet(f"color: {BLUE}; font-weight: bold;")
-        coord_row.addWidget(coord_title)
+        roi_layout.addWidget(coord_title)
 
         current_roi = self.cfg.get("capture", {}).get("mmap_roi", [0, 0, 0, 0])
         self.coord_inputs: dict[str, QLineEdit] = {}
-        for i, name in enumerate(("x", "y", "w", "h")):
-            lbl = QLabel(name.upper(), card_roi)
-            lbl.setStyleSheet(f"color: {TEXT_MUTED};")
-            coord_row.addWidget(lbl)
+        for pair in (("x", "y"), ("w", "h")):
+            coord_row = QHBoxLayout()
+            coord_row.setSpacing(6)
+            for name in pair:
+                i = ("x", "y", "w", "h").index(name)
+                lbl = QLabel(name.upper(), card_roi)
+                lbl.setStyleSheet(f"color: {TEXT_MUTED};")
+                coord_row.addWidget(lbl)
 
-            val = str(current_roi[i]) if i < len(current_roi) else "0"
-            inp = QLineEdit(val, card_roi)
-            inp.setFixedWidth(56)
-            coord_row.addWidget(inp)
-            self.coord_inputs[name] = inp
-            compat_var = StringVarCompat(val)
-            self.roi_vars[name] = compat_var
+                val = str(current_roi[i]) if i < len(current_roi) else "0"
+                inp = QLineEdit(val, card_roi)
+                inp.setFixedWidth(48)
+                coord_row.addWidget(inp)
+                self.coord_inputs[name] = inp
+                compat_var = StringVarCompat(val)
+                self.roi_vars[name] = compat_var
+            coord_row.addStretch()
+            roi_layout.addLayout(coord_row)
 
+        apply_row = QHBoxLayout()
+        apply_row.setSpacing(6)
         apply_btn = QPushButton("Apply", card_roi)
         apply_btn.setFixedWidth(64)
         apply_btn.clicked.connect(self.apply_roi)
-        coord_row.addWidget(apply_btn)
+        apply_row.addWidget(apply_btn)
 
         self.status_lbl = QLabel("", card_roi)
         self.status_lbl.setStyleSheet(f"color: {GREEN}; font-weight: 500;")
-        coord_row.addWidget(self.status_lbl, stretch=1)
-        roi_layout.addLayout(coord_row)
+        self.status_lbl.setWordWrap(True)
+        compact_label(self.status_lbl)
+        apply_row.addWidget(self.status_lbl, stretch=1)
+        roi_layout.addLayout(apply_row)
         layout.addWidget(card_roi)
 
     def _build_speed_card(self, layout: QVBoxLayout) -> None:
@@ -182,14 +199,17 @@ class RoiTab(RoiCacheMixin, RoiDiagnosticsMixin, QWidget):
         speed_layout.setContentsMargins(12, 14, 12, 12)
         speed_layout.setSpacing(8)
 
-        speed_top = QHBoxLayout()
-        speed_top.setSpacing(8)
         speed_guide = QLabel(
-            "1. Select a box around the speed digits only (units and labels are ignored)",
+            "1. Select a box around the speed digits only\n(units and labels are ignored)",
             card_speed,
         )
         speed_guide.setStyleSheet(f"color: {TEXT_MUTED};")
-        speed_top.addWidget(speed_guide, stretch=1)
+        speed_guide.setWordWrap(True)
+        compact_label(speed_guide)
+        speed_layout.addWidget(speed_guide)
+
+        speed_top = QHBoxLayout()
+        speed_top.setSpacing(8)
 
         self.pick_speed_btn = QPushButton("Pick speed zone", card_speed)
         self.pick_speed_btn.setIcon(icon("crop"))
@@ -199,32 +219,39 @@ class RoiTab(RoiCacheMixin, RoiDiagnosticsMixin, QWidget):
         self.disable_speed_btn = QPushButton("Disable", card_speed)
         self.disable_speed_btn.clicked.connect(self.disable_speed_roi)
         speed_top.addWidget(self.disable_speed_btn)
+        speed_top.addStretch()
         speed_layout.addLayout(speed_top)
 
         saved_speed = self.cfg.get("capture", {}).get("speed_roi")
-        speed_row = QHBoxLayout()
-        speed_row.setSpacing(6)
         speed_coord_title = QLabel("Coordinates (px):", card_speed)
         speed_coord_title.setStyleSheet(f"color: {BLUE}; font-weight: bold;")
-        speed_row.addWidget(speed_coord_title)
+        speed_layout.addWidget(speed_coord_title)
 
         self.speed_inputs: dict[str, QLineEdit] = {}
         self.speed_vars: dict[str, StringVarCompat] = {}
-        for i, name in enumerate(("x", "y", "w", "h")):
-            lbl = QLabel(name.upper(), card_speed)
-            lbl.setStyleSheet(f"color: {TEXT_MUTED};")
-            speed_row.addWidget(lbl)
-            val = str(saved_speed[i]) if saved_speed and i < len(saved_speed) else "0"
-            inp = QLineEdit(val, card_speed)
-            inp.setFixedWidth(56)
-            speed_row.addWidget(inp)
-            self.speed_inputs[name] = inp
-            self.speed_vars[name] = StringVarCompat(val)
+        for pair in (("x", "y"), ("w", "h")):
+            speed_row = QHBoxLayout()
+            speed_row.setSpacing(6)
+            for name in pair:
+                i = ("x", "y", "w", "h").index(name)
+                lbl = QLabel(name.upper(), card_speed)
+                lbl.setStyleSheet(f"color: {TEXT_MUTED};")
+                speed_row.addWidget(lbl)
+                val = str(saved_speed[i]) if saved_speed and i < len(saved_speed) else "0"
+                inp = QLineEdit(val, card_speed)
+                inp.setFixedWidth(48)
+                speed_row.addWidget(inp)
+                self.speed_inputs[name] = inp
+                self.speed_vars[name] = StringVarCompat(val)
+            speed_row.addStretch()
+            speed_layout.addLayout(speed_row)
 
+        speed_apply_row = QHBoxLayout()
+        speed_apply_row.setSpacing(6)
         speed_apply_btn = QPushButton("Apply", card_speed)
         speed_apply_btn.setFixedWidth(64)
         speed_apply_btn.clicked.connect(self.apply_speed_roi)
-        speed_row.addWidget(speed_apply_btn)
+        speed_apply_row.addWidget(speed_apply_btn)
 
         self.speed_status_lbl = QLabel(
             "enabled" if saved_speed else "disabled",
@@ -233,8 +260,10 @@ class RoiTab(RoiCacheMixin, RoiDiagnosticsMixin, QWidget):
         self.speed_status_lbl.setStyleSheet(
             f"color: {GREEN};" if saved_speed else f"color: {TEXT_DIM};"
         )
-        speed_row.addWidget(self.speed_status_lbl, stretch=1)
-        speed_layout.addLayout(speed_row)
+        self.speed_status_lbl.setWordWrap(True)
+        compact_label(self.speed_status_lbl)
+        speed_apply_row.addWidget(self.speed_status_lbl, stretch=1)
+        speed_layout.addLayout(speed_apply_row)
         layout.addWidget(card_speed)
 
     def _on_monitor_changed(self, index: int) -> None:

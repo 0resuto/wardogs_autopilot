@@ -106,6 +106,7 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
         self._build_map_area(root_layout)
         self._build_map_notice()
         self._build_bottom_bar(root_layout)
+        root_layout.addStretch()  # keep the sidebar content top-aligned
         self._update_map_notice()
         self.preset_reload()
 
@@ -193,6 +194,16 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
         else:
             self._map_notice.hide()
 
+    def detach_map_widget(self) -> None:
+        """Release the canvas from the tab layout.
+
+        The app embeds it in the always-visible right pane next to the live
+        preview; the sidebar keeps only the controls.
+        """
+        layout = self.layout()
+        if layout is not None:
+            layout.removeWidget(self.map_widget)
+
     def map_loading(self) -> None:
         """Called by the app when a map (re)load starts."""
         self._map_loaded = False
@@ -213,7 +224,7 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
         top_bar.addWidget(lbl_preset)
 
         self.p_sel = QComboBox(self)
-        self.p_sel.setFixedWidth(130)
+        self.p_sel.setFixedWidth(110)
         top_bar.addWidget(self.p_sel)
 
         self._preset_menu_btn = QPushButton("⋯", self)
@@ -234,31 +245,41 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
         self._preset_menu_btn.setMenu(preset_menu)
         top_bar.addWidget(self._preset_menu_btn)
 
-        btn_clear = QPushButton("Clear", self)
+        # Icon-only route actions: the sidebar column is narrow, tooltips carry
+        # the labels.
+        btn_clear = QPushButton("", self)
         btn_clear.setIcon(icon("trash"))
+        btn_clear.setFixedWidth(34)
+        btn_clear.setToolTip("Clear the route")
         btn_clear.clicked.connect(self.routes_clear)
         top_bar.addWidget(btn_clear)
 
-        self._reverse_btn = QPushButton("Reverse", self)
+        self._reverse_btn = QPushButton("", self)
         self._reverse_btn.setIcon(icon("swap"))
+        self._reverse_btn.setFixedWidth(34)
         self._reverse_btn.setToolTip("Reverse the route direction (F8)")
         self._reverse_btn.clicked.connect(lambda: self.routes_invert())
         top_bar.addWidget(self._reverse_btn)
 
-        self._edit_btn = QPushButton("Edit", self)
+        self._edit_btn = QPushButton("", self)
         self._edit_btn.setIcon(icon("pencil"))
+        self._edit_btn.setFixedWidth(34)
         self._edit_btn.setToolTip("Edit the route points on the map")
         self._edit_btn.clicked.connect(lambda: self._set_edit_mode(True))
         top_bar.addWidget(self._edit_btn)
 
-        self._apply_btn = QPushButton("Apply", self)
+        self._apply_btn = QPushButton("", self)
         self._apply_btn.setIcon(icon("check"))
+        self._apply_btn.setFixedWidth(34)
+        self._apply_btn.setToolTip("Apply the edited route")
         self._apply_btn.clicked.connect(self.route_edit_apply)
         self._apply_btn.hide()
         top_bar.addWidget(self._apply_btn)
 
-        self._cancel_btn = QPushButton("Cancel", self)
+        self._cancel_btn = QPushButton("", self)
         self._cancel_btn.setIcon(icon("x"))
+        self._cancel_btn.setFixedWidth(34)
+        self._cancel_btn.setToolTip("Cancel the route edits")
         self._cancel_btn.clicked.connect(self.route_edit_cancel)
         self._cancel_btn.hide()
         top_bar.addWidget(self._cancel_btn)
@@ -270,9 +291,16 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
             self._reverse_btn,
         ]
 
+        root_layout.addLayout(top_bar)
+
+        # Second row: diagnostics toggles and the tuning panel switch (the
+        # sidebar column is too narrow for a single toolbar row).
+        diag_bar = QHBoxLayout()
+        diag_bar.setSpacing(6)
+
         self.dbg_ck = QCheckBox("Nav log", self)
         self.dbg_ck.setChecked(bool(self.app_cfg.navigator.debug))
-        top_bar.addWidget(self.dbg_ck)
+        diag_bar.addWidget(self.dbg_ck)
 
         self._manual_rec_ck = QCheckBox("Record my driving", self)
         self._manual_rec_ck.setToolTip(
@@ -280,16 +308,16 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
             "output/manual_dbg_*.jsonl while driving by hand"
         )
         self._manual_rec_ck.toggled.connect(self.toggle_manual_record)
-        top_bar.addWidget(self._manual_rec_ck)
+        diag_bar.addWidget(self._manual_rec_ck)
 
-        top_bar.addStretch()
+        diag_bar.addStretch()
 
         self._tune_toggle_btn = QPushButton("Tuning ▾", self)
         self._tune_toggle_btn.setIcon(icon("sliders"))
         self._tune_toggle_btn.clicked.connect(self.toggle_tuning_panel)
-        top_bar.addWidget(self._tune_toggle_btn)
+        diag_bar.addWidget(self._tune_toggle_btn)
 
-        root_layout.addLayout(top_bar)
+        root_layout.addLayout(diag_bar)
 
     def _build_map_area(self, root_layout: QVBoxLayout) -> None:
         # --- Interactive Map Canvas / Scene ---
@@ -320,25 +348,26 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
         self.estop_btn.setIcon(icon("stop"))
         self.estop_btn.clicked.connect(self.emergency_stop)
         bot_bar.addWidget(self.estop_btn)
-
-        self.routes_status = QLabel("", self)
-        self.routes_status.setStyleSheet(f"color: {BLUE}; font-weight: bold;")
-        compact_label(self.routes_status)
-        bot_bar.addWidget(self.routes_status, stretch=1)
+        bot_bar.addStretch()
         bot_box.addLayout(bot_bar)
 
-        info_bar = QHBoxLayout()
-        info_bar.setSpacing(8)
+        # The sidebar column is narrow: status and hints get their own rows.
+        self.routes_status = QLabel("", self)
+        self.routes_status.setStyleSheet(f"color: {BLUE}; font-weight: bold;")
+        self.routes_status.setWordWrap(True)
+        compact_label(self.routes_status)
+        bot_box.addWidget(self.routes_status)
 
         self.map_status = QLabel("", self)
         self.map_status.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 9pt;")
+        self.map_status.setWordWrap(True)
         compact_label(self.map_status)
-        info_bar.addWidget(self.map_status, stretch=1)
+        bot_box.addWidget(self.map_status)
 
         self._hint_lbl = QLabel("LMB: Pan | Wheel: Zoom | Edit to modify the route", self)
         self._hint_lbl.setStyleSheet(f"color: {TEXT_DIM}; font-size: 9pt;")
-        info_bar.addWidget(self._hint_lbl)
-        bot_box.addLayout(info_bar)
+        self._hint_lbl.setWordWrap(True)
+        bot_box.addWidget(self._hint_lbl)
 
         root_layout.addLayout(bot_box)
 

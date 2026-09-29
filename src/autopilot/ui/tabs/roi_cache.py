@@ -21,7 +21,7 @@ from ... import PROJECT_ROOT, crashlog
 from ...vision import asset_sync, locator
 from ..icons import icon
 from ..theme import BLUE, GREEN, RED, TEXT_DIM, YELLOW
-from .common import RoiTabBase
+from .common import RoiTabBase, compact_label
 
 
 def map_cache_status(name: str) -> tuple[str, str]:
@@ -93,7 +93,7 @@ class RoiCacheMixin(RoiTabBase):
 
     def _build_cache_card(self, layout: QVBoxLayout) -> None:
         # Map Cache & SIFT Feature Index Management
-        card_cache = QGroupBox("Map Cache & SIFT Feature Index", self)
+        card_cache = QGroupBox("Map Cache", self)
         cache_layout = QVBoxLayout(card_cache)
         cache_layout.setContentsMargins(12, 14, 12, 12)
         cache_layout.setSpacing(6)
@@ -109,28 +109,35 @@ class RoiCacheMixin(RoiTabBase):
         if cur_map in all_maps:
             self._cache_map_sel.setCurrentText(cur_map)
         self._cache_map_sel.currentTextChanged.connect(lambda: self.cache_status_refresh())
-        row_map.addWidget(self._cache_map_sel)
+        compact_label(self._cache_map_sel)
+        row_map.addWidget(self._cache_map_sel, stretch=1)
+        cache_layout.addLayout(row_map)
 
+        # Buttons on their own row: the sidebar column is narrow.
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
         self._cache_download_btn = QPushButton("Download", card_cache)
         self._cache_download_btn.setIcon(icon("download"))
         self._cache_download_btn.setToolTip(
             "Download the map assets (archive + sha256 verification) from the release"
         )
         self._cache_download_btn.clicked.connect(self._cache_download_click)
-        row_map.addWidget(self._cache_download_btn)
+        btn_row.addWidget(self._cache_download_btn)
 
-        self._cache_rebuild_btn = QPushButton("Rebuild Cache & SIFT Index", card_cache)
+        self._cache_rebuild_btn = QPushButton("Rebuild Index", card_cache)
         self._cache_rebuild_btn.setIcon(icon("refresh"))
         self._cache_rebuild_btn.setToolTip(
             "Rebuild mu/previews/SIFT index from the source PNG (maintainer machines only)"
         )
         self._cache_rebuild_btn.clicked.connect(self._cache_rebuild_click)
-        row_map.addWidget(self._cache_rebuild_btn)
-        row_map.addStretch()
-        cache_layout.addLayout(row_map)
+        btn_row.addWidget(self._cache_rebuild_btn)
+        btn_row.addStretch()
+        cache_layout.addLayout(btn_row)
 
         self._cache_status_lbl = QLabel("", card_cache)
         self._cache_status_lbl.setStyleSheet(f"color: {BLUE};")
+        self._cache_status_lbl.setWordWrap(True)
+        compact_label(self._cache_status_lbl)
         cache_layout.addWidget(self._cache_status_lbl)
         self.cache_status_refresh()
         layout.addWidget(card_cache)

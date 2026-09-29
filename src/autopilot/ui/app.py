@@ -16,10 +16,14 @@ from PySide6.QtCore import QRect, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QMainWindow,
-    QTabWidget,
+    QScrollArea,
+    QSplitter,
+    QStackedWidget,
+    QTabBar,
     QVBoxLayout,
     QWidget,
 )
@@ -228,24 +232,56 @@ class App(QMainWindow):
 
         root_layout.addWidget(toolbar)
 
-        # Tabs
-        self.nb = QTabWidget(central)
-        self.nb.currentChanged.connect(self._on_tab_changed)
-        root_layout.addWidget(self.nb, stretch=1)
+        splitter = QSplitter(Qt.Orientation.Horizontal, central)
+        splitter.setChildrenCollapsible(False)
+        root_layout.addWidget(splitter, stretch=1)
+
+        # --- Left: persistent sidebar with its own sections ---
+        side = QWidget(splitter)
+        side.setObjectName("Sidebar")
+        side.setMinimumWidth(330)
+        side.setMaximumWidth(470)
+        side_layout = QVBoxLayout(side)
+        side_layout.setContentsMargins(8, 8, 8, 8)
+        side_layout.setSpacing(6)
+
+        self.side_tabs = QTabBar(side)
+        self.side_tabs.setExpanding(True)
+        self.side_tabs.addTab("Capture")
+        self.side_tabs.addTab("Map")
+        side_layout.addWidget(self.side_tabs)
+
+        self.side_stack = QStackedWidget(side)
+        side_scroll = QScrollArea(side)
+        side_scroll.setObjectName("SideScroll")
+        side_scroll.setWidgetResizable(True)
+        side_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        side_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        side_scroll.setWidget(self.side_stack)
+        side_layout.addWidget(side_scroll, stretch=1)
+        self.side_tabs.currentChanged.connect(self.side_stack.setCurrentIndex)
+
+        # --- Right: the map canvas and the live preview are always visible ---
+        self.right_pane = QWidget(splitter)
+        right_layout = QVBoxLayout(self.right_pane)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(6)
+        self.right_split = QSplitter(Qt.Orientation.Vertical, self.right_pane)
+        self.right_split.setChildrenCollapsible(False)
+        right_layout.addWidget(self.right_split)
 
         self.roi_tab = RoiTab(
-            self.nb,
+            side,
             cfg=self.cfg,
             save_cfg_fn=self._save_cfg,
             screen_cap_supplier=lambda: self._cap,
             loc_thread_supplier=lambda: self._loc_thread,
             on_map_rebuilt=self._on_map_rebuilt,
         )
-        self.nb.addTab(self.roi_tab, "Capture zone")
 
         self.map_tab = MapTab(
-            self.nb,
-            on_open_capture=lambda: self.nb.setCurrentIndex(0),
+            side,
+            on_open_capture=lambda: self.side_tabs.setCurrentIndex(0),
             cfg=self.cfg,
             save_cfg_fn=self._save_cfg,
             loc_thread_supplier=lambda: self._loc_thread,
@@ -255,10 +291,26 @@ class App(QMainWindow):
             app_cfg=self.app_cfg,
         )
         self.routes_tab = self.map_tab  # Backward-compatibility alias
-        self.nb.addTab(self.map_tab, "Map")
-        # First run without map assets: land on the Capture tab where the
-        # download action lives instead of showing an empty canvas.
-        self.nb.setCurrentIndex(1 if self.map_tab.map_asset_state() == "ok" else 0)
+
+        self.map_tab.detach_map_widget()
+        self.right_split.addWidget(self.map_tab.map_widget)
+        self.right_split.addWidget(self.roi_tab.detach_diagnostics())
+        self.right_split.setStretchFactor(0, 1)
+        self.right_split.setStretchFactor(1, 0)
+        self.right_split.setSizes([640, 210])
+
+        self.side_stack.addWidget(self.roi_tab)
+        self.side_stack.addWidget(self.map_tab)
+
+        splitter.addWidget(side)
+        splitter.addWidget(self.right_pane)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([400, 880])
+
+        # First run without map assets: show the Capture section where the
+        # download action lives instead of an empty canvas.
+        self.side_tabs.setCurrentIndex(1 if self.map_tab.map_asset_state() == "ok" else 0)
 
     def _cfg_map_name(self) -> str:
         m = self.cfg.get("map")
@@ -310,10 +362,6 @@ class App(QMainWindow):
         self.map_tab.map_widget.view.fit_view()
         self._map_size_lbl.setText(f"{map_size}x{map_size}")
         self.map_tab.map_loaded()
-
-    def _on_tab_changed(self, index: int) -> None:
-        if index == 1:
-            QTimer.singleShot(50, self.map_tab.map_widget.view.fit_view)
 
     def _update_hw_status(self) -> None:
         """Top-bar indicator: is the configured Arduino serial port present?"""
