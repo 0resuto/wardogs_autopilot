@@ -1,6 +1,6 @@
 {
   "repo": "0resuto/wardogs_autopilot",
-  "tag": "v1.0.0",
+  "tag": "v0.1.0",
   "notes": [
     "Derived artifacts only: the original map PNG is not distributed. A machine holding the source PNG refreshes this catalog with tools/build_map_assets.py (--rebuild regenerates the caches first).",
     "Each map ships as a single <map>.zip (npz members stored uncompressed, raw npy/txt members deflated); tools/download_map.py downloads the archive, checks its sha256, then extracts every artifact and verifies the per-file sha256 before replacing the local files.",
