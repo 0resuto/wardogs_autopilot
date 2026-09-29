@@ -11,6 +11,7 @@ from PySide6.QtGui import QColor, QFont, QKeyEvent, QMouseEvent, QPainter, QPen,
 from PySide6.QtWidgets import QApplication, QWidget
 
 from .imaging import to_qpixmap
+from .theme import GREEN, SURFACE, SURFACE_HI, TEXT
 
 
 class RoiSelector(QWidget):
@@ -117,31 +118,31 @@ class RoiSelector(QWidget):
 
             # Background pill for action controls
             badge_rect = QRect(bx, by, 300, 38)
-            painter.setPen(QPen(QColor("#383838"), 1))
+            painter.setPen(QPen(QColor(f"{SURFACE}"), 1))
             painter.setBrush(QColor(25, 25, 25, 235))
             painter.drawRoundedRect(badge_rect, 6, 6)
 
             # Dimensions text
             dim_txt = f"{rw}×{rh} px"
             painter.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
-            painter.setPen(QColor("#ffffff"))
+            painter.setPen(QColor(f"{TEXT}"))
             painter.drawText(bx + 12, by + 23, dim_txt)
 
             # Apply button [ ✓ Apply ]
             self._apply_rect = QRect(bx + 115, by + 6, 85, 26)
-            painter.setBrush(QColor("#107c41"))
-            painter.setPen(QPen(QColor("#107c41"), 1))
+            painter.setBrush(QColor(f"{GREEN}"))
+            painter.setPen(QPen(QColor(f"{GREEN}"), 1))
             painter.drawRoundedRect(self._apply_rect, 4, 4)
-            painter.setPen(QColor("#ffffff"))
+            painter.setPen(QColor(f"{TEXT}"))
             painter.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
             painter.drawText(self._apply_rect, Qt.AlignmentFlag.AlignCenter, "✓ Apply")
 
             # Cancel button [ ✕ Cancel ]
             self._cancel_rect = QRect(bx + 208, by + 6, 80, 26)
-            painter.setBrush(QColor("#454545"))
-            painter.setPen(QPen(QColor("#555555"), 1))
+            painter.setBrush(QColor(f"{SURFACE}"))
+            painter.setPen(QPen(QColor(f"{SURFACE_HI}"), 1))
             painter.drawRoundedRect(self._cancel_rect, 4, 4)
-            painter.setPen(QColor("#ffffff"))
+            painter.setPen(QColor(f"{TEXT}"))
             painter.setFont(QFont("Segoe UI", 9, QFont.Weight.Normal))
             painter.drawText(self._cancel_rect, Qt.AlignmentFlag.AlignCenter, "✕ Cancel")
         else:
@@ -150,7 +151,7 @@ class RoiSelector(QWidget):
             # Top instructional banner
             painter.fillRect(QRect(0, 0, self.width(), 40), QColor(20, 20, 20, 220))
             painter.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
-            painter.setPen(QColor("#ffffff"))
+            painter.setPen(QColor(f"{TEXT}"))
             painter.drawText(
                 20,
                 26,

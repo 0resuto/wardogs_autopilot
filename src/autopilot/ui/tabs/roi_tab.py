@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 
 from ... import PROJECT_ROOT
 from ..roi_selector import RoiSelector
+from ..theme import BLUE, GREEN, RED, TEXT_DIM, TEXT_MUTED
 from .common import StringVarCompat
 from .roi_cache import RoiCacheMixin, map_cache_status
 from .roi_diagnostics import RoiDiagnosticsMixin
@@ -110,13 +111,13 @@ class RoiTab(RoiCacheMixin, RoiDiagnosticsMixin, QWidget):
             "1. Open minimap in-game (M key)   2. Drag selection box   3. Enter to confirm, Esc to cancel",
             card_roi,
         )
-        guide_lbl.setStyleSheet("color: #a0a0a0;")
+        guide_lbl.setStyleSheet(f"color: {TEXT_MUTED};")
         top_row.addWidget(guide_lbl, stretch=1)
 
         cap = self.get_cap()
         if cap and len(cap.monitors) > 2:
             mon_lbl = QLabel("Monitor:", card_roi)
-            mon_lbl.setStyleSheet("color: #88c0d0; font-weight: bold;")
+            mon_lbl.setStyleSheet(f"color: {BLUE}; font-weight: bold;")
             top_row.addWidget(mon_lbl)
 
             self._mon_sel = QComboBox(card_roi)
@@ -143,14 +144,14 @@ class RoiTab(RoiCacheMixin, RoiDiagnosticsMixin, QWidget):
         coord_row = QHBoxLayout()
         coord_row.setSpacing(6)
         coord_title = QLabel("Coordinates (px):", card_roi)
-        coord_title.setStyleSheet("color: #88c0d0; font-weight: bold;")
+        coord_title.setStyleSheet(f"color: {BLUE}; font-weight: bold;")
         coord_row.addWidget(coord_title)
 
         current_roi = self.cfg.get("capture", {}).get("mmap_roi", [0, 0, 0, 0])
         self.coord_inputs: dict[str, QLineEdit] = {}
         for i, name in enumerate(("x", "y", "w", "h")):
             lbl = QLabel(name.upper(), card_roi)
-            lbl.setStyleSheet("color: #b0b0b0;")
+            lbl.setStyleSheet(f"color: {TEXT_MUTED};")
             coord_row.addWidget(lbl)
 
             val = str(current_roi[i]) if i < len(current_roi) else "0"
@@ -167,7 +168,7 @@ class RoiTab(RoiCacheMixin, RoiDiagnosticsMixin, QWidget):
         coord_row.addWidget(apply_btn)
 
         self.status_lbl = QLabel("", card_roi)
-        self.status_lbl.setStyleSheet("color: #8ae234; font-weight: 500;")
+        self.status_lbl.setStyleSheet(f"color: {GREEN}; font-weight: 500;")
         coord_row.addWidget(self.status_lbl, stretch=1)
         roi_layout.addLayout(coord_row)
         layout.addWidget(card_roi)
@@ -184,7 +185,7 @@ class RoiTab(RoiCacheMixin, RoiDiagnosticsMixin, QWidget):
             "1. Select a box around the speed digits only (units and labels are ignored)",
             card_speed,
         )
-        speed_guide.setStyleSheet("color: #a0a0a0;")
+        speed_guide.setStyleSheet(f"color: {TEXT_MUTED};")
         speed_top.addWidget(speed_guide, stretch=1)
 
         self.pick_speed_btn = QPushButton("⛶ Pick speed zone", card_speed)
@@ -200,14 +201,14 @@ class RoiTab(RoiCacheMixin, RoiDiagnosticsMixin, QWidget):
         speed_row = QHBoxLayout()
         speed_row.setSpacing(6)
         speed_coord_title = QLabel("Coordinates (px):", card_speed)
-        speed_coord_title.setStyleSheet("color: #88c0d0; font-weight: bold;")
+        speed_coord_title.setStyleSheet(f"color: {BLUE}; font-weight: bold;")
         speed_row.addWidget(speed_coord_title)
 
         self.speed_inputs: dict[str, QLineEdit] = {}
         self.speed_vars: dict[str, StringVarCompat] = {}
         for i, name in enumerate(("x", "y", "w", "h")):
             lbl = QLabel(name.upper(), card_speed)
-            lbl.setStyleSheet("color: #b0b0b0;")
+            lbl.setStyleSheet(f"color: {TEXT_MUTED};")
             speed_row.addWidget(lbl)
             val = str(saved_speed[i]) if saved_speed and i < len(saved_speed) else "0"
             inp = QLineEdit(val, card_speed)
@@ -225,7 +226,9 @@ class RoiTab(RoiCacheMixin, RoiDiagnosticsMixin, QWidget):
             "enabled" if saved_speed else "disabled",
             card_speed,
         )
-        self.speed_status_lbl.setStyleSheet("color: #8ae234;" if saved_speed else "color: #8a8a8a;")
+        self.speed_status_lbl.setStyleSheet(
+            f"color: {GREEN};" if saved_speed else f"color: {TEXT_DIM};"
+        )
         speed_row.addWidget(self.speed_status_lbl, stretch=1)
         speed_layout.addLayout(speed_row)
         layout.addWidget(card_speed)
@@ -250,7 +253,7 @@ class RoiTab(RoiCacheMixin, RoiDiagnosticsMixin, QWidget):
                 os.startfile(mask_dir)
             except Exception as exc:
                 self.status_lbl.setText(f"Failed to open mask folder: {exc}")
-                self.status_lbl.setStyleSheet("color: #ff3b3b;")
+                self.status_lbl.setStyleSheet(f"color: {RED};")
 
     def _pick_status_label(self) -> QLabel:
         return self.status_lbl if self._pick_target == "minimap" else self.speed_status_lbl
@@ -270,7 +273,7 @@ class RoiTab(RoiCacheMixin, RoiDiagnosticsMixin, QWidget):
         self._roi_pick_busy = True
         label = self._pick_status_label()
         label.setText("Grabbing the screen...")
-        label.setStyleSheet("color: #88c0d0;")
+        label.setStyleSheet(f"color: {BLUE};")
 
         cap = self.get_cap()
         if cap is None:
@@ -305,7 +308,7 @@ class RoiTab(RoiCacheMixin, RoiDiagnosticsMixin, QWidget):
         self._roi_pick_busy = False
         label = self._pick_status_label()
         label.setText(f"Screen grab failed: {exc}")
-        label.setStyleSheet("color: #ff3b3b;")
+        label.setStyleSheet(f"color: {RED};")
 
     def _roi_pick_open(self, bgr: np.ndarray, mon: Any) -> None:
         self._roi_pick_busy = False
@@ -327,7 +330,7 @@ class RoiTab(RoiCacheMixin, RoiDiagnosticsMixin, QWidget):
                 self.speed_vars[name].set(str(val))
             self._apply_speed_roi_values(roi)
             self.speed_status_lbl.setText(f"OK: [{x}, {y}, {w}, {h}] — saved to config.json")
-            self.speed_status_lbl.setStyleSheet("color: #8ae234;")
+            self.speed_status_lbl.setStyleSheet(f"color: {GREEN};")
             return
 
         for name, val in zip(("x", "y", "w", "h"), (x, y, w, h), strict=True):
@@ -336,13 +339,13 @@ class RoiTab(RoiCacheMixin, RoiDiagnosticsMixin, QWidget):
 
         self._apply_roi_values(roi)
         self.status_lbl.setText(f"OK: [{x}, {y}, {w}, {h}] — saved to config.json")
-        self.status_lbl.setStyleSheet("color: #8ae234;")
+        self.status_lbl.setStyleSheet(f"color: {GREEN};")
 
     def _roi_cancelled(self) -> None:
         self._selector = None
         label = self._pick_status_label()
         label.setText("Selection cancelled")
-        label.setStyleSheet("color: #8a8a8a;")
+        label.setStyleSheet(f"color: {TEXT_DIM};")
 
     def apply_speed_roi(self) -> None:
         """Parse and validate the speedometer ROI entry fields."""
@@ -353,13 +356,13 @@ class RoiTab(RoiCacheMixin, RoiDiagnosticsMixin, QWidget):
             ]
         except ValueError:
             self.speed_status_lbl.setText("Error: integers are required")
-            self.speed_status_lbl.setStyleSheet("color: #ff3b3b;")
+            self.speed_status_lbl.setStyleSheet(f"color: {RED};")
             return
 
         x, y, w, h = roi
         if x < 0 or y < 0 or w < 8 or h < 8:
             self.speed_status_lbl.setText("Error: x>=0, y>=0, w>=8, h>=8 required")
-            self.speed_status_lbl.setStyleSheet("color: #ff3b3b;")
+            self.speed_status_lbl.setStyleSheet(f"color: {RED};")
             return
 
         for name, val in zip(("x", "y", "w", "h"), (x, y, w, h), strict=True):
@@ -368,7 +371,7 @@ class RoiTab(RoiCacheMixin, RoiDiagnosticsMixin, QWidget):
 
         self._apply_speed_roi_values(roi)
         self.speed_status_lbl.setText(f"OK: {roi}")
-        self.speed_status_lbl.setStyleSheet("color: #8ae234;")
+        self.speed_status_lbl.setStyleSheet(f"color: {GREEN};")
 
     def disable_speed_roi(self) -> None:
         """Turn the speedometer OCR off (capture.speed_roi = None)."""
@@ -377,7 +380,7 @@ class RoiTab(RoiCacheMixin, RoiDiagnosticsMixin, QWidget):
             self.speed_vars[name].set("0")
         self._apply_speed_roi_values(None)
         self.speed_status_lbl.setText("disabled")
-        self.speed_status_lbl.setStyleSheet("color: #8a8a8a;")
+        self.speed_status_lbl.setStyleSheet(f"color: {TEXT_DIM};")
 
     def _apply_speed_roi_values(self, roi: list[int] | None) -> None:
         self.cfg.setdefault("capture", {})["speed_roi"] = roi
@@ -403,13 +406,13 @@ class RoiTab(RoiCacheMixin, RoiDiagnosticsMixin, QWidget):
             ]
         except ValueError:
             self.status_lbl.setText("Error: integers are required")
-            self.status_lbl.setStyleSheet("color: #ff3b3b;")
+            self.status_lbl.setStyleSheet(f"color: {RED};")
             return
 
         x, y, w, h = roi
         if x < 0 or y < 0 or w < 16 or h < 16:
             self.status_lbl.setText("Error: x>=0, y>=0, w>=16, h>=16 required")
-            self.status_lbl.setStyleSheet("color: #ff3b3b;")
+            self.status_lbl.setStyleSheet(f"color: {RED};")
             return
 
         for name, val in zip(("x", "y", "w", "h"), (x, y, w, h), strict=True):
@@ -418,7 +421,7 @@ class RoiTab(RoiCacheMixin, RoiDiagnosticsMixin, QWidget):
 
         self._apply_roi_values(roi)
         self.status_lbl.setText(f"OK: {roi}")
-        self.status_lbl.setStyleSheet("color: #8ae234;")
+        self.status_lbl.setStyleSheet(f"color: {GREEN};")
 
     def _apply_roi_values(self, roi: list[int]) -> None:
         self.cfg.setdefault("capture", {})["mmap_roi"] = roi

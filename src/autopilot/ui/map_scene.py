@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 
 from .imaging import to_qimage
 from .map_renderer import crop_map_viewport
-from .theme import RGB_CANVAS
+from .theme import BG_DEEP, PANEL_BG, RED, RGB_CANVAS, TEXT, YELLOW
 
 
 class RouteEndpointItem(QGraphicsItem):
@@ -53,7 +53,7 @@ class RouteEndpointItem(QGraphicsItem):
         painter.setBrush(QBrush(self._color))
         painter.drawEllipse(QPointF(0, 0), self.RADIUS, self.RADIUS)
         painter.setFont(QFont("Segoe UI", 7, QFont.Weight.Bold))
-        painter.setPen(QColor("#101010"))
+        painter.setPen(QColor(f"{BG_DEEP}"))
         painter.drawText(QRectF(-8, -8, 16, 16), Qt.AlignmentFlag.AlignCenter, self._label)
 
 
@@ -93,12 +93,12 @@ class WaypointItem(QGraphicsItem):
         pen = QPen(QColor("#7ce06a"), 2)
         pen.setCosmetic(True)
         painter.setPen(pen)
-        painter.setBrush(QBrush(QColor("#242424")))
+        painter.setBrush(QBrush(QColor(f"{PANEL_BG}")))
         painter.drawEllipse(QPointF(0, 0), self.RADIUS, self.RADIUS)
 
         # Waypoint index number
         painter.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
-        painter.setPen(QColor("#ffffff"))
+        painter.setPen(QColor(f"{TEXT}"))
         painter.drawText(
             QRectF(-10, -10, 20, 20), Qt.AlignmentFlag.AlignCenter, str(self.index + 1)
         )
@@ -141,7 +141,7 @@ class VehicleMarkerItem(QGraphicsItem):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         # Yellow center vehicle ring
-        pen = QPen(QColor("#ffdd00"), 2)
+        pen = QPen(QColor(f"{YELLOW}"), 2)
         pen.setCosmetic(True)
         painter.setPen(pen)
         painter.setBrush(QBrush(QColor(255, 221, 0, 120)))
@@ -158,10 +158,10 @@ class VehicleMarkerItem(QGraphicsItem):
                 QPointF(5, 4),
             ]
         )
-        arrow_pen = QPen(QColor("#ffffff"), 1)
+        arrow_pen = QPen(QColor(f"{TEXT}"), 1)
         arrow_pen.setCosmetic(True)
         painter.setPen(arrow_pen)
-        painter.setBrush(QBrush(QColor("#ff3b3b")))
+        painter.setBrush(QBrush(QColor(f"{RED}")))
         painter.drawPolygon(arrow)
         painter.restore()
 
@@ -276,7 +276,7 @@ class MapGraphicsScene(QGraphicsScene):
                 self.addItem(start)
                 self._endpoint_items.append(start)
             if len(self.route_pts) > 1:
-                end = RouteEndpointItem("E", "#ff9f43")
+                end = RouteEndpointItem("E", f"{YELLOW}")
                 end.setPos(self.route_pts[-1][0], self.route_pts[-1][1])
                 self.addItem(end)
                 self._endpoint_items.append(end)

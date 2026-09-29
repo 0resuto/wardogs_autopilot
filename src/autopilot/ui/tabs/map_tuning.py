@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from ...common.config import LocatorConfig, NavigatorConfig
+from ..theme import CONTROL_BG, GREEN, RED, TEXT_MUTED, YELLOW
 from .common import MapTabBase, StringVarCompat, compact_label
 
 
@@ -102,7 +103,7 @@ class MapTuningMixin(MapTabBase):
         btn_box.addLayout(top_btns)
 
         self.tune_status = QLabel("", self._tune_container)
-        self.tune_status.setStyleSheet("color: #8ae234; font-weight: 500;")
+        self.tune_status.setStyleSheet(f"color: {GREEN}; font-weight: 500;")
         compact_label(self.tune_status)
         btn_box.addWidget(self.tune_status)
         tune_row.addLayout(btn_box)
@@ -177,7 +178,7 @@ class MapTuningMixin(MapTabBase):
             "ahead m",
             "plan_ahead_m",
             200.0,
-            40,
+            46,
             section="navigator",
             tip="Speed planning horizon along the route (meters)",
         )
@@ -282,7 +283,7 @@ class MapTuningMixin(MapTabBase):
 
         self.dbg_text = QLabel("", self._tune_container)
         self.dbg_text.setStyleSheet(
-            "background-color: #252526; color: #ffcf6a; padding: 2px 6px; border-radius: 4px;"
+            f"background-color: {CONTROL_BG}; color: {YELLOW}; padding: 2px 6px; border-radius: 4px;"
         )
         compact_label(self.dbg_text)
         dbg_bar.addWidget(self.dbg_text, stretch=1)
@@ -315,14 +316,16 @@ class MapTuningMixin(MapTabBase):
         tip: str = "",
     ) -> None:
         lbl = QLabel(lbl_text, parent)
-        lbl.setStyleSheet("color: #a0a0a0;")
+        lbl.setStyleSheet(f"color: {TEXT_MUTED};")
         layout.addWidget(lbl)
 
         cur = self._nav_tune_cur if section == "navigator" else self._loc_tune_cur
         value = cur(var_name, default)
         val = str(int(value) if is_int else value)
         inp = QLineEdit(val, parent)
+        inp.setObjectName("TuneInput")
         inp.setFixedWidth(width)
+        inp.setCursorPosition(0)  # narrow fields must show the leading digits
         if tip:
             lbl.setToolTip(tip)
             inp.setToolTip(tip)
@@ -378,22 +381,22 @@ class MapTuningMixin(MapTabBase):
                 v = typ(float(s))
             except ValueError:
                 self.tune_status.setText(f"Invalid {desc}")
-                self.tune_status.setStyleSheet("color: #ff7c7c;")
+                self.tune_status.setStyleSheet(f"color: {RED};")
                 return
             if not (lo <= v <= hi):
                 self.tune_status.setText(f"Invalid {desc}")
-                self.tune_status.setStyleSheet("color: #ff7c7c;")
+                self.tune_status.setStyleSheet(f"color: {RED};")
                 return
             parsed[section][name] = v
 
         if parsed["navigator"]["xte_outer_m"] <= parsed["navigator"]["xte_m"]:
             self.tune_status.setText("Invalid COR outer m must be greater than inner m")
-            self.tune_status.setStyleSheet("color: #ff7c7c;")
+            self.tune_status.setStyleSheet(f"color: {RED};")
             return
 
         if parsed["navigator"]["corner_max_kmh"] <= parsed["navigator"]["corner_min_kmh"]:
             self.tune_status.setText("Invalid VEH max km/h must be greater than min km/h")
-            self.tune_status.setStyleSheet("color: #ff7c7c;")
+            self.tune_status.setStyleSheet(f"color: {RED};")
             return
 
         for values in parsed.values():
@@ -421,7 +424,7 @@ class MapTuningMixin(MapTabBase):
                 self.driver.apply_vehicle_tuning(self.app_cfg.navigator)
 
         self.tune_status.setText("applied")
-        self.tune_status.setStyleSheet("color: #8ae234;")
+        self.tune_status.setStyleSheet(f"color: {GREEN};")
 
     def reset_tune(self) -> None:
         """Reset tuning parameters to schema defaults."""

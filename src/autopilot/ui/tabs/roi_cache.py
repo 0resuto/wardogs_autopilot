@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 
 from ... import PROJECT_ROOT, crashlog
 from ...vision import asset_sync, locator
+from ..theme import BLUE, GREEN, RED, TEXT_DIM, YELLOW
 from .common import RoiTabBase
 
 
@@ -31,7 +32,7 @@ def map_cache_status(name: str) -> tuple[str, str]:
     also the only place a rebuild is possible.
     """
     if not name:
-        return "No map selected", "#8a8a8a"
+        return "No map selected", f"{TEXT_DIM}"
     data_dir = os.path.join(PROJECT_ROOT, "data", "maps")
     mu_path = os.path.join(data_dir, f"{name}_mu.npy")
     feat_path = os.path.join(data_dir, f"{name}_feat.npz")
@@ -58,17 +59,17 @@ def map_cache_status(name: str) -> tuple[str, str]:
     all_artifacts_gone = bool(artifacts) and len(absent) == len(artifacts)
     no_artifacts_at_all = not artifacts and len(missing_previews) == len(locator.PREVIEW_SIZES)
     if len(missing) == 3 and not has_png and (all_artifacts_gone or no_artifacts_at_all):
-        return f"Not downloaded: run python tools/download_map.py {name}", "#ff7c7c"
+        return f"Not downloaded: run python tools/download_map.py {name}", f"{RED}"
     if missing:
         hint = "re-download the map assets"
         if has_png:
             hint = "press Rebuild"
-        return f"Cache incomplete: missing {', '.join(missing)} ({hint})", "#ff7c7c"
+        return f"Cache incomplete: missing {', '.join(missing)} ({hint})", f"{RED}"
     if missing_previews:
         hint = "re-download the map assets"
         if has_png:
             hint = "press Rebuild"
-        return f"Cache incomplete: missing {', '.join(missing_previews)} ({hint})", "#ffaa00"
+        return f"Cache incomplete: missing {', '.join(missing_previews)} ({hint})", f"{YELLOW}"
 
     try:
         with np.load(feat_path) as idx:
@@ -76,14 +77,14 @@ def map_cache_status(name: str) -> tuple[str, str]:
             n_tiles = int(idx.get("gw", 0)) * int(idx.get("gh", 0))
             if sig != locator.get_store().gray_sig(name):
                 hint = "re-download the map assets" if not has_png else "press Rebuild"
-                return f"Cache stale: palette or map version changed — {hint}", "#ffaa00"
+                return f"Cache stale: palette or map version changed — {hint}", f"{YELLOW}"
             palette = sig.split("|")[0]
             return (
                 f"Ready: mu OK, SIFT index OK ({n_tiles} tiles, {palette}), mipmaps OK",
-                "#8ae234",
+                f"{GREEN}",
             )
     except Exception:
-        return "Ready: mu OK, SIFT index OK, mipmaps OK", "#8ae234"
+        return "Ready: mu OK, SIFT index OK, mipmaps OK", f"{GREEN}"
 
 
 class RoiCacheMixin(RoiTabBase):
@@ -126,7 +127,7 @@ class RoiCacheMixin(RoiTabBase):
         cache_layout.addLayout(row_map)
 
         self._cache_status_lbl = QLabel("", card_cache)
-        self._cache_status_lbl.setStyleSheet("color: #88c0d0;")
+        self._cache_status_lbl.setStyleSheet(f"color: {BLUE};")
         cache_layout.addWidget(self._cache_status_lbl)
         self.cache_status_refresh()
         layout.addWidget(card_cache)
@@ -137,7 +138,7 @@ class RoiCacheMixin(RoiTabBase):
         self._cache_status_lbl.setText(txt)
         self._cache_status_lbl.setStyleSheet(f"color: {color};")
         busy = self._cache_rebuild_busy or self._cache_download_busy
-        ready = color == "#8ae234"
+        ready = color == f"{GREEN}"
         self._cache_download_btn.setEnabled(bool(name) and not busy and not ready)
         has_png = bool(name) and os.path.exists(
             os.path.join(PROJECT_ROOT, "data", "maps", f"{name}_map.png")
@@ -174,7 +175,7 @@ class RoiCacheMixin(RoiTabBase):
         self._cache_rebuild_busy = True
         self._cache_rebuild_btn.setEnabled(False)
         self._cache_status_lbl.setText("Starting rebuild...")
-        self._cache_status_lbl.setStyleSheet("color: #ffaa00;")
+        self._cache_status_lbl.setStyleSheet(f"color: {YELLOW};")
         threading.Thread(target=self._cache_rebuild_worker, args=(name,), daemon=True).start()
 
     def _cache_rebuild_worker(self, name: str) -> None:
@@ -206,7 +207,7 @@ class RoiCacheMixin(RoiTabBase):
         self._cache_download_busy = True
         self.cache_status_refresh()  # disables both buttons while busy
         self._cache_status_lbl.setText("Starting download...")
-        self._cache_status_lbl.setStyleSheet("color: #ffaa00;")
+        self._cache_status_lbl.setStyleSheet(f"color: {YELLOW};")
         threading.Thread(
             target=self._cache_download_worker, args=(name, catalog), daemon=True
         ).start()
@@ -246,7 +247,7 @@ class RoiCacheMixin(RoiTabBase):
         self._cache_rebuild_busy = False
         self.cache_status_refresh()
         self._cache_status_lbl.setText(f"Rebuild error: {err_msg}")
-        self._cache_status_lbl.setStyleSheet("color: #ff3b3b;")
+        self._cache_status_lbl.setStyleSheet(f"color: {RED};")
         QMessageBox.critical(self, "Map Cache", f"Rebuild failed: {err_msg}")
 
     def _on_download_done(self, name: str) -> None:
@@ -260,5 +261,5 @@ class RoiCacheMixin(RoiTabBase):
         self._cache_download_busy = False
         self.cache_status_refresh()
         self._cache_status_lbl.setText(f"Download error: {err_msg}")
-        self._cache_status_lbl.setStyleSheet("color: #ff3b3b;")
+        self._cache_status_lbl.setStyleSheet(f"color: {RED};")
         QMessageBox.critical(self, "Map Download", f"Download failed: {err_msg}")

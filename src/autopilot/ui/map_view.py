@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QGraphicsView,
     QHBoxLayout,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -141,10 +142,12 @@ class InteractiveMapWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
 
-        # Docked HUD toolbar
+        # Docked HUD toolbar (styled as a compact floating glass pill)
         tb = QWidget(self)
+        tb.setObjectName("MapHud")
+        tb.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
         self.toolbar_layout = QHBoxLayout(tb)
-        self.toolbar_layout.setContentsMargins(4, 2, 4, 2)
+        self.toolbar_layout.setContentsMargins(6, 3, 6, 3)
         self.toolbar_layout.setSpacing(4)
 
         btn_in = QPushButton("+", tb)
@@ -174,16 +177,14 @@ class InteractiveMapWidget(QWidget):
             self.btn_mode.toggled.connect(self._toggle_mode)
             self.toolbar_layout.addWidget(self.btn_mode)
 
-        self.toolbar_layout.addStretch()
-
-        layout.addWidget(tb)
+        layout.addWidget(tb, alignment=Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(self.view, stretch=1)
 
         self._on_center_cb: Any = None
 
     def add_hud_widget(self, widget: QWidget) -> None:
-        """Insert a custom widget into the HUD toolbar before the trailing stretch."""
-        self.toolbar_layout.insertWidget(self.toolbar_layout.count() - 1, widget)
+        """Append a custom widget to the HUD toolbar."""
+        self.toolbar_layout.addWidget(widget)
 
     def set_on_center(self, callback: Any) -> None:
         self._on_center_cb = callback

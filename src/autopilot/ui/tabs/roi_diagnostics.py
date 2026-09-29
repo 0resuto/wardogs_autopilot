@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 from ... import PROJECT_ROOT, crashlog
 from ..debug_collage import save_debug_snapshot
 from ..imaging import to_qpixmap
+from ..theme import BLUE, BORDER, GREEN, PANEL_BG, RED, TEXT_DIM, YELLOW
 from .common import RoiTabBase
 
 MAX_KP_DRAW = 300
@@ -37,7 +38,7 @@ class RoiDiagnosticsMixin(RoiTabBase):
         hdr_row = QHBoxLayout()
         hdr_row.setSpacing(8)
         self.save_status_lbl = QLabel("", card_prev)
-        self.save_status_lbl.setStyleSheet("color: #8ae234; font-size: 8pt; font-weight: 500;")
+        self.save_status_lbl.setStyleSheet(f"color: {GREEN}; font-size: 8pt; font-weight: 500;")
         hdr_row.addWidget(self.save_status_lbl, stretch=1)
 
         self.open_snap_btn = QPushButton("📁 Open snapshot", card_prev)
@@ -61,11 +62,11 @@ class RoiDiagnosticsMixin(RoiTabBase):
         p1_box = QVBoxLayout()
         p1_box.setSpacing(4)
         self.raw_title_lbl = QLabel("Raw Capture", card_prev)
-        self.raw_title_lbl.setStyleSheet("color: #88c0d0; font-weight: bold; font-size: 9pt;")
+        self.raw_title_lbl.setStyleSheet(f"color: {BLUE}; font-weight: bold; font-size: 9pt;")
         self.raw_preview_lbl = QLabel(card_prev)
         self.raw_preview_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.raw_preview_lbl.setStyleSheet(
-            "background-color: #1a1a1a; border-radius: 4px; border: 1px solid #2a2a2a;"
+            f"background-color: {PANEL_BG}; border-radius: 4px; border: 1px solid {BORDER};"
         )
         self.raw_preview_lbl.setMinimumSize(120, 120)
         p1_box.addWidget(self.raw_title_lbl)
@@ -76,11 +77,11 @@ class RoiDiagnosticsMixin(RoiTabBase):
         p2_box = QVBoxLayout()
         p2_box.setSpacing(4)
         self.mask_title_lbl = QLabel("Mask Overlay", card_prev)
-        self.mask_title_lbl.setStyleSheet("color: #88c0d0; font-weight: bold; font-size: 9pt;")
+        self.mask_title_lbl.setStyleSheet(f"color: {BLUE}; font-weight: bold; font-size: 9pt;")
         self.mask_preview_lbl = QLabel(card_prev)
         self.mask_preview_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.mask_preview_lbl.setStyleSheet(
-            "background-color: #1a1a1a; border-radius: 4px; border: 1px solid #2a2a2a;"
+            f"background-color: {PANEL_BG}; border-radius: 4px; border: 1px solid {BORDER};"
         )
         self.mask_preview_lbl.setMinimumSize(120, 120)
         p2_box.addWidget(self.mask_title_lbl)
@@ -91,11 +92,11 @@ class RoiDiagnosticsMixin(RoiTabBase):
         p3_box = QVBoxLayout()
         p3_box.setSpacing(4)
         self.sift_title_lbl = QLabel("SIFT Keypoints", card_prev)
-        self.sift_title_lbl.setStyleSheet("color: #88c0d0; font-weight: bold; font-size: 9pt;")
+        self.sift_title_lbl.setStyleSheet(f"color: {BLUE}; font-weight: bold; font-size: 9pt;")
         self.sift_preview_lbl = QLabel(card_prev)
         self.sift_preview_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.sift_preview_lbl.setStyleSheet(
-            "background-color: #1a1a1a; border-radius: 4px; border: 1px solid #2a2a2a;"
+            f"background-color: {PANEL_BG}; border-radius: 4px; border: 1px solid {BORDER};"
         )
         self.sift_preview_lbl.setMinimumSize(120, 120)
         p3_box.addWidget(self.sift_title_lbl)
@@ -105,11 +106,11 @@ class RoiDiagnosticsMixin(RoiTabBase):
         p4_box = QVBoxLayout()
         p4_box.setSpacing(4)
         self.speed_title_lbl = QLabel("Speed OCR", card_prev)
-        self.speed_title_lbl.setStyleSheet("color: #88c0d0; font-weight: bold; font-size: 9pt;")
+        self.speed_title_lbl.setStyleSheet(f"color: {BLUE}; font-weight: bold; font-size: 9pt;")
         self.speed_preview_lbl = QLabel(card_prev)
         self.speed_preview_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.speed_preview_lbl.setStyleSheet(
-            "background-color: #1a1a1a; border-radius: 4px; border: 1px solid #2a2a2a;"
+            f"background-color: {PANEL_BG}; border-radius: 4px; border: 1px solid {BORDER};"
         )
         self.speed_preview_lbl.setMinimumSize(120, 120)
         p4_box.addWidget(self.speed_title_lbl)
@@ -202,7 +203,7 @@ class RoiDiagnosticsMixin(RoiTabBase):
             cv2.circle(p3, (int(round(pt[0])), int(round(pt[1]))), 6, (0, 200, 0), 1)
         n_kp = len(kp_pts)
         n_inl = len(inlier_pts)
-        col_hex = "#7ce06a" if n_inl >= 4 else ("#88c0d0" if n_kp > 0 else "#ff7c7c")
+        col_hex = "#7ce06a" if n_inl >= 4 else (f"{BLUE}" if n_kp > 0 else f"{RED}")
         self.sift_title_lbl.setText(f"SIFT Features ({n_kp} pts, {n_inl} inl)")
         self.sift_title_lbl.setStyleSheet(f"color: {col_hex}; font-weight: bold; font-size: 9pt;")
         set_panel(self.sift_preview_lbl, p3)
@@ -234,7 +235,7 @@ class RoiDiagnosticsMixin(RoiTabBase):
             else:
                 self.speed_title_lbl.setText("Speed OCR: —")
                 self.speed_title_lbl.setStyleSheet(
-                    "color: #ffaa00; font-weight: bold; font-size: 9pt;"
+                    f"color: {YELLOW}; font-weight: bold; font-size: 9pt;"
                 )
         else:
             p4 = np.full((60, 160, 3), 26, np.uint8)
@@ -242,7 +243,9 @@ class RoiDiagnosticsMixin(RoiTabBase):
                 self.speed_title_lbl.setText("Speed OCR: waiting")
             else:
                 self.speed_title_lbl.setText("Speed OCR: disabled")
-            self.speed_title_lbl.setStyleSheet("color: #8a8a8a; font-weight: bold; font-size: 9pt;")
+            self.speed_title_lbl.setStyleSheet(
+                f"color: {TEXT_DIM}; font-weight: bold; font-size: 9pt;"
+            )
         set_panel(self.speed_preview_lbl, p4)
 
     def save_debug_frame(self) -> None:
@@ -252,7 +255,7 @@ class RoiDiagnosticsMixin(RoiTabBase):
         loc = self.get_loc()
         if loc is None:
             self.save_status_lbl.setText("Locator not active")
-            self.save_status_lbl.setStyleSheet("color: #ffaa00; font-size: 8pt;")
+            self.save_status_lbl.setStyleSheet(f"color: {YELLOW}; font-size: 8pt;")
             return
         self._snap_busy = True
         self.save_snap_btn.setEnabled(False)
@@ -294,14 +297,14 @@ class RoiDiagnosticsMixin(RoiTabBase):
         self._last_snapshot_dir = snap_dir
         folder_name = os.path.basename(snap_dir)
         self.save_status_lbl.setText(f"✓ Saved to {folder_name}")
-        self.save_status_lbl.setStyleSheet("color: #8ae234; font-size: 8pt; font-weight: 500;")
+        self.save_status_lbl.setStyleSheet(f"color: {GREEN}; font-size: 8pt; font-weight: 500;")
         self.open_snap_btn.setVisible(True)
         self.save_snap_btn.setEnabled(True)
         self.save_snap_btn.setText("📷 Save frame")
 
     def _on_save_failed(self, err_msg: str) -> None:
         self.save_status_lbl.setText(f"Save failed: {err_msg}")
-        self.save_status_lbl.setStyleSheet("color: #ff3b3b; font-size: 8pt;")
+        self.save_status_lbl.setStyleSheet(f"color: {RED}; font-size: 8pt;")
         self.save_snap_btn.setEnabled(True)
         self.save_snap_btn.setText("📷 Save frame")
 

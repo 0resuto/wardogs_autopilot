@@ -7,6 +7,7 @@ import math
 from PySide6.QtWidgets import QMessageBox
 
 from ...navigation.speed_profile import G, RouteSpeedPlanner
+from ..theme import YELLOW
 from .common import MapTabBase
 
 # Only used when the map catalog has no m_per_px entry for the active map.
@@ -54,7 +55,7 @@ class MapRouteEditMixin(MapTabBase):
     def routes_invert(self, silent: bool = False) -> None:
         if self._edit_snapshot is not None:
             self.routes_status.setText("Finish editing (Apply or Cancel) before reversing")
-            self.routes_status.setStyleSheet("color: #ffaa00;")
+            self.routes_status.setStyleSheet(f"color: {YELLOW};")
             return
         if self.driver is not None:
             if not silent:
@@ -62,7 +63,7 @@ class MapRouteEditMixin(MapTabBase):
                     self, "Routes", "Stop the autopilot before inverting the route"
                 )
             self.routes_status.setText("Stop the autopilot before inverting the route")
-            self.routes_status.setStyleSheet("color: #ffaa00;")
+            self.routes_status.setStyleSheet(f"color: {YELLOW};")
             return
         pts = list(reversed(self.route_pts))
         self.route_pts = pts

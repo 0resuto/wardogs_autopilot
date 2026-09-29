@@ -42,7 +42,7 @@ from ..vision.tracker import LiveLocator
 from .hotkeys import _HK_F6, _HK_F7, _HK_F8, HotkeyManager
 from .tabs.map_tab import MapTab
 from .tabs.roi_tab import RoiTab
-from .theme import apply_theme
+from .theme import BLUE, GREEN, RED, TEXT_MUTED, YELLOW, apply_theme
 
 logger = get_logger("ui.app")
 
@@ -184,30 +184,30 @@ class App(QMainWindow):
         tb_layout.addWidget(self._map_sel)
 
         self._map_size_lbl = QLabel(f"{self._map_size}x{self._map_size}", toolbar)
-        self._map_size_lbl.setStyleSheet("color: #808080; font-size: 8pt;")
+        self._map_size_lbl.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 8pt;")
         tb_layout.addWidget(self._map_size_lbl)
 
         tb_layout.addStretch()
 
         # Right: hardware, live status indicators & hotkeys
         self._status_hw = QLabel("", toolbar)
-        self._status_hw.setStyleSheet("color: #808080; font-size: 9pt;")
+        self._status_hw.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 9pt;")
         tb_layout.addWidget(self._status_hw)
 
         self._status_loc = QLabel("○ SEARCHING", toolbar)
-        self._status_loc.setStyleSheet("color: #ffaa00; font-weight: bold; font-size: 9pt;")
+        self._status_loc.setStyleSheet(f"color: {YELLOW}; font-weight: bold; font-size: 9pt;")
         tb_layout.addWidget(self._status_loc)
 
         self._status_lat = QLabel("", toolbar)
-        self._status_lat.setStyleSheet("color: #88c0d0; font-size: 8pt; min-width: 48px;")
+        self._status_lat.setStyleSheet(f"color: {BLUE}; font-size: 8pt; min-width: 48px;")
         tb_layout.addWidget(self._status_lat)
 
         self._status_nav = QLabel("○ IDLE", toolbar)
-        self._status_nav.setStyleSheet("color: #808080; font-weight: bold; font-size: 9pt;")
+        self._status_nav.setStyleSheet(f"color: {TEXT_MUTED}; font-weight: bold; font-size: 9pt;")
         tb_layout.addWidget(self._status_nav)
 
         self._hotkey_lbl = QLabel(_HOTKEY_HINT, toolbar)
-        self._hotkey_lbl.setStyleSheet("color: #a0a0a0; font-size: 8pt;")
+        self._hotkey_lbl.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 8pt;")
         tb_layout.addWidget(self._hotkey_lbl)
         self._hotkeys.registration_changed.connect(self._on_hotkey_state)
         self._on_hotkey_state(self._hotkeys.is_ready())
@@ -311,11 +311,11 @@ class App(QMainWindow):
             present = False
         if present:
             self._status_hw.setText(f"● Arduino {port}")
-            self._status_hw.setStyleSheet("color: #8ae234; font-size: 9pt;")
+            self._status_hw.setStyleSheet(f"color: {GREEN}; font-size: 9pt;")
             self._status_hw.setToolTip(f"Arduino detected on {port}")
         else:
             self._status_hw.setText(f"○ Arduino {port}")
-            self._status_hw.setStyleSheet("color: #808080; font-size: 9pt;")
+            self._status_hw.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 9pt;")
             self._status_hw.setToolTip(
                 f"{port} not found — the autopilot reports an error when you start Follow"
             )
@@ -352,38 +352,38 @@ class App(QMainWindow):
                 if loc_active:
                     self._status_loc.setText("● LIVE")
                     self._status_loc.setStyleSheet(
-                        "color: #8ae234; font-weight: bold; font-size: 9pt;"
+                        f"color: {GREEN}; font-weight: bold; font-size: 9pt;"
                     )
                 else:
                     self._status_loc.setText("○ SEARCHING")
                     self._status_loc.setStyleSheet(
-                        "color: #ffaa00; font-weight: bold; font-size: 9pt;"
+                        f"color: {YELLOW}; font-weight: bold; font-size: 9pt;"
                     )
 
                 if nav_state == "idle":
                     self._status_nav.setText("○ IDLE")
                     self._status_nav.setStyleSheet(
-                        "color: #808080; font-weight: bold; font-size: 9pt;"
+                        f"color: {TEXT_MUTED}; font-weight: bold; font-size: 9pt;"
                     )
                 elif nav_state == "following":
                     self._status_nav.setText("● FOLLOWING")
                     self._status_nav.setStyleSheet(
-                        "color: #8ae234; font-weight: bold; font-size: 9pt;"
+                        f"color: {GREEN}; font-weight: bold; font-size: 9pt;"
                     )
                 elif nav_state == "finished":
                     self._status_nav.setText("✓ FINISHED")
                     self._status_nav.setStyleSheet(
-                        "color: #88c0d0; font-weight: bold; font-size: 9pt;"
+                        f"color: {BLUE}; font-weight: bold; font-size: 9pt;"
                     )
                 elif nav_state == "stopped":
                     self._status_nav.setText("🛑 STOPPED")
                     self._status_nav.setStyleSheet(
-                        "color: #ff3b3b; font-weight: bold; font-size: 9pt;"
+                        f"color: {RED}; font-weight: bold; font-size: 9pt;"
                     )
                 else:
                     self._status_nav.setText(f"● {nav_state.upper()}")
                     self._status_nav.setStyleSheet(
-                        "color: #88c0d0; font-weight: bold; font-size: 9pt;"
+                        f"color: {BLUE}; font-weight: bold; font-size: 9pt;"
                     )
         except Exception as exc:
             logger.debug("Poll exception: %s", exc)
@@ -391,10 +391,10 @@ class App(QMainWindow):
     def _on_hotkey_state(self, ready: bool) -> None:
         if ready:
             self._hotkey_lbl.setText(_HOTKEY_HINT)
-            self._hotkey_lbl.setStyleSheet("color: #a0a0a0; font-size: 8pt;")
+            self._hotkey_lbl.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 8pt;")
         else:
             self._hotkey_lbl.setText("⚠ hotkeys F6/F7/F8 busy - retrying")
-            self._hotkey_lbl.setStyleSheet("color: #ff7c7c; font-size: 8pt;")
+            self._hotkey_lbl.setStyleSheet(f"color: {RED}; font-size: 8pt;")
 
     def _on_global_hotkey(self, key_id: int) -> None:
         if key_id == _HK_F6:

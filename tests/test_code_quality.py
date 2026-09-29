@@ -24,6 +24,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from autopilot.common.config import AppConfig, CaptureConfig  # noqa: E402
+from autopilot.ui import theme  # noqa: E402
 from autopilot.ui.presets import PresetManager  # noqa: E402
 from autopilot.ui.tabs.map_tab import MapTab  # noqa: E402
 from autopilot.ui.tabs.roi_tab import RoiTab  # noqa: E402
@@ -614,13 +615,13 @@ class TestMapDownloadUi(unittest.TestCase):
             with patch.object(
                 app.roi_tab,
                 "_get_map_cache_status",
-                lambda _n: ("Not downloaded: run python tools/download_map.py x", "#ff7c7c"),
+                lambda _n: ("Not downloaded: run python tools/download_map.py x", theme.RED),
             ):
                 app.roi_tab.cache_status_refresh()
                 self.assertTrue(app.roi_tab._cache_download_btn.isEnabled())
 
             with patch.object(
-                app.roi_tab, "_get_map_cache_status", lambda _n: ("Ready: mu OK", "#8ae234")
+                app.roi_tab, "_get_map_cache_status", lambda _n: ("Ready: mu OK", theme.GREEN)
             ):
                 app.roi_tab.cache_status_refresh()
                 self.assertFalse(app.roi_tab._cache_download_btn.isEnabled())

@@ -31,6 +31,7 @@ from ...navigation.manual_record import ManualDriveRecorder
 from ...vision import locator
 from ..map_view import InteractiveMapWidget
 from ..presets import PresetManager
+from ..theme import BLUE, BORDER, GREEN, PANEL_BG, RED, TEXT, TEXT_DIM, TEXT_MUTED, YELLOW
 from .common import StringVarCompat, compact_label
 from .map_presets import MapPresetsMixin
 from .map_route_edit import MapRouteEditMixin
@@ -116,9 +117,9 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
         self._map_notice = QFrame(self.map_widget)
         self._map_notice.setObjectName("MapNotice")
         self._map_notice.setStyleSheet(
-            "QFrame#MapNotice { background-color: rgba(22, 22, 22, 235); "
-            "border: 1px solid #3a3a3a; border-radius: 8px; }"
-            "QFrame#MapNotice QLabel { color: #d8d8d8; font-size: 10pt; border: none; }"
+            f"QFrame#MapNotice {{ background-color: {PANEL_BG}; "
+            f"border: 1px solid {BORDER}; border-radius: 12px; }}"
+            f"QFrame#MapNotice QLabel {{ color: {TEXT}; font-size: 10pt; border: none; }}"
         )
         lay = QVBoxLayout(self._map_notice)
         lay.setContentsMargins(18, 14, 18, 14)
@@ -306,7 +307,7 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
         bot_bar.addWidget(self.estop_btn)
 
         self.routes_status = QLabel("", self)
-        self.routes_status.setStyleSheet("color: #88c0d0; font-weight: bold;")
+        self.routes_status.setStyleSheet(f"color: {BLUE}; font-weight: bold;")
         compact_label(self.routes_status)
         bot_bar.addWidget(self.routes_status, stretch=1)
         bot_box.addLayout(bot_bar)
@@ -315,12 +316,12 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
         info_bar.setSpacing(8)
 
         self.map_status = QLabel("", self)
-        self.map_status.setStyleSheet("color: #a0a0a0; font-size: 8pt;")
+        self.map_status.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 8pt;")
         compact_label(self.map_status)
         info_bar.addWidget(self.map_status, stretch=1)
 
         self._hint_lbl = QLabel("LMB: Pan | Wheel: Zoom | ✏ Edit to modify the route", self)
-        self._hint_lbl.setStyleSheet("color: #606060; font-size: 8pt;")
+        self._hint_lbl.setStyleSheet(f"color: {TEXT_DIM}; font-size: 8pt;")
         info_bar.addWidget(self._hint_lbl)
         bot_box.addLayout(info_bar)
 
@@ -421,12 +422,12 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
             self.driver = None
             self._set_follow_state(False)
             self.routes_status.setText("Autopilot stopped")
-            self.routes_status.setStyleSheet("color: #88c0d0;")
+            self.routes_status.setStyleSheet(f"color: {BLUE};")
             return
 
         if self._edit_snapshot is not None:
             self.routes_status.setText("Finish editing (Apply or Cancel) before starting")
-            self.routes_status.setStyleSheet("color: #ffaa00;")
+            self.routes_status.setStyleSheet(f"color: {YELLOW};")
             if not silent:
                 QMessageBox.information(
                     self, "Routes", "Finish editing (Apply or Cancel) before starting"
@@ -435,7 +436,7 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
 
         if len(self.route_pts) < 2:
             self.routes_status.setText("Route not set (at least 2 points required)")
-            self.routes_status.setStyleSheet("color: #ffaa00;")
+            self.routes_status.setStyleSheet(f"color: {YELLOW};")
             if not silent:
                 QMessageBox.warning(self, "Routes", "Route not set (at least 2 points required)")
             return
@@ -447,7 +448,7 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
             kb = self._make_kb(nav_cfg.port)
         except (OSError, RuntimeError) as exc:
             self.routes_status.setText(f"Key driver error: {exc}")
-            self.routes_status.setStyleSheet("color: #ff7c7c;")
+            self.routes_status.setStyleSheet(f"color: {RED};")
             if not silent:
                 QMessageBox.critical(self, "Autopilot", f"Failed to create key driver:\n{exc}")
             return
@@ -463,7 +464,7 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
         self.driver.start()
         self._set_follow_state(True)
         self.routes_status.setText("Autopilot driving...")
-        self.routes_status.setStyleSheet("color: #8ae234;")
+        self.routes_status.setStyleSheet(f"color: {GREEN};")
 
     def _make_kb(self, port: str) -> Any:
         from ...hardware.arduino_keyboard import ArduinoKeyDriver
@@ -480,7 +481,7 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
             self.driver = None
         self._set_follow_state(False)
         self.routes_status.setText("EMERGENCY STOP (keys released)")
-        self.routes_status.setStyleSheet("color: #ff3b3b;")
+        self.routes_status.setStyleSheet(f"color: {RED};")
 
     def sync_driver_state(self) -> None:
         """Main-thread poll: finalize the UI when the driver finished the route itself."""
@@ -490,4 +491,4 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
             self._set_follow_state(False)
             msg = "Route finished — autopilot off" if d.state == "finished" else "Autopilot stopped"
             self.routes_status.setText(msg)
-            self.routes_status.setStyleSheet("color: #88c0d0;")
+            self.routes_status.setStyleSheet(f"color: {BLUE};")

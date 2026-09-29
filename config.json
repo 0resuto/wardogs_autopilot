@@ -82,8 +82,8 @@
     "collect_fail_logs": false
   },
   "ui": {
-    "window_x": 8,
-    "window_y": 31,
+    "window_x": 0,
+    "window_y": 0,
     "window_w": 1100,
     "window_h": 850,
     "window_max": false

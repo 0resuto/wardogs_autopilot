@@ -86,7 +86,8 @@ flowchart LR
 - **Studio (PySide6)**: minimap ROI calibration, live capture diagnostics, the map
   with the route editor, locator/vehicle/corridor tuning (applies live), map asset
   download (sha256-verified release archives) with SIFT index rebuild, and
-  manual-driving recording.
+  manual-driving recording. The UI follows the "Cold Mirror" design kit tokens
+  (`src/autopilot/ui/theme.py`, vendored Exo 2 / Red Hat Mono fonts in `data/fonts/`).
 
 ## Requirements
 

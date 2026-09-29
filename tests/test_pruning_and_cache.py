@@ -18,6 +18,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from autopilot.navigation.telemetry import NavTelemetryLogger  # noqa: E402
+from autopilot.ui import theme  # noqa: E402
 from autopilot.ui.tabs.roi_tab import map_cache_status  # noqa: E402
 from autopilot.vision.tracker import LiveLocator  # noqa: E402
 
@@ -111,17 +112,17 @@ class TestMapCacheReporting(unittest.TestCase):
     def test_all_maps_report_ready(self):
         for name in MAP_NAMES:
             txt, color = map_cache_status(name)
-            self.assertEqual(color, "#8ae234", f"Map '{name}' status is not green: {txt}")
+            self.assertEqual(color, theme.GREEN, f"Map '{name}' status is not green: {txt}")
             self.assertIn("Ready", txt, f"Map '{name}' is not Ready: {txt}")
 
     def test_missing_map_is_reported(self):
         txt, color = map_cache_status("no_such_map")
-        self.assertEqual(color, "#ff7c7c")
+        self.assertEqual(color, theme.RED)
         self.assertIn("Not downloaded", txt)
 
     def test_empty_name(self):
         txt, color = map_cache_status("")
-        self.assertEqual(color, "#8a8a8a")
+        self.assertEqual(color, theme.TEXT_DIM)
         self.assertIn("No map", txt)
 
     def test_gray_signatures_match_config(self):
