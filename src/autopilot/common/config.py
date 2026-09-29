@@ -332,9 +332,12 @@ class AppConfig(BaseModel):
 
         Writes to a sibling .tmp file, fsyncs it, then replaces the target with
         os.replace(), so a crash or full disk never leaves a truncated config.
+        `_cfg_path` is runtime state (where this config was loaded from), not
+        file content: it stays out of the dump, so a config opened on another
+        machine never carries a foreign absolute path.
         """
         target_path = Path(path or self.cfg_path)
-        atomic_write_json(target_path, self.to_dict())
+        atomic_write_json(target_path, self.model_dump(by_alias=True, exclude={"cfg_path"}))
 
 
 def atomic_write_json(path: str | Path, payload: Any) -> None:

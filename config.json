@@ -86,10 +86,5 @@
     "window_w": 1220,
     "window_h": 850,
     "window_max": false
-  },
-  "_cfg_path": "C:\\Users\\ORESUTO_PC\\Desktop\\wardogs-autopilot\\config.json",
-  "window": {
-    "geometry": "1030x932+3374+396",
-    "zoomed": false
   }
 }

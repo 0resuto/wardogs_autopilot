@@ -37,6 +37,33 @@ def test_config_roundtrip_to_custom_path(tmp_path):
     assert AppConfig.load(target).capture.fps == 33
 
 
+def test_saved_config_does_not_store_the_local_path(tmp_path):
+    """_cfg_path is runtime state; the file must stay machine-independent."""
+    target = tmp_path / "config.json"
+    AppConfig(capture=CaptureConfig(fps=21)).save(target)
+
+    raw = target.read_text(encoding="utf-8")
+    assert "_cfg_path" not in raw
+
+    cfg = AppConfig.load(target)
+    assert cfg.capture.fps == 21
+    assert cfg.cfg_path == str(target)
+
+
+def test_legacy_cfg_path_key_is_accepted(tmp_path):
+    """Old config files carrying _cfg_path keep loading (value is ignored)."""
+    target = tmp_path / "legacy.json"
+    target.write_text(
+        '{"_cfg_path": "C:/old/machine/config.json", "capture": {"fps": 9}}',
+        encoding="utf-8",
+    )
+
+    cfg = AppConfig.load(target)
+
+    assert cfg.capture.fps == 9
+    assert cfg.cfg_path == str(target)
+
+
 def test_app_config_load():
     """Verify loading and validating the root config.json."""
     cfg = AppConfig.load("config.json")
