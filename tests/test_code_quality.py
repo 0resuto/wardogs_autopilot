@@ -696,7 +696,7 @@ class TestMapDownloadUi(unittest.TestCase):
         try:
             app.roi_tab.get_loc = lambda: None
             app.roi_tab.update_preview()
-            self.assertIn("no frames", app.roi_tab.raw_preview_lbl.text())
+            self.assertIn("no frames", app.roi_tab.preview_lbl.text())
         finally:
             app.close()
 

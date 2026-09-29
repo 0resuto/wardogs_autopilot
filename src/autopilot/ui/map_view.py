@@ -151,21 +151,8 @@ class InteractiveMapWidget(QWidget):
         self.toolbar_layout.setContentsMargins(6, 3, 6, 3)
         self.toolbar_layout.setSpacing(4)
 
-        btn_in = QPushButton("+", tb)
-        btn_in.setFixedWidth(28)
-        btn_in.clicked.connect(lambda: self.view.zoom_in())
-        self.toolbar_layout.addWidget(btn_in)
-
-        btn_out = QPushButton("-", tb)
-        btn_out.setFixedWidth(28)
-        btn_out.clicked.connect(lambda: self.view.zoom_out())
-        self.toolbar_layout.addWidget(btn_out)
-
-        btn_fit = QPushButton("Fit", tb)
-        btn_fit.setIcon(icon("maximize"))
-        btn_fit.clicked.connect(self.view.fit_view)
-        self.toolbar_layout.addWidget(btn_fit)
-
+        # Zoom is the mouse wheel and Fit happens at maximum zoom-out; only
+        # the follow-centering toggle stays here.
         self.btn_center = QPushButton("Center", tb)
         self.btn_center.setIcon(icon("crosshair"))
         self.btn_center.setCheckable(True)
@@ -181,8 +168,8 @@ class InteractiveMapWidget(QWidget):
             self.btn_mode.toggled.connect(self._toggle_mode)
             self.toolbar_layout.addWidget(self.btn_mode)
 
-        layout.addWidget(tb, alignment=Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(self.view, stretch=1)
+        layout.addWidget(tb, alignment=Qt.AlignmentFlag.AlignLeft)
 
         self._on_center_cb: Any = None
 

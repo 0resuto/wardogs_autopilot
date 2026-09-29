@@ -29,7 +29,7 @@ MAX_KP_DRAW = 300
 
 
 class RoiDiagnosticsMixin(RoiTabBase):
-    """Four-panel live preview (raw/mask/SIFT/speed) and diagnostic snapshots."""
+    """Live preview (frame + mask + keypoints merged) and diagnostic snapshots."""
 
     def _build_diagnostics_card(self, layout: QVBoxLayout) -> None:
         # Live capture diagnostic card
@@ -64,50 +64,20 @@ class RoiDiagnosticsMixin(RoiTabBase):
         panels_row = QHBoxLayout()
         panels_row.setSpacing(8)
 
-        # Panel 1: Raw Frame
+        # Merged capture panel: frame + mask overlay + keypoints/inliers
         p1_box = QVBoxLayout()
         p1_box.setSpacing(4)
-        self.raw_title_lbl = QLabel("Raw Capture", card_prev)
-        self.raw_title_lbl.setStyleSheet(f"color: {BLUE}; font-weight: bold; font-size: 9pt;")
-        self.raw_preview_lbl = QLabel(card_prev)
-        self.raw_preview_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.raw_preview_lbl.setStyleSheet(
+        self.capture_title_lbl = QLabel("Capture", card_prev)
+        self.capture_title_lbl.setStyleSheet(f"color: {BLUE}; font-weight: bold; font-size: 9pt;")
+        self.preview_lbl = QLabel(card_prev)
+        self.preview_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview_lbl.setStyleSheet(
             f"background-color: {PANEL_BG}; border-radius: 4px; border: 1px solid {BORDER};"
         )
-        self.raw_preview_lbl.setMinimumSize(120, 120)
-        p1_box.addWidget(self.raw_title_lbl)
-        p1_box.addWidget(self.raw_preview_lbl, stretch=1)
-        panels_row.addLayout(p1_box, stretch=1)
-
-        # Panel 2: Mask Overlay
-        p2_box = QVBoxLayout()
-        p2_box.setSpacing(4)
-        self.mask_title_lbl = QLabel("Mask Overlay", card_prev)
-        self.mask_title_lbl.setStyleSheet(f"color: {BLUE}; font-weight: bold; font-size: 9pt;")
-        self.mask_preview_lbl = QLabel(card_prev)
-        self.mask_preview_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.mask_preview_lbl.setStyleSheet(
-            f"background-color: {PANEL_BG}; border-radius: 4px; border: 1px solid {BORDER};"
-        )
-        self.mask_preview_lbl.setMinimumSize(120, 120)
-        p2_box.addWidget(self.mask_title_lbl)
-        p2_box.addWidget(self.mask_preview_lbl, stretch=1)
-        panels_row.addLayout(p2_box, stretch=1)
-
-        # Panel 3: SIFT Keypoints & Inliers
-        p3_box = QVBoxLayout()
-        p3_box.setSpacing(4)
-        self.sift_title_lbl = QLabel("SIFT Keypoints", card_prev)
-        self.sift_title_lbl.setStyleSheet(f"color: {BLUE}; font-weight: bold; font-size: 9pt;")
-        self.sift_preview_lbl = QLabel(card_prev)
-        self.sift_preview_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.sift_preview_lbl.setStyleSheet(
-            f"background-color: {PANEL_BG}; border-radius: 4px; border: 1px solid {BORDER};"
-        )
-        self.sift_preview_lbl.setMinimumSize(120, 120)
-        p3_box.addWidget(self.sift_title_lbl)
-        p3_box.addWidget(self.sift_preview_lbl, stretch=1)
-        panels_row.addLayout(p3_box, stretch=1)
+        self.preview_lbl.setMinimumSize(200, 120)
+        p1_box.addWidget(self.capture_title_lbl)
+        p1_box.addWidget(self.preview_lbl, stretch=1)
+        panels_row.addLayout(p1_box, stretch=3)
 
         p4_box = QVBoxLayout()
         p4_box.setSpacing(4)
@@ -118,16 +88,13 @@ class RoiDiagnosticsMixin(RoiTabBase):
         self.speed_preview_lbl.setStyleSheet(
             f"background-color: {PANEL_BG}; border-radius: 4px; border: 1px solid {BORDER};"
         )
-        self.speed_preview_lbl.setMinimumSize(120, 120)
+        self.speed_preview_lbl.setMinimumSize(140, 120)
         p4_box.addWidget(self.speed_title_lbl)
         p4_box.addWidget(self.speed_preview_lbl, stretch=1)
         panels_row.addLayout(p4_box, stretch=1)
 
         prev_layout.addLayout(panels_row, stretch=1)
         layout.addWidget(card_prev, stretch=1)
-
-        # Backward compatibility alias
-        self.preview_lbl = self.raw_preview_lbl
 
     def detach_diagnostics(self) -> QWidget:
         """Release the live preview card for the always-visible right pane."""
@@ -146,9 +113,7 @@ class RoiDiagnosticsMixin(RoiTabBase):
         )
 
     def _show_panel_placeholders(self, reason: str) -> None:
-        self._panel_placeholder(self.raw_preview_lbl, f"no frames\n({reason})")
-        self._panel_placeholder(self.mask_preview_lbl, "—")
-        self._panel_placeholder(self.sift_preview_lbl, "—")
+        self._panel_placeholder(self.preview_lbl, f"no frames\n({reason})")
         self._panel_placeholder(self.speed_preview_lbl, "—")
 
     def update_preview(self) -> None:
@@ -194,32 +159,21 @@ class RoiDiagnosticsMixin(RoiTabBase):
             if not pix.isNull():
                 lbl.setPixmap(pix)
 
-        # 1. Raw Frame
+        # Merged capture panel: frame + mask overlay + keypoints/inliers
         p1 = frame.copy()
-        self.raw_title_lbl.setText(f"Raw Capture ({w}×{h})")
-        set_panel(self.raw_preview_lbl, p1)
-
-        # 2. Mask Overlay
-        p2 = frame.copy()
+        mask_pct: float | None = None
         if mask is not None and mask.size:
             m = np.asarray(mask, bool)
             if m.shape[:2] != (h, w):
                 m = cv2.resize(m.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST) > 0
-            overlay = p2.copy()
+            overlay = p1.copy()
             overlay[m] = (0, 30, 220)
-            cv2.addWeighted(overlay, 0.45, p2, 0.55, 0, p2)
+            cv2.addWeighted(overlay, 0.28, p1, 0.72, 0, p1)
             cnts, _ = cv2.findContours(
                 m.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
             )
-            cv2.drawContours(p2, cnts, -1, (0, 160, 255), 1)
-            pct = (m.sum() / float(m.size)) * 100.0
-            self.mask_title_lbl.setText(f"Mask Overlay ({pct:.1f}%)")
-        else:
-            self.mask_title_lbl.setText("Mask Overlay (none)")
-        set_panel(self.mask_preview_lbl, p2)
-
-        # 3. Keypoints & Inliers
-        p3 = frame.copy()
+            cv2.drawContours(p1, cnts, -1, (0, 160, 255), 1)
+            mask_pct = (m.sum() / float(m.size)) * 100.0
         kp_pts = diag.get("kp_pts") or []
         inlier_pts = diag.get("inlier_pts") or []
         kp_draw = (
@@ -228,18 +182,21 @@ class RoiDiagnosticsMixin(RoiTabBase):
             else kp_pts
         )
         for pt in kp_draw:
-            cv2.circle(p3, (int(round(pt[0])), int(round(pt[1]))), 2, (0, 255, 255), -1)
+            cv2.circle(p1, (int(round(pt[0])), int(round(pt[1]))), 2, (0, 255, 255), -1)
         for pt in inlier_pts:
-            cv2.circle(p3, (int(round(pt[0])), int(round(pt[1]))), 4, (0, 255, 0), -1)
-            cv2.circle(p3, (int(round(pt[0])), int(round(pt[1]))), 6, (0, 200, 0), 1)
+            cv2.circle(p1, (int(round(pt[0])), int(round(pt[1]))), 4, (0, 255, 0), -1)
+            cv2.circle(p1, (int(round(pt[0])), int(round(pt[1]))), 6, (0, 200, 0), 1)
         n_kp = len(kp_pts)
         n_inl = len(inlier_pts)
-        col_hex = "#7ce06a" if n_inl >= 4 else (f"{BLUE}" if n_kp > 0 else f"{RED}")
-        self.sift_title_lbl.setText(f"SIFT Features ({n_kp} pts, {n_inl} inl)")
-        self.sift_title_lbl.setStyleSheet(f"color: {col_hex}; font-weight: bold; font-size: 9pt;")
-        set_panel(self.sift_preview_lbl, p3)
+        col_hex = GREEN if n_inl >= 4 else (f"{BLUE}" if n_kp > 0 else f"{RED}")
+        mask_txt = f" | mask {mask_pct:.1f}%" if mask_pct is not None else ""
+        self.capture_title_lbl.setText(f"Capture ({w}×{h}) | {n_kp} pts, {n_inl} inl{mask_txt}")
+        self.capture_title_lbl.setStyleSheet(
+            f"color: {col_hex}; font-weight: bold; font-size: 9pt;"
+        )
+        set_panel(self.preview_lbl, p1)
 
-        # 4. Speedometer OCR
+        # Speedometer OCR
         speed_frame = latest.get("speed_frame") if latest else None
         speed_kmh = latest.get("speed_kmh") if latest else None
         speed_ok = bool(latest.get("speed_ok")) if latest else False

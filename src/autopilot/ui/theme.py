@@ -364,6 +364,11 @@ QWidget#Sidebar {
     border-radius: 12px;
 }
 
+QPushButton#MenuButton::menu-indicator {
+    image: none;
+    width: 0px;
+}
+
 QScrollArea#SideScroll, QScrollArea#SideScroll QWidget#qt_scrollarea_viewport {
     background: transparent;
     border: none;

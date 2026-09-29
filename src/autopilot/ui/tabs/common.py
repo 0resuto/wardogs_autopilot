@@ -60,13 +60,8 @@ class RoiTabBase(_BaseQt):
     _cache_rebuild_btn: Any
     _cache_rebuild_busy: bool
     _cache_download_busy: bool
-    raw_title_lbl: Any
-    mask_title_lbl: Any
-    sift_title_lbl: Any
+    capture_title_lbl: Any
     speed_title_lbl: Any
-    raw_preview_lbl: Any
-    mask_preview_lbl: Any
-    sift_preview_lbl: Any
     speed_preview_lbl: Any
     save_status_lbl: Any
     save_snap_btn: Any
@@ -107,7 +102,6 @@ class MapTabBase(_BaseQt):
     tune_inputs: dict[str, QLineEdit]
     tune_status: Any
     _tune_container: Any
-    _tune_toggle_btn: Any
     _collect_ck: Any
     dbg_text: Any
     _edit_snapshot: list[list[float]] | None

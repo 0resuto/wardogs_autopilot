@@ -1,4 +1,8 @@
-"""Collapsible locator/vehicle tuning panel for the Map tab (PySide6)."""
+"""Always-visible locator/vehicle tuning panel for the Map sidebar (PySide6).
+
+The groups are stacked vertically and the fields sit in a two-column grid so
+the narrow sidebar stays readable; the panel itself scrolls with the sidebar.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +11,7 @@ from typing import Any
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -20,6 +25,185 @@ from ...common.config import LocatorConfig, NavigatorConfig
 from ..theme import CONTROL_BG, GREEN, RED, TEXT_MUTED, YELLOW
 from .common import MapTabBase, StringVarCompat, compact_label
 
+# (label, config key, default, is_int, section, tooltip)
+_TUNE_GROUPS: list[tuple[str, list[tuple[Any, ...]]]] = [
+    (
+        "Tracking",
+        [
+            ("ratio", "ratio_local", 0.85, False, "locator", ""),
+            ("inl", "min_inl_local", 4, True, "locator", ""),
+            ("inl%", "min_inl_rate_local", 0.0, False, "locator", ""),
+            ("rad", "track_radius", 900, True, "locator", ""),
+            (
+                "kps",
+                "max_kp_frame",
+                1200,
+                True,
+                "locator",
+                "Keypoints kept per frame (response-ranked): lower = less latency,\n"
+                "higher = more robust in low-texture areas",
+            ),
+        ],
+    ),
+    (
+        "Re-Acquisition",
+        [
+            ("ratio", "ratio_global", 0.9, False, "locator", ""),
+            ("inl", "min_inl_global", 5, True, "locator", ""),
+            ("inl%", "min_inl_rate_global", 0.0, False, "locator", ""),
+        ],
+    ),
+    (
+        "Consensus",
+        [
+            ("vote", "vote_need", 3, True, "locator", ""),
+            ("head°", "heading_gate_deg", 0, True, "locator", ""),
+            ("skip", "vote_inl_skip", 40, True, "locator", ""),
+            (
+                "brk",
+                "early_inl",
+                40,
+                True,
+                "locator",
+                "Stop trying further scale-level candidates once a match reaches\n"
+                "this many inliers (0 = scan every level; lower = snappier,\n"
+                "higher = more thorough)",
+            ),
+            ("hold", "hold_frames", 5, True, "locator", ""),
+        ],
+    ),
+    (
+        "Vehicle",
+        [
+            (
+                "gain",
+                "yaw_gain",
+                1.0,
+                False,
+                "navigator",
+                "Yaw-authority scale of the model (see tools/calibrate_vehicle.py)",
+            ),
+            (
+                "lat g",
+                "corner_lat_g",
+                0.35,
+                False,
+                "navigator",
+                "Lateral grip budget for planning corner speeds: v = sqrt(lat_g*9.81*R).\n"
+                "Lower = slower corners (if it slides wide), higher = faster (but the planner\n"
+                "may outrun what the steering can hold).",
+            ),
+            (
+                "brake g",
+                "brake_g",
+                0.45,
+                False,
+                "navigator",
+                "Braking deceleration budget for planning when to brake before a corner.\n"
+                "Higher = brakes later/harder. Measured value from your runs: ~0.5g\n"
+                "(python tools/calibrate_vehicle.py output/nav_dbg_*.jsonl).",
+            ),
+            (
+                "min km/h",
+                "corner_min_kmh",
+                12.0,
+                False,
+                "navigator",
+                "Lower edge of the steady-corner hold window (km/h)",
+            ),
+            (
+                "max km/h",
+                "corner_max_kmh",
+                22.0,
+                False,
+                "navigator",
+                "Upper edge of the steady-corner hold window: inside the window the\n"
+                "driver neither accelerates nor brakes (no more brake/gas hunting)",
+            ),
+            (
+                "ahead m",
+                "plan_ahead_m",
+                200.0,
+                False,
+                "navigator",
+                "Speed planning horizon along the route (meters)",
+            ),
+            (
+                "cut m",
+                "corner_cut_m",
+                15.0,
+                False,
+                "navigator",
+                "Distance over which a sharp vertex is rounded by the planner",
+            ),
+        ],
+    ),
+    (
+        "Corridors",
+        [
+            (
+                "inner m",
+                "xte_m",
+                4.0,
+                False,
+                "navigator",
+                "Inner corridor (normal driving). Deviations beyond it get firmer corrections.",
+            ),
+            (
+                "outer m",
+                "xte_outer_m",
+                12.0,
+                False,
+                "navigator",
+                "Outer corridor (warning). Past it the driver slows down and steers hardest.",
+            ),
+            (
+                "look s",
+                "steer_look_s",
+                1.6,
+                False,
+                "navigator",
+                "Steering lookahead in seconds of travel: the aim point ahead on the route.\n"
+                "Lower = tighter line and more active steering; higher = smoother, cuts curves.",
+            ),
+            (
+                "settle s",
+                "settle_s",
+                0.6,
+                False,
+                "navigator",
+                "Pause after a completed steering hold before the next one (s).\n"
+                "Lower = more frequent corrections; higher = smoother but a dead wheel\n"
+                "for that long after each correction. At speed the pause is also capped\n"
+                "by distance (8 m), so it shortens automatically.",
+            ),
+            (
+                "lead s",
+                "steer_lead_s",
+                0.25,
+                False,
+                "navigator",
+                "Release anticipation in seconds: how much heading change still arrives\n"
+                "through the pose/key latency after the wheel is released. Raise it if the\n"
+                "car systematically overshoots, lower it if it releases too early.",
+            ),
+            (
+                "skip m",
+                "skip_ahead_m",
+                150.0,
+                False,
+                "navigator",
+                "Route re-acquisition window (m). Only when the car is outside the outer\n"
+                "corridor: the active point may jump forward to the nearest route point\n"
+                "within this route length (it never jumps backwards or to the final point).\n"
+                "0 disables the re-acquisition.",
+            ),
+        ],
+    ),
+]
+
+_FIELD_W = 48
+
 
 class MapTuningMixin(MapTabBase):
     """Builds the tuning panel and applies/resets its values live."""
@@ -28,229 +212,20 @@ class MapTuningMixin(MapTabBase):
         self._tune_container = QWidget(self)
         tune_vbox = QVBoxLayout(self._tune_container)
         tune_vbox.setContentsMargins(0, 2, 0, 2)
-        tune_vbox.setSpacing(4)
+        tune_vbox.setSpacing(6)
 
-        tune_row = QHBoxLayout()
-        tune_row.setSpacing(6)
-
-        # 1. Tracking
-        grp_trk = QGroupBox("Tracking", self._tune_container)
-        l_trk = QHBoxLayout(grp_trk)
-        l_trk.setContentsMargins(6, 10, 6, 6)
-        l_trk.setSpacing(4)
-        self._add_tune_field(l_trk, grp_trk, "ratio", "ratio_local", 0.85, 38)
-        self._add_tune_field(l_trk, grp_trk, "inl", "min_inl_local", 4, 26, is_int=True)
-        self._add_tune_field(l_trk, grp_trk, "inl%", "min_inl_rate_local", 0.0, 34)
-        self._add_tune_field(l_trk, grp_trk, "rad", "track_radius", 900, 38, is_int=True)
-        self._add_tune_field(
-            l_trk,
-            grp_trk,
-            "kps",
-            "max_kp_frame",
-            1200,
-            40,
-            is_int=True,
-            tip="Keypoints kept per frame (response-ranked): lower = less latency,\n"
-            "higher = more robust in low-texture areas",
-        )
-        tune_row.addWidget(grp_trk)
-
-        # 2. Re-Acquisition
-        grp_acq = QGroupBox("Re-Acquisition", self._tune_container)
-        l_acq = QHBoxLayout(grp_acq)
-        l_acq.setContentsMargins(6, 10, 6, 6)
-        l_acq.setSpacing(4)
-        self._add_tune_field(l_acq, grp_acq, "ratio", "ratio_global", 0.9, 38)
-        self._add_tune_field(l_acq, grp_acq, "inl", "min_inl_global", 5, 26, is_int=True)
-        self._add_tune_field(l_acq, grp_acq, "inl%", "min_inl_rate_global", 0.0, 34)
-        tune_row.addWidget(grp_acq)
-
-        # 3. Consensus
-        grp_misc = QGroupBox("Consensus", self._tune_container)
-        l_misc = QHBoxLayout(grp_misc)
-        l_misc.setContentsMargins(6, 10, 6, 6)
-        l_misc.setSpacing(4)
-        self._add_tune_field(l_misc, grp_misc, "vote", "vote_need", 3, 24, is_int=True)
-        self._add_tune_field(l_misc, grp_misc, "head°", "heading_gate_deg", 0, 30, is_int=True)
-        self._add_tune_field(l_misc, grp_misc, "skip", "vote_inl_skip", 40, 30, is_int=True)
-        self._add_tune_field(
-            l_misc,
-            grp_misc,
-            "brk",
-            "early_inl",
-            40,
-            26,
-            is_int=True,
-            tip="Stop trying further scale-level candidates once a match reaches\n"
-            "this many inliers (0 = scan every level; lower = snappier,\n"
-            "higher = more thorough)",
-        )
-        self._add_tune_field(l_misc, grp_misc, "hold", "hold_frames", 5, 24, is_int=True)
-        tune_row.addWidget(grp_misc)
-
-        tune_vbox.addLayout(tune_row)
-
-        tune_row2 = QHBoxLayout()
-        tune_row2.setSpacing(6)
-
-        grp_veh = QGroupBox("Vehicle", self._tune_container)
-        l_veh = QHBoxLayout(grp_veh)
-        l_veh.setContentsMargins(6, 10, 6, 6)
-        l_veh.setSpacing(4)
-        self._add_tune_field(
-            l_veh,
-            grp_veh,
-            "gain",
-            "yaw_gain",
-            1.0,
-            38,
-            section="navigator",
-            tip="Yaw-authority scale of the model (see tools/calibrate_vehicle.py)",
-        )
-        self._add_tune_field(
-            l_veh,
-            grp_veh,
-            "lat g",
-            "corner_lat_g",
-            0.35,
-            38,
-            section="navigator",
-            tip="Lateral grip budget for planning corner speeds: v = sqrt(lat_g*9.81*R).\n"
-            "Lower = slower corners (if it slides wide), higher = faster (but the planner\n"
-            "may outrun what the steering can hold).",
-        )
-        self._add_tune_field(
-            l_veh,
-            grp_veh,
-            "brake g",
-            "brake_g",
-            0.45,
-            38,
-            section="navigator",
-            tip="Braking deceleration budget for planning when to brake before a corner.\n"
-            "Higher = brakes later/harder. Measured value from your runs: ~0.5g\n"
-            "(python tools/calibrate_vehicle.py output/nav_dbg_*.jsonl).",
-        )
-        self._add_tune_field(
-            l_veh,
-            grp_veh,
-            "min km/h",
-            "corner_min_kmh",
-            12.0,
-            40,
-            section="navigator",
-            tip="Lower edge of the steady-corner hold window (km/h)",
-        )
-        self._add_tune_field(
-            l_veh,
-            grp_veh,
-            "max km/h",
-            "corner_max_kmh",
-            22.0,
-            40,
-            section="navigator",
-            tip="Upper edge of the steady-corner hold window: inside the window the\n"
-            "driver neither accelerates nor brakes (no more brake/gas hunting)",
-        )
-        self._add_tune_field(
-            l_veh,
-            grp_veh,
-            "ahead m",
-            "plan_ahead_m",
-            200.0,
-            48,
-            section="navigator",
-            tip="Speed planning horizon along the route (meters)",
-        )
-        self._add_tune_field(
-            l_veh,
-            grp_veh,
-            "cut m",
-            "corner_cut_m",
-            15.0,
-            38,
-            section="navigator",
-            tip="Distance over which a sharp vertex is rounded by the planner",
-        )
-        tune_row2.addWidget(grp_veh)
-
-        grp_corr = QGroupBox("Corridors", self._tune_container)
-        l_corr = QHBoxLayout(grp_corr)
-        l_corr.setContentsMargins(6, 10, 6, 6)
-        l_corr.setSpacing(4)
-        self._add_tune_field(
-            l_corr,
-            grp_corr,
-            "inner m",
-            "xte_m",
-            4.0,
-            38,
-            section="navigator",
-            tip="Inner corridor (normal driving). Deviations beyond it get firmer corrections.",
-        )
-        self._add_tune_field(
-            l_corr,
-            grp_corr,
-            "outer m",
-            "xte_outer_m",
-            12.0,
-            38,
-            section="navigator",
-            tip="Outer corridor (warning). Past it the driver slows down and steers hardest.",
-        )
-        self._add_tune_field(
-            l_corr,
-            grp_corr,
-            "look s",
-            "steer_look_s",
-            1.6,
-            34,
-            section="navigator",
-            tip="Steering lookahead in seconds of travel: the aim point ahead on the route.\n"
-            "Lower = tighter line and more active steering; higher = smoother, cuts curves.",
-        )
-        self._add_tune_field(
-            l_corr,
-            grp_corr,
-            "settle s",
-            "settle_s",
-            0.6,
-            34,
-            section="navigator",
-            tip="Pause after a completed steering hold before the next one (s).\n"
-            "Lower = more frequent corrections; higher = smoother but a dead wheel\n"
-            "for that long after each correction. At speed the pause is also capped\n"
-            "by distance (8 m), so it shortens automatically.",
-        )
-        self._add_tune_field(
-            l_corr,
-            grp_corr,
-            "lead s",
-            "steer_lead_s",
-            0.25,
-            34,
-            section="navigator",
-            tip="Release anticipation in seconds: how much heading change still arrives\n"
-            "through the pose/key latency after the wheel is released. Raise it if the\n"
-            "car systematically overshoots, lower it if it releases too early.",
-        )
-        self._add_tune_field(
-            l_corr,
-            grp_corr,
-            "skip m",
-            "skip_ahead_m",
-            150.0,
-            40,
-            section="navigator",
-            tip="Route re-acquisition window (m). Only when the car is outside the outer\n"
-            "corridor: the active point may jump forward to the nearest route point\n"
-            "within this route length (it never jumps backwards or to the final point).\n"
-            "0 disables the re-acquisition.",
-        )
-        tune_row2.addWidget(grp_corr)
-
-        tune_row2.addStretch()
-        tune_vbox.addLayout(tune_row2)
+        for title, fields in _TUNE_GROUPS:
+            grp = QGroupBox(title, self._tune_container)
+            grid = QGridLayout(grp)
+            grid.setContentsMargins(8, 10, 8, 8)
+            grid.setHorizontalSpacing(10)
+            grid.setVerticalSpacing(4)
+            for i, (lbl_text, var, default, is_int, section, tip) in enumerate(fields):
+                row, col = divmod(i, 2)
+                self._add_tune_cell(
+                    grid, grp, row, col, lbl_text, var, default, is_int, section, tip
+                )
+            tune_vbox.addWidget(grp)
 
         # Action footer: status left, Reset/Apply right (they apply to every group)
         footer = QHBoxLayout()
@@ -292,42 +267,41 @@ class MapTuningMixin(MapTabBase):
 
         tune_vbox.addLayout(dbg_bar)
 
-        self._tune_container.setVisible(False)
         root_layout.addWidget(self._tune_container)
 
-    def toggle_tuning_panel(self) -> None:
-        """Toggle visibility of locator tuning controls."""
-        visible = not self._tune_container.isVisible()
-        self._tune_container.setVisible(visible)
-        self._tune_toggle_btn.setText("Tuning ▴" if visible else "Tuning ▾")
-
-    def _add_tune_field(
+    def _add_tune_cell(
         self,
-        layout: QHBoxLayout,
+        grid: QGridLayout,
         parent: QWidget,
+        row: int,
+        col: int,
         lbl_text: str,
         var_name: str,
         default: Any,
-        width: int,
-        is_int: bool = False,
-        section: str = "locator",
-        tip: str = "",
+        is_int: bool,
+        section: str,
+        tip: str,
     ) -> None:
+        cell = QHBoxLayout()
+        cell.setSpacing(4)
+
         lbl = QLabel(lbl_text, parent)
         lbl.setStyleSheet(f"color: {TEXT_MUTED};")
-        layout.addWidget(lbl)
+        cell.addWidget(lbl)
 
         cur = self._nav_tune_cur if section == "navigator" else self._loc_tune_cur
         value = cur(var_name, default)
         val = str(int(value) if is_int else value)
         inp = QLineEdit(val, parent)
         inp.setObjectName("TuneInput")
-        inp.setFixedWidth(width)
+        inp.setFixedWidth(_FIELD_W)
         inp.setCursorPosition(0)  # narrow fields must show the leading digits
         if tip:
             lbl.setToolTip(tip)
             inp.setToolTip(tip)
-        layout.addWidget(inp)
+        cell.addWidget(inp)
+        cell.addStretch()
+        grid.addLayout(cell, row, col)
         self.tune_inputs[var_name] = inp
         self.tune_vars[var_name] = StringVarCompat(val)
 

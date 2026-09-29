@@ -228,7 +228,8 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
         top_bar.addWidget(self.p_sel)
 
         self._preset_menu_btn = QPushButton("⋯", self)
-        self._preset_menu_btn.setFixedWidth(30)
+        self._preset_menu_btn.setObjectName("MenuButton")
+        self._preset_menu_btn.setFixedWidth(34)
         self._preset_menu_btn.setToolTip("Preset actions: load, save as, new, delete, reload")
         preset_menu = QMenu(self._preset_menu_btn)
         act_load = preset_menu.addAction("Load preset")
@@ -254,12 +255,12 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
         btn_clear.clicked.connect(self.routes_clear)
         top_bar.addWidget(btn_clear)
 
-        self._reverse_btn = QPushButton("", self)
+        # Reverse lives in the map control bar under the canvas, next to the
+        # start/stop buttons.
+        self._reverse_btn = QPushButton("Reverse", self)
         self._reverse_btn.setIcon(icon("swap"))
-        self._reverse_btn.setFixedWidth(34)
         self._reverse_btn.setToolTip("Reverse the route direction (F8)")
         self._reverse_btn.clicked.connect(lambda: self.routes_invert())
-        top_bar.addWidget(self._reverse_btn)
 
         self._edit_btn = QPushButton("", self)
         self._edit_btn.setIcon(icon("pencil"))
@@ -293,8 +294,8 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
 
         root_layout.addLayout(top_bar)
 
-        # Second row: diagnostics toggles and the tuning panel switch (the
-        # sidebar column is too narrow for a single toolbar row).
+        # Second row: diagnostics toggles (the sidebar column is too narrow for
+        # a single toolbar row).
         diag_bar = QHBoxLayout()
         diag_bar.setSpacing(6)
 
@@ -309,13 +310,7 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
         )
         self._manual_rec_ck.toggled.connect(self.toggle_manual_record)
         diag_bar.addWidget(self._manual_rec_ck)
-
         diag_bar.addStretch()
-
-        self._tune_toggle_btn = QPushButton("Tuning ▾", self)
-        self._tune_toggle_btn.setIcon(icon("sliders"))
-        self._tune_toggle_btn.clicked.connect(self.toggle_tuning_panel)
-        diag_bar.addWidget(self._tune_toggle_btn)
 
         root_layout.addLayout(diag_bar)
 
@@ -329,27 +324,26 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
         root_layout.addWidget(self.map_widget, stretch=1)
 
     def _build_bottom_bar(self, root_layout: QVBoxLayout) -> None:
-        # --- Bottom Command & Navigation Control Center ---
-        bot_box = QVBoxLayout()
-        bot_box.setContentsMargins(0, 0, 0, 0)
-        bot_box.setSpacing(2)
-
-        bot_bar = QHBoxLayout()
-        bot_bar.setSpacing(8)
-
+        # --- Driving controls live in the map control bar under the canvas ---
+        controls = self.map_widget.toolbar_layout
         self.follow_btn = QPushButton("Start Follow (F6)", self)
         self.follow_btn.setObjectName("SuccessButton")
         self.follow_btn.setIcon(icon("play"))
         self.follow_btn.clicked.connect(self.follow_toggle)
-        bot_bar.addWidget(self.follow_btn)
+        controls.addWidget(self.follow_btn)
 
         self.estop_btn = QPushButton("EMERGENCY STOP (F7)", self)
         self.estop_btn.setObjectName("EStopButton")
         self.estop_btn.setIcon(icon("stop"))
         self.estop_btn.clicked.connect(self.emergency_stop)
-        bot_bar.addWidget(self.estop_btn)
-        bot_bar.addStretch()
-        bot_box.addLayout(bot_bar)
+        controls.addWidget(self.estop_btn)
+
+        controls.addWidget(self._reverse_btn)
+
+        # --- The sidebar keeps the status readouts ---
+        bot_box = QVBoxLayout()
+        bot_box.setContentsMargins(0, 0, 0, 0)
+        bot_box.setSpacing(2)
 
         # The sidebar column is narrow: status and hints get their own rows.
         self.routes_status = QLabel("", self)
