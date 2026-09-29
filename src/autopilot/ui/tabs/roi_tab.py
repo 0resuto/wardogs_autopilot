@@ -28,21 +28,9 @@ from ...vision import asset_sync, locator
 from ..debug_collage import save_debug_snapshot
 from ..imaging import to_qpixmap
 from ..roi_selector import RoiSelector
+from .common import StringVarCompat
 
 MAX_KP_DRAW = 300
-
-
-class _StringVarCompat:
-    """String holder mirroring the entry widgets for tests."""
-
-    def __init__(self, value: str = "") -> None:
-        self._val = str(value)
-
-    def get(self) -> str:
-        return self._val
-
-    def set(self, val: str) -> None:
-        self._val = str(val)
 
 
 def map_cache_status(name: str) -> tuple[str, str]:
@@ -139,7 +127,7 @@ class RoiTab(QWidget):
         self.get_loc = loc_thread_supplier
         self.on_map_rebuilt = on_map_rebuilt
 
-        self.roi_vars: dict[str, _StringVarCompat] = {}
+        self.roi_vars: dict[str, StringVarCompat] = {}
         self._pick_target = "minimap"
         self._roi_pick_busy = False
         self._cache_rebuild_busy = False
@@ -225,7 +213,7 @@ class RoiTab(QWidget):
             inp.setFixedWidth(54)
             coord_row.addWidget(inp)
             self.coord_inputs[name] = inp
-            compat_var = _StringVarCompat(val)
+            compat_var = StringVarCompat(val)
             self.roi_vars[name] = compat_var
 
         apply_btn = QPushButton("Apply", card_roi)
@@ -270,7 +258,7 @@ class RoiTab(QWidget):
         speed_row.addWidget(speed_coord_title)
 
         self.speed_inputs: dict[str, QLineEdit] = {}
-        self.speed_vars: dict[str, _StringVarCompat] = {}
+        self.speed_vars: dict[str, StringVarCompat] = {}
         for i, name in enumerate(("x", "y", "w", "h")):
             lbl = QLabel(name.upper(), card_speed)
             lbl.setStyleSheet("color: #b0b0b0;")
@@ -280,7 +268,7 @@ class RoiTab(QWidget):
             inp.setFixedWidth(54)
             speed_row.addWidget(inp)
             self.speed_inputs[name] = inp
-            self.speed_vars[name] = _StringVarCompat(val)
+            self.speed_vars[name] = StringVarCompat(val)
 
         speed_apply_btn = QPushButton("Apply", card_speed)
         speed_apply_btn.setFixedWidth(64)
