@@ -32,6 +32,7 @@
     "jump_gate_px": 3000,
     "heading_gate_deg": 0.0,
     "vote_inl_skip": 40,
+    "early_inl": 40,
     "hold_frames": 5
   },
   "map": {
@@ -81,9 +82,9 @@
     "collect_fail_logs": false
   },
   "ui": {
-    "window_x": 2832,
-    "window_y": 478,
-    "window_w": 1220,
+    "window_x": 8,
+    "window_y": 31,
+    "window_w": 1100,
     "window_h": 850,
     "window_max": false
   }
