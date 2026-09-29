@@ -1,12 +1,14 @@
 """Map storage, cache management, and preview pyramids for WARDOGS.
 
-Manages full-map images in full_maps/, precomputed downscaled caches (mu.npy,
-preview mipmaps, color previews) in data/maps/, and cache validation signatures.
+Manages precomputed derived caches (mu.npy, grayscale preview mipmaps) in
+data/maps/ and their cache validation signatures. The source PNG is only
+needed on a maintainer machine to rebuild the caches; a distributed install
+downloads the artifacts together with the catalog that records the build
+source.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import threading
@@ -29,7 +31,6 @@ DATA_MAPS = os.path.join(PROJECT_ROOT, "data", "maps")
 FULL_DIR = DATA_MAPS  # Alias for backward compatibility
 
 PREVIEW_SIZES = (512, 1024, 2048, 4096, 8192, 16384)
-COLOR_PREVIEW_SIZE = 4096
 
 
 class MapStore:
@@ -52,7 +53,6 @@ class MapStore:
         self._cache_lock = threading.Lock()
 
         self._g: dict[str, Any] = {"mu": None, "ms": 2.6544}
-        self._color_map_cache: dict[str, Any] = {"name": None, "img": None}
         self._catalog_cache: tuple[float | None, dict[str, Any] | None] = (None, None)
         self._loc_cfg_cache: tuple[str | None, float | None, dict[str, Any] | None] = (
             None,
@@ -83,45 +83,34 @@ class MapStore:
     # ---------- Map Registry ----------
 
     def available_maps(self) -> list[str]:
-        """List of available map names discovered from data/maps/*_map.png or catalog.json."""
+        """Map names from catalog.json, or downloaded *_map.png as a fallback."""
         if not os.path.isdir(self.data_maps_dir):
             return []
-        maps: set[str] = {
-            f[: -len("_map.png")] for f in os.listdir(self.data_maps_dir) if f.endswith("_map.png")
-        }
+        maps: set[str] = set(self._catalog().get("maps", {}).keys())
         if not maps:
-            catalog_path = os.path.join(self.data_maps_dir, "catalog.json")
-            if os.path.exists(catalog_path):
-                try:
-                    with open(catalog_path, encoding="utf-8") as f:
-                        data = json.load(f)
-                    maps.update(data.get("maps", {}).keys())
-                except Exception:
-                    pass
+            maps = {
+                f[: -len("_map.png")]
+                for f in os.listdir(self.data_maps_dir)
+                if f.endswith("_map.png")
+            }
         return sorted(maps)
 
     def full_map_size(self, name: str | None = None) -> tuple[int, int] | None:
-        """Native (w, h) size of the full map from the PNG header or catalog manifest."""
+        """Native (w, h) size of the full map from the catalog or the PNG header."""
         target_name = name or self._cur_name
+        entry = self._catalog().get("maps", {}).get(target_name) or {}
+        size = entry.get("size")
+        if size and len(size) == 2:
+            return (int(size[0]), int(size[1]))
+
         path = self.full_path(target_name)
         try:
             with open(path, "rb") as f:
                 head = f.read(24)
         except OSError:
-            head = b""
+            return None
         if len(head) >= 24 and head[:8] == b"\x89PNG\r\n\x1a\n":
             return (int.from_bytes(head[16:20], "big"), int.from_bytes(head[20:24], "big"))
-
-        catalog_path = os.path.join(self.data_maps_dir, "catalog.json")
-        if os.path.exists(catalog_path):
-            try:
-                with open(catalog_path, encoding="utf-8") as f:
-                    data = json.load(f)
-                size = data.get("maps", {}).get(target_name, {}).get("size")
-                if size and len(size) == 2:
-                    return (int(size[0]), int(size[1]))
-            except Exception:
-                pass
         return None
 
     def set_map(self, name: str) -> None:
@@ -192,11 +181,18 @@ class MapStore:
         return cfg
 
     def map_signature(self, name: str | None = None) -> str:
-        """File identity of the map PNG (size + mtime) used in cache checks."""
+        """Map identity used in cache checks.
+
+        A machine holding the source PNG tracks its size+mtime (maintainer
+        flow); a distributed install without the PNG uses the build source
+        recorded in catalog.json, so the shipped caches stay valid.
+        """
         try:
             st = os.stat(self.full_path(name))
         except OSError:
-            return "missing"
+            entry = self._catalog().get("maps", {}).get(name or self._cur_name) or {}
+            source = entry.get("source")
+            return str(source) if source else "missing"
         return f"{st.st_size}-{st.st_mtime_ns}"
 
     def gray_sig(self, name: str | None = None) -> str:
@@ -208,7 +204,7 @@ class MapStore:
         c = self.map_cfg()
         return (
             f"{c['gray_conv']}-{float(c['gray_gamma']):.3f}"
-            f"|ms={self.mini_scale(name):.4f}|{self.map_signature(name)}"
+            f"|ms={self.mini_scale():.4f}|{self.map_signature(name)}"
         )
 
     def _read_map_gray(self, name: str | None = None) -> np.ndarray | None:
@@ -236,25 +232,8 @@ class MapStore:
         except OSError:
             return None
 
-    def load_chunk2map(self, name: str | None = None) -> dict[str, float] | None:
-        """Load chunk px -> full-map pixels mapping if cached."""
-        map_name = name or self._cur_name
-        path = self.cache_path(map_name, "chunk2map.npz")
-        if not os.path.exists(path):
-            return None
-        d = np.load(path)
-        return dict(
-            s=float(d["s"]),
-            th=float(d["th"]),
-            tx=float(d["tx"]),
-            ty=float(d["ty"]),
-        )
-
-    def mini_scale(self, name: str | None = None) -> float:
-        """Pixel scale of minimap window relative to map."""
-        c2m = self.load_chunk2map(name)
-        if c2m:
-            return float(c2m["s"])
+    def mini_scale(self) -> float:
+        """Pixel scale of the minimap window relative to the map (from config)."""
         cfg_scale = self.map_cfg().get("mini_scale")
         if cfg_scale is not None:
             return float(cfg_scale)
@@ -313,7 +292,7 @@ class MapStore:
                 if got is not None and got != want:
                     logger.warning(
                         "[map_store] feature index gray mismatch: built=%s, current=%s "
-                        "— rebuild with featureindex --rebuild",
+                        "— download the map assets or rebuild from the source PNG",
                         got,
                         want,
                     )
@@ -321,7 +300,7 @@ class MapStore:
             if idx is not None and getattr(idx, "norm", None) != _INDEX_NORM:
                 logger.warning(
                     "[map_store] feature index build mismatch (norm=%s, want=%s) "
-                    "— rebuild with featureindex --rebuild",
+                    "— download the map assets or rebuild from the source PNG",
                     getattr(idx, "norm", None),
                     _INDEX_NORM,
                 )
@@ -364,41 +343,6 @@ class MapStore:
         self.build_previews(full)
         return True
 
-    def color_map(self) -> np.ndarray:
-        """Map raster of active map at COLOR_PREVIEW_SIZE^2, cached per palette."""
-        cur = self._color_map_cache.get("name")
-        if cur == self._cur_name and self._color_map_cache.get("img") is not None:
-            return self._color_map_cache["img"]
-
-        suffix = hashlib.md5(self.gray_sig().encode("utf-8")).hexdigest()[:8]
-        cache = self.cache_path(self._cur_name, f"rgb{COLOR_PREVIEW_SIZE}_{suffix}.npy")
-        img = None
-        try:
-            img = np.load(cache)
-        except Exception:
-            img = None
-
-        if img is None:
-            with self._cache_lock:
-                cur = self._color_map_cache.get("img")
-                if cur is not None and self._color_map_cache.get("name") == self._cur_name:
-                    return cur
-                reduced = self._read_map_gray(self._cur_name)
-                if reduced is None:
-                    raise OSError(f"map not read: {self.full_path(self._cur_name)}")
-                resized = cv2.resize(
-                    reduced,
-                    (COLOR_PREVIEW_SIZE, COLOR_PREVIEW_SIZE),
-                    interpolation=cv2.INTER_AREA,
-                )
-                img = cv2.cvtColor(resized, cv2.COLOR_GRAY2BGR)
-                try:
-                    np.save(cache, img)
-                except OSError:
-                    pass
-        self._color_map_cache.update(name=self._cur_name, img=img)
-        return img
-
     def load_global_map(self) -> np.ndarray:
         """Load or build the global mu map at minimap scale."""
         if self._g["mu"] is not None:
@@ -429,7 +373,11 @@ class MapStore:
                 return cached_mu
             gray = self._read_map_gray(name)
             if gray is None:
-                raise OSError(f"full map not read: {self.full_path(name)}")
+                raise OSError(
+                    f"source map not readable: {self.full_path(name)} "
+                    "(rebuilding needs the source PNG; "
+                    "download the prebuilt assets with tools/download_map.py)"
+                )
             h, _ = gray.shape[:2]
             ms = self.mini_scale()
             side = int(round(h * 2 / ms))
@@ -464,10 +412,14 @@ class MapStore:
                 cache_mu = self.cache_path(name, "mu.npy")
                 gray = self._read_map_gray(name)
                 if gray is None:
-                    raise OSError(f"full map not read: {self.full_path(name)}")
+                    raise OSError(
+                        f"source map not readable: {self.full_path(name)} "
+                        "(rebuilding needs the source PNG; "
+                        "download the prebuilt assets with tools/download_map.py)"
+                    )
                 h, _ = gray.shape[:2]
 
-                ms = self.mini_scale(name)
+                ms = self.mini_scale()
                 side = int(round(h * 2 / ms))
                 mu = cv2.resize(gray, (side, side), interpolation=cv2.INTER_AREA)
                 np.save(cache_mu, mu)

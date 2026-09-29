@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Map asset downloader for WARDOGS Autopilot.
 
-Downloads high-resolution game maps from GitHub Releases into data/maps/,
-verifies SHA-256 integrity, and optionally generates SIFT index and mipmaps.
+Downloads the derived map artifacts listed in data/maps/catalog.json
+(feat.npz, mu.npy, preview mipmaps, gray.txt) from GitHub Releases into
+data/maps/ and verifies their SHA-256 integrity. The original map PNG is not
+distributed: only a maintainer machine holding it can rebuild the caches
+(tools/build_map_assets.py --rebuild).
 """
 
 from __future__ import annotations
@@ -40,20 +43,25 @@ def format_bytes(size: float) -> str:
 def list_maps(catalog: dict) -> None:
     maps = catalog.get("maps", {})
     print(
-        f"\n{'Map Name':<12} {'Display Name':<14} {'Resolution':<14} {'Status':<14} {'File Size'}"
+        f"\n{'Map Name':<12} {'Display Name':<14} {'Resolution':<14} "
+        f"{'Status':<14} {'Artifact Size'}"
     )
-    print("-" * 72)
+    print("-" * 76)
     for name, info in maps.items():
         disp = info.get("display_name", name)
         size_str = f"{info['size'][0]}x{info['size'][1]}"
-        target_file = os.path.join(DATA_MAPS, f"{name}_map.png")
-        if os.path.exists(target_file):
-            actual_size = os.path.getsize(target_file)
+        artifacts = info.get("artifacts", {})
+        present = [f for f in artifacts if os.path.exists(os.path.join(DATA_MAPS, f))]
+        expected_size = sum(meta["size"] for meta in artifacts.values())
+        if artifacts and len(present) == len(artifacts):
+            actual = sum(os.path.getsize(os.path.join(DATA_MAPS, f)) for f in present)
             status = "Downloaded"
-            size_disp = format_bytes(actual_size)
+            size_disp = format_bytes(actual)
+        elif present:
+            status = f"Partial {len(present)}/{len(artifacts)}"
+            size_disp = format_bytes(expected_size)
         else:
             status = "Missing"
-            expected_size = sum(f["size"] for f in info.get("files", {}).values())
             size_disp = format_bytes(expected_size)
         print(f"{name:<12} {disp:<14} {size_str:<14} {status:<14} {size_disp}")
     print()
@@ -134,21 +142,22 @@ def download_file(
         return False
 
 
-def download_map(
-    name: str, catalog: dict, repo: str, tag: str, force: bool = False, rebuild: bool = False
-) -> bool:
+def download_map(name: str, catalog: dict, repo: str, tag: str, force: bool = False) -> bool:
     maps = catalog.get("maps", {})
     if name not in maps:
         print(f"Error: Unknown map '{name}'. Available maps: {list(maps.keys())}", file=sys.stderr)
         return False
 
     info = maps[name]
-    files = info.get("files", {})
+    artifacts = info.get("artifacts", {})
+    if not artifacts:
+        print(f"Error: map '{name}' has no artifacts in the catalog", file=sys.stderr)
+        return False
     base_url = f"https://github.com/{repo}/releases/download/{tag}"
 
     print(f"\n--- Downloading Map: {info.get('display_name', name)} ({name}) ---")
     all_ok = True
-    for filename, meta in files.items():
+    for filename, meta in artifacts.items():
         dest = os.path.join(DATA_MAPS, filename)
         if os.path.exists(dest) and not force:
             print(f"File already exists: {dest} (use --force to re-download)")
@@ -160,24 +169,49 @@ def download_map(
             all_ok = False
             break
 
-    if all_ok and rebuild:
-        print(f"\nBuilding local caches & SIFT index for '{name}'...")
-        if os.path.join(ROOT, "src") not in sys.path:
-            sys.path.insert(0, os.path.join(ROOT, "src"))
-        from autopilot.vision.map_store import MapStore
-
-        store = MapStore()
-        store.rebuild_map_cache(name, progress_cb=lambda msg: print(f"  {msg}"))
-        print(f"Caches for '{name}' successfully built!")
-
     return all_ok
+
+
+def sha256_file(path: str) -> str:
+    hasher = hashlib.sha256()
+    with open(path, "rb") as f:
+        while chunk := f.read(1024 * 1024):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+def verify_map(name: str, catalog: dict) -> bool:
+    """Check every local artifact of `name` against the catalog sha256."""
+    info = catalog.get("maps", {}).get(name)
+    if info is None:
+        print(f"Error: Unknown map '{name}'", file=sys.stderr)
+        return False
+    artifacts = info.get("artifacts", {})
+    missing: list[str] = []
+    corrupt: list[str] = []
+    for filename, meta in artifacts.items():
+        path = os.path.join(DATA_MAPS, filename)
+        if not os.path.exists(path):
+            missing.append(filename)
+            continue
+        if sha256_file(path) != str(meta.get("sha256", "")).lower():
+            corrupt.append(filename)
+    if missing:
+        print(f"Error: '{name}' is missing {len(missing)} artifact(s): {', '.join(missing)}")
+        return False
+    if corrupt:
+        print(f"Error: '{name}' has corrupt artifact(s): {', '.join(corrupt)}")
+        return False
+    print(f"OK: '{name}' — {len(artifacts)} artifacts verified")
+    return True
 
 
 def main() -> None:
     catalog = load_catalog()
-    default_repo = os.environ.get(
-        "WARDOGS_ASSET_REPO", catalog.get("repo", "owner/wardogs-autopilot")
-    )
+    default_repo = os.environ.get("WARDOGS_ASSET_REPO", catalog.get("repo", ""))
+    if not default_repo:
+        print("Error: no asset repository in the catalog (set WARDOGS_ASSET_REPO)", file=sys.stderr)
+        sys.exit(1)
     default_tag = os.environ.get("WARDOGS_ASSET_TAG", catalog.get("tag", "v1.0.0"))
 
     parser = argparse.ArgumentParser(description="Download game map assets for WARDOGS Autopilot.")
@@ -194,9 +228,9 @@ def main() -> None:
         "--force", action="store_true", help="Re-download files even if they already exist"
     )
     parser.add_argument(
-        "--rebuild",
+        "--verify",
         action="store_true",
-        help="Automatically build mipmaps & SIFT index after download",
+        help="Only verify local artifacts against the catalog sha256",
     )
 
     args = parser.parse_args()
@@ -212,9 +246,11 @@ def main() -> None:
 
     success_count = 0
     for target in targets:
-        if download_map(
-            target, catalog, args.repo, args.tag, force=args.force, rebuild=args.rebuild
-        ):
+        if args.verify:
+            ok = verify_map(target, catalog)
+        else:
+            ok = download_map(target, catalog, args.repo, args.tag, force=args.force)
+        if ok:
             success_count += 1
 
     if success_count == len(targets):

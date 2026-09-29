@@ -26,9 +26,12 @@ MAP_NAMES = ("zestafona", "bakurani", "ozeti")
 
 def _map_cache_ready(name: str) -> bool:
     data_dir = os.path.join(ROOT, "data", "maps")
+    suffixes = ("mu.npy", "feat.npz", "gray.txt")
+    if not all(os.path.exists(os.path.join(data_dir, f"{name}_{s}")) for s in suffixes):
+        return False
     return all(
-        os.path.exists(os.path.join(data_dir, f"{name}_{suffix}"))
-        for suffix in ("mu.npy", "feat.npz", "gray.txt")
+        os.path.exists(os.path.join(data_dir, f"{name}_preview_{sz}.npy"))
+        for sz in (512, 1024, 2048, 4096, 8192, 16384)
     )
 
 

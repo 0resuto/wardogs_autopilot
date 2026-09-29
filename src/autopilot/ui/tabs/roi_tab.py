@@ -46,41 +46,52 @@ class _StringVarCompat:
 
 
 def map_cache_status(name: str) -> tuple[str, str]:
-    """Human-readable cache status of `name` and its display color."""
+    """Human-readable cache status of `name` and its display color.
+
+    The distributed map is a derived artifact set (feat.npz, mu.npy, gray.txt,
+    preview mipmaps); the source PNG only exists on a maintainer machine, which
+    is also the only place a rebuild is possible.
+    """
     if not name:
         return "No map selected", "#8a8a8a"
     data_dir = os.path.join(PROJECT_ROOT, "data", "maps")
     mu_path = os.path.join(data_dir, f"{name}_mu.npy")
     feat_path = os.path.join(data_dir, f"{name}_feat.npz")
+    gray_path = os.path.join(data_dir, f"{name}_gray.txt")
+    has_png = os.path.exists(os.path.join(data_dir, f"{name}_map.png"))
 
-    has_mu = os.path.exists(mu_path)
-    has_feat = os.path.exists(feat_path)
+    missing = [
+        label
+        for label, path in (("feat.npz", feat_path), ("mu.npy", mu_path), ("gray.txt", gray_path))
+        if not os.path.exists(path)
+    ]
     missing_previews = [
         sz
         for sz in locator.PREVIEW_SIZES
         if not os.path.exists(os.path.join(data_dir, f"{name}_preview_{sz}.npy"))
     ]
 
-    png_path = os.path.join(data_dir, f"{name}_map.png")
-    has_png = os.path.exists(png_path)
-
-    if not has_png and not has_mu and not has_feat:
+    all_previews_gone = len(missing_previews) == len(locator.PREVIEW_SIZES)
+    if len(missing) == 3 and all_previews_gone and not has_png:
         return f"Not downloaded: run python tools/download_map.py {name}", "#ff7c7c"
-    if not has_mu and not has_feat:
-        return "Cache not built: mu.npy and SIFT index missing (press Rebuild)", "#ff7c7c"
-    if not has_mu:
-        return "Cache incomplete: mu.npy missing (press Rebuild)", "#ff7c7c"
-    if not has_feat:
-        return "Cache incomplete: SIFT feature index missing (press Rebuild)", "#ffaa00"
+    if missing:
+        hint = "re-download the map assets"
+        if has_png:
+            hint = "press Rebuild"
+        return f"Cache incomplete: missing {', '.join(missing)} ({hint})", "#ff7c7c"
     if missing_previews:
-        return f"Cache incomplete: missing previews {missing_previews} (press Rebuild)", "#ffaa00"
+        hint = "re-download the map assets"
+        if has_png:
+            hint = "press Rebuild"
+        return f"Cache incomplete: missing previews {missing_previews} ({hint})", "#ffaa00"
 
     try:
         with np.load(feat_path) as idx:
             sig = str(idx.get("gray_sig", [""])[0])
             n_tiles = int(idx.get("gw", 0)) * int(idx.get("gh", 0))
             if sig != locator.get_store().gray_sig(name):
-                return "Cache stale: palette or map file changed — press Rebuild", "#ffaa00"
+                hint = "re-download the map assets" if not has_png else "press Rebuild"
+                return f"Cache stale: palette or map version changed — {hint}", "#ffaa00"
             palette = sig.split("|")[0]
             return (
                 f"Ready: mu OK, SIFT index OK ({n_tiles} tiles, {palette}), mipmaps OK",

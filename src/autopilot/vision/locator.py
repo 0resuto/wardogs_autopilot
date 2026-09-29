@@ -17,7 +17,6 @@ import numpy as np
 
 from ..common.log import get_logger
 from .map_store import (
-    COLOR_PREVIEW_SIZE,
     DATA_MAPS,
     FULL_DIR,
     PREVIEW_SIZES,
@@ -35,7 +34,6 @@ from .preprocessing import (
 )
 
 __all__ = [
-    "COLOR_PREVIEW_SIZE",
     "DATA_MAPS",
     "FULL_DIR",
     "MASK_PATH",
@@ -46,14 +44,12 @@ __all__ = [
     "available_maps",
     "bgr_to_gray",
     "build_previews",
-    "color_map",
     "crop_win",
     "ensure_previews",
     "fill_norm",
     "full_map_size",
     "global_pose",
     "heading_deg",
-    "load_chunk2map",
     "load_global_map",
     "load_previews",
     "make_mask",
@@ -701,10 +697,6 @@ def full_map_size(name: str | None = None) -> tuple[int, int] | None:
     return _DEFAULT_STORE.full_map_size(name)
 
 
-def load_chunk2map(name: str | None = None) -> dict[str, float] | None:
-    return _DEFAULT_STORE.load_chunk2map(name)
-
-
 def load_global_map() -> np.ndarray:
     return _DEFAULT_STORE.load_global_map()
 
@@ -719,10 +711,6 @@ def ensure_previews() -> bool:
 
 def build_previews(full: np.ndarray) -> None:
     _DEFAULT_STORE.build_previews(full)
-
-
-def color_map() -> np.ndarray:
-    return _DEFAULT_STORE.color_map()
 
 
 def rebuild_map_cache(name: str, progress_cb: Callable[[str], None] | None = None) -> bool:
@@ -801,7 +789,8 @@ def heading_deg(pose: dict[str, Any]) -> float:
 
 # Internal legacy helpers exposed for tests and tools
 def _mini_scale(name: str | None = None) -> float:
-    return _DEFAULT_STORE.mini_scale(name)
+    """Minimap scale from the map config; `name` is kept for call-site compat."""
+    return _DEFAULT_STORE.mini_scale()
 
 
 def _loc_cfg() -> dict[str, Any]:

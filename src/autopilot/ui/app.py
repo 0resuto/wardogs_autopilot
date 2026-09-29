@@ -77,7 +77,7 @@ class App(QMainWindow):
     """Main dashboard application window coordinating UI components and services."""
 
     # Thread-safe Qt signal for background map loading
-    sig_map_loaded = Signal(str, object, object, int)
+    sig_map_loaded = Signal(str, object, int)  # (map name, preview pyramid, size)
 
     def __init__(self, cfg: dict[str, Any] | AppConfig) -> None:
         app = QApplication.instance()
@@ -118,7 +118,6 @@ class App(QMainWindow):
         self._hotkeys = HotkeyManager(self, self._on_global_hotkey)
         self._hotkeys.start()
 
-        self._map8: np.ndarray | None = None
         self._map_pyr: dict[int, np.ndarray] | None = None
         self._last_loc: dict[str, Any] | None = None
         self._last_state_sig: tuple[bool, str] | None = None
@@ -270,20 +269,18 @@ class App(QMainWindow):
         try:
             sz = locator.full_map_size(name)
             map_size = sz[0] if isinstance(sz, (tuple, list)) else (sz or 32768)
-            map8 = locator.color_map()
             pyr = locator.load_previews()
-            self.sig_map_loaded.emit(name, map8, pyr, map_size)
+            self.sig_map_loaded.emit(name, pyr, map_size)
         except Exception as exc:
             logger.error("Failed to load map '%s': %s", name, exc)
 
-    def _on_map_loaded_ui(self, name: str, map8: Any, pyr: Any, map_size: int) -> None:
+    def _on_map_loaded_ui(self, name: str, pyr: Any, map_size: int) -> None:
         if name != self._map_name:
             return
-        self._map8 = map8
         self._map_pyr = pyr
         self._map_size = map_size
 
-        self.map_tab.map_widget.scene.set_map(map8, pyr, map_size=map_size, thumb=self._thumb)
+        self.map_tab.map_widget.scene.set_map(None, pyr, map_size=map_size, thumb=self._thumb)
         self.map_tab.map_widget.view.fit_view()
         self._map_size_lbl.setText(f"{map_size}x{map_size}")
 

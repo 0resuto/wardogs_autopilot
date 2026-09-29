@@ -107,32 +107,27 @@ def build_debug_collage(
         cv2.circle(p_map_sys, (int(ccx), int(ccy)), 5, (0, 0, 255), -1)
         _cap(p_map_sys, "map: PROCESSED crop + mm box")
         try:
-            cmap = locator.color_map()
-            k = cmap.shape[0] / float(mu.shape[0])
-            y0 = int(round((cy - rw) * k))
-            x0 = int(round((cx - rw) * k))
-            r = int(round(2 * rw * k))
-            y0 = max(0, y0)
-            x0 = max(0, x0)
-            r = min(r, cmap.shape[0] - y0, cmap.shape[1] - x0)
-            p_map_color = cmap[y0 : y0 + r, x0 : x0 + r].copy()
-            cv2.circle(p_map_color, (r // 2, r // 2), 5, (0, 0, 255), -1)
+            gray_map = cv2.cvtColor(mu, cv2.COLOR_GRAY2BGR)
+            y0 = max(0, int(round(cy - rw)))
+            x0 = max(0, int(round(cx - rw)))
+            r = int(round(2 * rw))
+            r = min(r, gray_map.shape[0] - y0, gray_map.shape[1] - x0)
+            p_map_gray = gray_map[y0 : y0 + r, x0 : x0 + r].copy()
+            cv2.circle(p_map_gray, (r // 2, r // 2), 5, (0, 0, 255), -1)
             _cap(
-                p_map_color,
-                f"map: RAW color crop  ({pose['map_x']:.0f}, {pose['map_y']:.0f})",
+                p_map_gray,
+                f"map: RAW gray crop  ({pose['map_x']:.0f}, {pose['map_y']:.0f})",
                 (0, 255, 255),
             )
         except Exception as exc:
-            p_map_color = p_map_raw.copy()
-            _cap(p_map_color, f"map color unavailable: {exc}", (0, 0, 255))
+            p_map_gray = p_map_raw.copy()
+            _cap(p_map_gray, f"map gray unavailable: {exc}", (0, 0, 255))
     else:
         blank = np.full((max(60, mm.shape[0]), max(60, mm.shape[1]), 3), 30, np.uint8)
         _cap(blank, "map: no pose — cannot show the area", (0, 0, 255))
-        p_map_color = p_map_raw = p_map_sys = blank
+        p_map_gray = p_map_raw = p_map_sys = blank
 
-    cells = [
-        fit(p, hh) for p in (p_mm_color, p_mm_raw, p_mm_sys, p_map_color, p_map_raw, p_map_sys)
-    ]
+    cells = [fit(p, hh) for p in (p_mm_color, p_mm_raw, p_mm_sys, p_map_gray, p_map_raw, p_map_sys)]
     width = max(c.shape[1] for c in cells)
     cells = [pad(c, width) for c in cells]
     sep = np.full((4, 3 * width, 3), 40, np.uint8)
@@ -170,27 +165,18 @@ def render_map_crop(
         s = float(pose.get("s", 1.0))
         inl = int(pose.get("inl", 0))
 
-        # Try color map first, then grayscale mu fallback
-        cmap = None
+        # Grayscale global map at minimap scale
         try:
-            cmap = locator.color_map()
+            mu = locator.load_global_map()
         except Exception:
-            cmap = None
-
-        if cmap is None or not getattr(cmap, "size", 0):
-            try:
-                mu = locator.load_global_map()
-                if mu is not None and mu.size > 0:
-                    cmap = cv2.cvtColor(mu, cv2.COLOR_GRAY2BGR)
-            except Exception:
-                cmap = None
-
-        if cmap is None or not getattr(cmap, "size", 0):
             return None
+        if mu is None or not getattr(mu, "size", 0):
+            return None
+        map_img = cv2.cvtColor(mu, cv2.COLOR_GRAY2BGR)
 
         sz = locator.full_map_size(map_name) or (32768, 32768)
         full_w = float(sz[0] if isinstance(sz, (tuple, list)) else sz)
-        k = cmap.shape[1] / full_w
+        k = map_img.shape[1] / full_w
         ms = locator._mini_scale(map_name)
 
         cx_cmap = map_x * k
@@ -205,15 +191,15 @@ def render_map_crop(
         crop = np.full((crop_size, crop_size, 3), (35, 35, 35), dtype=np.uint8)
         src_x0 = max(0, x0)
         src_y0 = max(0, y0)
-        src_x1 = min(cmap.shape[1], x1)
-        src_y1 = min(cmap.shape[0], y1)
+        src_x1 = min(map_img.shape[1], x1)
+        src_y1 = min(map_img.shape[0], y1)
 
         if src_x1 > src_x0 and src_y1 > src_y0:
             dst_x0 = src_x0 - x0
             dst_y0 = src_y0 - y0
-            crop[dst_y0 : dst_y0 + (src_y1 - src_y0), dst_x0 : dst_x0 + (src_x1 - src_x0)] = cmap[
-                src_y0:src_y1, src_x0:src_x1
-            ]
+            crop[dst_y0 : dst_y0 + (src_y1 - src_y0), dst_x0 : dst_x0 + (src_x1 - src_x0)] = (
+                map_img[src_y0:src_y1, src_x0:src_x1]
+            )
 
         ccx = int(round(cx_cmap - x0))
         ccy = int(round(cy_cmap - y0))

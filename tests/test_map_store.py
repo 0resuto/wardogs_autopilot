@@ -34,13 +34,32 @@ class TestCatalogScale(unittest.TestCase):
         self.assertAlmostEqual(store.px_per_m("bakurani"), 1.0 / 0.99609375, delta=1e-6)
         self.assertEqual(store.px_per_m("no_such_map"), 0.0)
 
-    def test_catalog_file_sizes_match_disk(self):
+    def test_catalog_artifact_sizes_match_disk(self):
         store = MapStore()
         for _name, entry in store._catalog().get("maps", {}).items():
-            for fname, meta in (entry.get("files") or {}).items():
+            for fname, meta in (entry.get("artifacts") or {}).items():
                 path = os.path.join(store.data_maps_dir, fname)
                 if os.path.exists(path):
                     self.assertEqual(os.path.getsize(path), meta["size"], fname)
+
+    def test_distributed_artifacts_are_consistent(self):
+        """Catalog source, gray.txt and the index-embedded signature must agree."""
+        store = MapStore()
+        checked = 0
+        for name in store._catalog().get("maps", {}):
+            gray_txt = store.gray_sig_on_disk(name)
+            if gray_txt is None:
+                continue
+            checked += 1
+            entry = store._catalog()["maps"][name]
+            self.assertEqual(entry.get("source"), gray_txt.split("|")[-1], name)
+            self.assertEqual(store.gray_sig(name), gray_txt, name)
+            feat = os.path.join(store.data_maps_dir, f"{name}_feat.npz")
+            if os.path.exists(feat):
+                with np.load(feat) as idx:
+                    self.assertEqual(str(idx.get("gray_sig", [""])[0]), gray_txt, name)
+        if checked == 0:
+            self.skipTest("no map artifacts on this machine")
 
 
 class TestIndexLifecycle(unittest.TestCase):
