@@ -132,7 +132,9 @@ class MapLocator:
         """
         kp, desc = self.sift.detectAndCompute(mmf, None)
         if desc is not None:
-            desc = np.asarray(desc)
+            # SIFT descriptors are integer 0..255; the index stores uint8 and
+            # BFMatcher requires both sides to share the descriptor type.
+            desc = np.asarray(desc, dtype=np.uint8)
         if desc is None or max_kp <= 0 or len(kp) <= max_kp:
             return list(kp), desc
         order = np.argsort([k.response for k in kp])[::-1][:max_kp]

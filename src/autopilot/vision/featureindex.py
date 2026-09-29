@@ -2,9 +2,12 @@
 
 Builds once per map (CLI: python -m autopilot.vision.featureindex --build zestafona)
 and stores descriptors of the downscaled map pyramid in data/maps/<name>_feat.npz.
-The minimap is then matched via BF.knnMatch against the descriptors of the tiles
-around the last known position (radius search), avoiding per-frame SIFT
-detection over a big window.
+SIFT descriptors are integer 0..255, so they are stored as uint8 inside a
+compressed npz (5x smaller than the old float32 npz; the live query is cast to
+uint8 in MapLocator._detect because BFMatcher requires both sides to share the
+type). The minimap is then matched via BF.knnMatch against the descriptors of
+the tiles around the last known position (radius search), avoiding per-frame
+SIFT detection over a big window.
 
 The index is a cache only: load_index() returns None when the npz is absent and
 the caller falls back to the classic window + coarse search (see locator.py).
@@ -40,6 +43,11 @@ LEVELS = (1.0, 0.8, 0.6)
 # pixel normalization. 'raw' is that tag; bump it whenever the build or the
 # matching-side contract changes to invalidate stale npz caches.
 _INDEX_NORM = "raw"
+
+# Storage format tag: uint8 descriptors inside a compressed npz. Old float32
+# indexes lack this field and are rejected by MapStore.get_index (with a clear
+# "re-download or rebuild" warning) instead of silently loading 5x bigger.
+_INDEX_FMT = "u8z"
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 _MAPS_DIR = os.path.join(ROOT, "data", "maps")
@@ -100,6 +108,7 @@ def build_index(
         gray_sig=np.array([locator._gray_sig()], dtype="U128"),
         levels=np.asarray(levels, dtype=np.float32),
         norm=np.asarray([norm], dtype="U32"),
+        fmt=np.asarray([_INDEX_FMT], dtype="U16"),
     )
     sift = locator.SIFT
     if abs(contrast - 0.05) > 1e-6:
@@ -144,7 +153,7 @@ def build_index(
                     order = order[:max_per_tile]
                 pts = np.asarray([[kp[i].pt[0], kp[i].pt[1]] for i in order], np.float32)
                 pts_all.append((pts + np.array([x0, y0], dtype=np.float32)) / f)
-                desc_all.append(np.asarray(desc[order], np.float32))
+                desc_all.append(np.asarray(desc[order], np.uint8))
                 tile_all.append(np.full(len(order), ty * gw_k + tx, dtype=np.int32))
                 n_done += 1
                 if progress and n_done % 64 == 0:
@@ -161,7 +170,7 @@ def build_index(
             out["tile_lv%d" % k] = np.concatenate(tile_all, axis=0)
         else:
             out["pts_lv%d" % k] = np.empty((0, 2), np.float32)
-            out["desc_lv%d" % k] = np.empty((0, 128), np.float32)
+            out["desc_lv%d" % k] = np.empty((0, 128), np.uint8)
             out["tile_lv%d" % k] = np.empty((0,), np.int32)
         if progress:
             logger.info(
@@ -174,7 +183,7 @@ def build_index(
             )
 
     path = _feat_path(name)
-    np.savez(path, **out)
+    np.savez_compressed(path, **out)
     return path
 
 
@@ -211,6 +220,9 @@ class FeatureIndex:
         self.norm = None
         if "norm" in data.files and data["norm"].size:
             self.norm = str(data["norm"][0])
+        self.fmt = None
+        if "fmt" in data.files and data["fmt"].size:
+            self.fmt = str(data["fmt"][0])
         self.levels = np.asarray(data["levels"], np.float32)
         self._levels = []
         for k, f in enumerate(self.levels):
@@ -222,7 +234,7 @@ class FeatureIndex:
                 dict(
                     level=float(f),
                     pts=np.asarray(data["pts_lv%d" % k], np.float32),
-                    desc=np.asarray(data["desc_lv%d" % k], np.float32),
+                    desc=np.asarray(data["desc_lv%d" % k], np.uint8),
                     tile=tile,
                     _tile_cache=None,  # (key, pts, desc) of the last tile gather
                     img_w=Wimg,

@@ -73,6 +73,12 @@ source invalidates the caches. `tools/download_map.py` fetches the artifact set
 and verifies the checksums (`--verify`); the GitHub release assets must be
 re-uploaded to match the catalog before downloads verify cleanly again.
 
+The SIFT index stores its integer descriptors as uint8 inside a compressed npz
+(about 5x smaller than the old float32 files: 3.05 GB -> 588 MB across the
+three maps); indexes without the `u8z` format marker are rejected with a
+re-download/rebuild hint. The live query is cast to uint8 in
+`MapLocator._detect` because BFMatcher requires matching descriptor types.
+
 ## What the app does
 
 - `map.gray_conv = "desat"` (`preprocessing.bgr_to_gray` palette) - the

@@ -88,6 +88,7 @@ class TestLocatorConcurrency(unittest.TestCase):
                 name=name,
                 gray_sig=store.gray_sig(),
                 norm=map_store_mod._INDEX_NORM,
+                fmt=map_store_mod._INDEX_FMT,
             )
 
         errors: list[BaseException] = []

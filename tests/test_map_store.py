@@ -58,6 +58,7 @@ class TestCatalogScale(unittest.TestCase):
             if os.path.exists(feat):
                 with np.load(feat) as idx:
                     self.assertEqual(str(idx.get("gray_sig", [""])[0]), gray_txt, name)
+                    self.assertEqual(str(idx.get("fmt", [""])[0]), "u8z", name)
         if checked == 0:
             self.skipTest("no map artifacts on this machine")
 
@@ -84,6 +85,7 @@ class TestIndexLifecycle(unittest.TestCase):
             name=name,
             gray_sig=self.store.gray_sig(),
             norm=map_store_mod._INDEX_NORM,
+            fmt=map_store_mod._INDEX_FMT,
         )
         self.loaded.append(idx)
         return idx
@@ -151,6 +153,18 @@ class TestIndexLifecycle(unittest.TestCase):
 
         self.assertLess(float(mu2.mean()), float(mu1.mean()))
 
+    def test_index_with_legacy_format_is_rejected(self):
+        self.store.set_map("zestafona")
+        legacy = SimpleNamespace(
+            name="zestafona",
+            gray_sig=self.store.gray_sig(),
+            norm=map_store_mod._INDEX_NORM,
+            fmt=None,  # float32-era index without the storage-format marker
+        )
+
+        with patch.object(map_store_mod, "load_index", lambda _name: legacy):
+            self.assertIsNone(self.store.get_index())
+
     def test_set_config_path_reads_other_file(self):
         cfg_file = os.path.join(self.tmp.name, "custom.json")
         with open(cfg_file, "w", encoding="utf-8") as fh:
@@ -183,6 +197,40 @@ class TestIndexLifecycle(unittest.TestCase):
             self.store.rebuild_map_cache("bakurani")
 
         self.assertEqual(self.store.map_name(), "zestafona")
+
+
+class TestCompactIndexFormat(unittest.TestCase):
+    def test_uint8_compressed_index_round_trips(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            desc = np.arange(2 * 128, dtype=np.uint8).reshape(2, 128)
+            np.savez_compressed(
+                os.path.join(tmp, "mini_feat.npz"),
+                ms=np.float32(2.6544),
+                mu_h=64,
+                mu_w=64,
+                tile=32,
+                gw=2,
+                gh=2,
+                gray_sig=np.array(["desat-1.000|ms=2.6544|1-2"], dtype="U128"),
+                levels=np.asarray([1.0], np.float32),
+                norm=np.array(["raw"], dtype="U32"),
+                fmt=np.array([featureindex._INDEX_FMT], dtype="U16"),
+                pts_lv0=np.zeros((2, 2), np.float32),
+                desc_lv0=desc,
+                tile_lv0=np.zeros(2, np.int32),
+            )
+            old_dir = featureindex._MAPS_DIR
+            featureindex._MAPS_DIR = tmp
+            try:
+                idx = featureindex.load_index("mini")
+            finally:
+                featureindex._MAPS_DIR = old_dir
+
+            self.assertIsNotNone(idx)
+            assert idx is not None
+            self.assertEqual(idx.fmt, featureindex._INDEX_FMT)
+            self.assertEqual(idx._levels[0]["desc"].dtype, np.uint8)
+            np.testing.assert_array_equal(idx._levels[0]["desc"], desc)
 
 
 if __name__ == "__main__":

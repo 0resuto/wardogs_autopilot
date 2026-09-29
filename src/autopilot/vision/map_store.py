@@ -21,7 +21,7 @@ import numpy as np
 from .. import PROJECT_ROOT
 from ..common.config import AppConfig, LocatorConfig, MapConfig, resolve_config_path
 from ..common.log import get_logger
-from .featureindex import _INDEX_NORM, load_index
+from .featureindex import _INDEX_FMT, _INDEX_NORM, load_index
 from .preprocessing import bgr_to_gray
 
 logger = get_logger("map_store")
@@ -297,6 +297,14 @@ class MapStore:
                         want,
                     )
                     idx = None
+            if idx is not None and getattr(idx, "fmt", None) != _INDEX_FMT:
+                logger.warning(
+                    "[map_store] feature index format mismatch (fmt=%s, want=%s) "
+                    "— download the map assets or rebuild from the source PNG",
+                    getattr(idx, "fmt", None),
+                    _INDEX_FMT,
+                )
+                idx = None
             if idx is not None and getattr(idx, "norm", None) != _INDEX_NORM:
                 logger.warning(
                     "[map_store] feature index build mismatch (norm=%s, want=%s) "

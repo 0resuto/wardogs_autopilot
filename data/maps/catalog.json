@@ -20,8 +20,8 @@
       "source": "1037093929-1790585482262448200",
       "artifacts": {
         "zestafona_feat.npz": {
-          "size": 1141362520,
-          "sha256": "b31aeac2887c26f1e56b24aafe92490061163be6b21685cc3a1d56ece73baa48"
+          "size": 230586383,
+          "sha256": "719e2dfee6b1c50a6583df335b7e1c3c3377e428121d98a27515492b7944d8af"
         },
         "zestafona_mu.npy": {
           "size": 152399153,
@@ -68,8 +68,8 @@
       "source": "298668480-1790585332330086900",
       "artifacts": {
         "bakurani_feat.npz": {
-          "size": 455496300,
-          "sha256": "cfb854d646a928503328733614ec4fda5f4b4eabb9c205f64395ee322d7a75e4"
+          "size": 92244871,
+          "sha256": "8a7d7d96569bf73e03cfbf5ed1db93a149de0f449c7accc6a6acc73a335058d2"
         },
         "bakurani_mu.npy": {
           "size": 38093712,
@@ -116,8 +116,8 @@
       "source": "1031050135-1790585240645487200",
       "artifacts": {
         "ozeti_feat.npz": {
-          "size": 1478016276,
-          "sha256": "ae9a2fd5f3220a3986c83cf67d30ce52179e29d2ad357b52a8e4cd136267956b"
+          "size": 293608816,
+          "sha256": "8291ca64a72854e097c1e694d8be7c04a91b577539950de78eac492011d85550"
         },
         "ozeti_mu.npy": {
           "size": 152399153,
