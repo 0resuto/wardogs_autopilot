@@ -67,6 +67,7 @@ __all__ = [
 logger = get_logger("locator")
 
 DEFAULT_MAX_KP = 1200
+DEFAULT_EARLY_INL = 40
 FAST_BUDGET_FRAC = 0.4
 # OpenCV's BFMatcher packs every train row index into 18 bits (1 << 18), so
 # knnMatch aborts once a candidate set reaches 262144 descriptors. A growing
@@ -355,7 +356,11 @@ class MapLocator:
         last_diag: dict[str, Any] | None = None
         discs: list[tuple[float, float, float]] = []
         global_pass = False
-        early_inl = max(10, int(cfg.get("vote_inl_skip", 40) or 40))
+        # Perf knob with its own key: stop trying further scale-level
+        # candidates once a match reaches this inlier count (0 = exhaustive
+        # scan). Do not derive it from vote_inl_skip: that is the tracker's
+        # trust gate, and tuning it silently changed matcher thoroughness.
+        early_inl = int(cfg.get("early_inl", DEFAULT_EARLY_INL) or 0)
 
         if cx is not None and cy is not None:
             qx, qy = cx, cy

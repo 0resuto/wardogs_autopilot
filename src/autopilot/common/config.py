@@ -99,6 +99,12 @@ class LocatorConfig(BaseModel):
     jump_gate_px: int = Field(default=3000, ge=100)
     heading_gate_deg: float = Field(default=0.0, ge=0.0, le=180.0)
     vote_inl_skip: int = Field(default=40, ge=1)
+    early_inl: int = Field(
+        default=40,
+        ge=0,
+        description="Stop trying further scale-level candidates once a match "
+        "reaches this inlier count (0 = exhaustive scan)",
+    )
     hold_frames: int = Field(default=5, ge=0)
 
 

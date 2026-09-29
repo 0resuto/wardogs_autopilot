@@ -258,6 +258,18 @@ class MapTab(QWidget):
         self._add_tune_field(l_misc, grp_misc, "vote", "vote_need", 3, 24, is_int=True)
         self._add_tune_field(l_misc, grp_misc, "head°", "heading_gate_deg", 0, 30, is_int=True)
         self._add_tune_field(l_misc, grp_misc, "skip", "vote_inl_skip", 40, 30, is_int=True)
+        self._add_tune_field(
+            l_misc,
+            grp_misc,
+            "brk",
+            "early_inl",
+            40,
+            26,
+            is_int=True,
+            tip="Stop trying further scale-level candidates once a match reaches\n"
+            "this many inliers (0 = scan every level; lower = snappier,\n"
+            "higher = more thorough)",
+        )
         self._add_tune_field(l_misc, grp_misc, "hold", "hold_frames", 5, 24, is_int=True)
         tune_row.addWidget(grp_misc)
 
@@ -603,6 +615,7 @@ class MapTab(QWidget):
             "vote_need": ("locator", 1, 10, int, "vote in [1 .. 10]"),
             "heading_gate_deg": ("locator", 0, 180, int, "head gate in [0 .. 180] deg"),
             "vote_inl_skip": ("locator", 1, 200, int, "skip in [1 .. 200] inl"),
+            "early_inl": ("locator", 0, 200, int, "brk in [0 .. 200] inl (0 = scan all)"),
             "hold_frames": ("locator", 0, 30, int, "hold in [0 .. 30] frames"),
             "max_kp_frame": ("locator", 100, 6000, int, "TRACK max kp in [100 .. 6000]"),
             "yaw_gain": ("navigator", 0.05, 5.0, float, "VEH gain in [0.05 .. 5.0]"),

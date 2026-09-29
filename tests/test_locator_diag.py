@@ -153,6 +153,31 @@ class _MultiIndex:
         return list(self.sets)
 
 
+class _CfgStore:
+    """MapStore stub exposing just the locator config block."""
+
+    def __init__(self, extra: dict) -> None:
+        self._cfg = dict(extra)
+
+    def loc_cfg(self):
+        base = dict(
+            local_radius=450.0,
+            radius_growth=1.6,
+            track_radius=900.0,
+            ratio=0.8,
+            min_inl=2,
+            min_inl_rate=0.0,
+            ratio_local=0.8,
+            min_inl_local=2,
+            min_inl_rate_local=0.0,
+            ratio_global=0.8,
+            min_inl_global=2,
+            min_inl_rate_global=0.0,
+        )
+        base.update(self._cfg)
+        return base
+
+
 def _matchable_set(n_pts: int = 8):
     """(pts, desc) that matches the 8-descriptor query by a pure translation."""
     base = np.tile(np.arange(1, 9, dtype=np.float32)[:, None], (1, 128))
@@ -212,6 +237,44 @@ class TestSearchOptimizations(unittest.TestCase):
         self.engine.bf = spy  # type: ignore[assignment]
 
         pose, _diag = self._run(idx, early_inl=0)
+
+        self.assertIsNotNone(pose)
+        self.assertEqual(spy.calls, 2)
+
+    def test_early_break_uses_its_own_config_key(self):
+        idx = _MultiIndex([(1.0, *_matchable_set()), (0.8, *_matchable_set())])
+        spy = _CountingBF(self.engine.bf)
+        self.engine.bf = spy  # type: ignore[assignment]
+        self.engine.store = _CfgStore({"early_inl": 4, "vote_inl_skip": 999})  # type: ignore[assignment]
+
+        pose = self.engine._index_find(
+            np.zeros((32, 32), np.uint8),
+            None,
+            idx,
+            100.0,
+            100.0,
+            min_inl=2,
+            feats=(self.kp, self.d1),
+        )[0]
+
+        self.assertIsNotNone(pose)
+        self.assertEqual(spy.calls, 1)
+
+    def test_vote_skip_does_not_stop_the_scan(self):
+        idx = _MultiIndex([(1.0, *_matchable_set()), (0.8, *_matchable_set())])
+        spy = _CountingBF(self.engine.bf)
+        self.engine.bf = spy  # type: ignore[assignment]
+        self.engine.store = _CfgStore({"vote_inl_skip": 4})  # type: ignore[assignment]
+
+        pose = self.engine._index_find(
+            np.zeros((32, 32), np.uint8),
+            None,
+            idx,
+            100.0,
+            100.0,
+            min_inl=2,
+            feats=(self.kp, self.d1),
+        )[0]
 
         self.assertIsNotNone(pose)
         self.assertEqual(spy.calls, 2)
