@@ -8,38 +8,29 @@ frames at the capture rate no matter how long global_pose takes.
 """
 
 import collections
-import json
 import math
-import os
 import queue
 import threading
 import time
 from typing import Any
 
-import cv2
 import numpy as np
 
-from .. import PROJECT_ROOT, crashlog
+from .. import crashlog
 from ..common.config import AppConfig, CaptureConfig, LocatorConfig
 from ..common.log import get_logger
-from ..hardware.screen_capture import ScreenCapture
 from . import locator
-from .hud_speed import SpeedSensor
+from .capture_producer import _CaptureProducer
+from .fail_dump import (
+    FAIL_KEEP_FILES,
+    FAIL_REASONS,
+    FAIL_SAVE_PERIOD_S,
+    fail_payload,
+    prune_fail_files,
+    save_fail_frame,
+)
 
 logger = get_logger("tracker")
-
-FAIL_SAVE_PERIOD_S = 1.0
-FAIL_KEEP_FILES = 200
-FAIL_REASONS = (
-    "no_features_flat",
-    "no_match_global",
-    "budget_timeout",
-    "no_index",
-    "index_no_match",
-    "no_features_frame",
-    "vote_reject",
-    "locator_error",
-)
 
 
 def _ang_diff(a, b):
@@ -67,151 +58,6 @@ def _vote_decide(buf, need, radius, pos):
         ):
             return cluster
     return None
-
-
-class _CaptureProducer(threading.Thread):
-    """Screen capture at a fixed rate into a single-slot drop-old queue.
-
-    Each item: dict(ts=time.time(), gray=mm_grayscale, bgr=mm_color,
-    roi=roi, mask=ui_bool, speed_kmh=int|None, speed_ok=bool) with the UI mask
-    already resized to the frame. The color frame is kept for debug dumps
-    only; the pipeline uses gray. Speed is read from the optional speedometer
-    ROI (capture.speed_roi). Errors land in crash.log and self.error (the
-    consumer surfaces it).
-    """
-
-    def __init__(
-        self,
-        cfg: CaptureConfig | AppConfig | dict,
-        mask,
-        frame_source,
-        stop,
-        out_q,
-    ) -> None:
-        super().__init__(daemon=True)
-        if isinstance(cfg, CaptureConfig):
-            self.capture_cfg = cfg
-            self.cfg = {"capture": cfg.model_dump()}
-        elif isinstance(cfg, AppConfig):
-            self.capture_cfg = cfg.capture
-            self.cfg = cfg.to_dict()
-        elif isinstance(cfg, dict):
-            self.cfg = cfg
-            raw_cap = cfg.get("capture")
-            cap_dict = raw_cap if isinstance(raw_cap, dict) else cfg
-            try:
-                self.capture_cfg = CaptureConfig(**cap_dict)
-            except Exception:
-                self.capture_cfg = CaptureConfig()
-        else:
-            self.capture_cfg = CaptureConfig()
-            self.cfg = {"capture": self.capture_cfg.model_dump()}
-
-        self.mask = np.asarray(mask, bool)
-        self.frame_source = frame_source
-        self._stop = stop
-        self._queue = out_q
-        self.error: str | None = None
-        self.speed_sensor = SpeedSensor()
-
-    def set_roi(self, roi: list[int] | tuple[int, ...]) -> None:
-        roi_list = [int(v) for v in roi]
-        if isinstance(self.cfg, dict):
-            self.cfg.setdefault("capture", {})["mmap_roi"] = roi_list
-        if hasattr(self, "capture_cfg"):
-            self.capture_cfg.mmap_roi = roi_list
-
-    def set_speed_roi(self, roi: list[int] | tuple[int, ...] | None) -> None:
-        roi_list = None if roi is None else [int(v) for v in roi]
-        if isinstance(self.cfg, dict):
-            self.cfg.setdefault("capture", {})["speed_roi"] = roi_list
-        if hasattr(self, "capture_cfg"):
-            self.capture_cfg.speed_roi = roi_list
-
-    def run(self) -> None:
-        cap = None
-        last_sign = None
-        fps = float(self.capture_cfg.fps)
-        period = 1.0 / max(1.0, fps)
-        try:
-            while not self._stop.is_set():
-                try:
-                    cap_cfg = self.cfg.get("capture") if isinstance(self.cfg, dict) else None
-                    if cap_cfg and isinstance(cap_cfg, dict):
-                        roi = cap_cfg.get("mmap_roi")
-                        speed_roi = cap_cfg.get("speed_roi")
-                        mon = int(cap_cfg.get("monitor", 0) or 0)
-                    else:
-                        roi = self.capture_cfg.mmap_roi
-                        speed_roi = self.capture_cfg.speed_roi
-                        mon = self.capture_cfg.monitor
-                    if not roi:
-                        self._stop.wait(period)
-                        continue
-                    roi = tuple(int(v) for v in roi)
-                    if self.frame_source is not None:
-                        frame = self.frame_source()
-                    else:
-                        sign = (mon, roi)
-                        if cap is None or sign != last_sign:
-                            if cap is not None and hasattr(cap, "close"):
-                                cap.close()
-                            cap = ScreenCapture(mon, roi)
-                            last_sign = sign
-                        frame = cap.grab()
-                    mm = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                    h, w = mm.shape
-                    ui = self.mask
-                    if ui.shape[:2] != (h, w):
-                        ui = (
-                            cv2.resize(ui.astype(np.uint8), (w, h), interpolation=cv2.INTER_NEAREST)
-                            > 0
-                        )
-                    item = dict(
-                        ts=time.time(),
-                        gray=mm,
-                        bgr=frame,
-                        roi=roi,
-                        mask=ui,
-                        speed_kmh=None,
-                        speed_ok=False,
-                        speed_frame=None,
-                        speed_mask=None,
-                        speed_boxes=(),
-                    )
-                    if speed_roi and cap is not None and self.speed_sensor.available:
-                        speed_frame = cap.grab_region(speed_roi)
-                        kmh, ok = self.speed_sensor.update(speed_frame, item["ts"])
-                        reading = self.speed_sensor.last_reading
-                        item["speed_kmh"] = kmh
-                        item["speed_ok"] = ok
-                        if reading is not None:
-                            item["speed_frame"] = reading.frame
-                            item["speed_mask"] = reading.mask
-                            item["speed_boxes"] = reading.boxes
-                    try:
-                        self._queue.get_nowait()  # drop the stale frame
-                    except queue.Empty:
-                        pass
-                    self._queue.put_nowait(item)
-                    self.error = None
-                except Exception as exc:  # noqa: BLE001
-                    if cap is not None and hasattr(cap, "close"):
-                        try:
-                            cap.close()
-                        except Exception:
-                            pass
-                    cap = None
-                    last_sign = None
-                    self.error = str(exc)
-                    if not self._stop.is_set():
-                        crashlog.log("capture producer error", exc)
-                    self._stop.wait(max(period, 0.5))
-                    continue
-                self._stop.wait(period)
-        finally:
-            if cap is not None and hasattr(cap, "close"):
-                cap.close()
 
 
 class LiveLocator(threading.Thread):
@@ -613,52 +459,15 @@ class LiveLocator(threading.Thread):
             self.error = str(exc)
 
     def _fail_payload(self, diag: dict, mm: np.ndarray, mask: np.ndarray | None) -> dict[str, Any]:
-        """Structured context of a failed frame for offline replay/triage."""
-        loc = self.locator_cfg.model_dump()
-        prev = self._prev_xy if self._prev_xy is not None else diag.get("prev")
-        return {
-            "ts": time.time(),
-            "reject": diag.get("reject"),
-            "detail": diag.get("detail"),
-            "mode": diag.get("mode"),
-            "prev": list(prev) if prev is not None else None,
-            "roi": diag.get("roi"),
-            "attempt": self.attempt,
-            "frame_shape": list(mm.shape),
-            "mm_mean": diag.get("mm_mean"),
-            "mm_std": diag.get("mm_std"),
-            "mm_mask_frac": diag.get("mm_mask_frac"),
-            "kp_mm": diag.get("kp_mm"),
-            "kp_chunk": diag.get("kp_chunk"),
-            "good": diag.get("good1"),
-            "inl": diag.get("inl1"),
-            "s": diag.get("s1"),
-            "th": diag.get("th1"),
-            "t": diag.get("t1"),
-            "search_discs": diag.get("search_discs"),
-            "search_global": diag.get("search_global"),
-            "vote": diag.get("vote"),
-            "reject_tally": diag.get("reject_tally"),
-            "mask_px": int(np.asarray(mask).sum()) if mask is not None and mask.size > 0 else None,
-            "thr": {
-                k: loc.get(k)
-                for k in (
-                    "max_kp_frame",
-                    "track_radius",
-                    "ratio_local",
-                    "min_inl_local",
-                    "min_inl_rate_local",
-                    "ratio_global",
-                    "min_inl_global",
-                    "min_inl_rate_global",
-                    "vote_need",
-                    "vote_inl_skip",
-                    "jump_gate_px",
-                    "heading_gate_deg",
-                )
-                if loc.get(k) is not None
-            },
-        }
+        """Structured context of a failed frame (see fail_dump.fail_payload)."""
+        return fail_payload(
+            diag,
+            mm,
+            mask,
+            locator_cfg=self.locator_cfg,
+            prev_xy=self._prev_xy,
+            attempt=self.attempt,
+        )
 
     def _save_fail_frame(
         self,
@@ -667,49 +476,18 @@ class LiveLocator(threading.Thread):
         bgr: np.ndarray | None = None,
         mask: np.ndarray | None = None,
     ) -> None:
-        """Autosave a failed frame (gray + color + context) for post-run analysis."""
-        try:
-            out_dir = os.path.join(PROJECT_ROOT, "output")
-            os.makedirs(out_dir, exist_ok=True)
-            ms = int((time.time() % 1.0) * 1000)
-            base = "debug_fail_%s_%03d" % (time.strftime("%Y%m%d_%H%M%S"), ms)
-            cv2.imwrite(os.path.join(out_dir, base + ".png"), mm)
-            if bgr is not None and bgr.size > 0:
-                cv2.imwrite(os.path.join(out_dir, base + "_rgb.png"), bgr)
-            payload = self._fail_payload(diag, mm, mask)
-            with open(os.path.join(out_dir, base + ".json"), "w", encoding="utf-8") as f:
-                json.dump(payload, f, ensure_ascii=False, indent=2)
-            with open(os.path.join(out_dir, base + ".txt"), "w", encoding="utf-8") as f:
-                f.write("reject=%s\n" % diag.get("reject"))
-                f.write("detail=%s\n" % diag.get("detail"))
-                f.write("prev=%s\n" % (payload["prev"],))
-                f.write("roi=%s\n" % (diag.get("roi"),))
-                f.write("kp_mm=%d kp_chunk=%d\n" % (diag.get("kp_mm", 0), diag.get("kp_chunk", 0)))
-                f.write(
-                    "mm_std=%.1f mask=%d%%\n"
-                    % (diag.get("mm_std") or 0, int(100 * (diag.get("mm_mask_frac") or 0)))
-                )
-                tally = diag.get("reject_tally") or {}
-                if tally:
-                    f.write("tally=%s\n" % " ".join("%s=%d" % (k, v) for k, v in tally.items()))
-                f.write("thr=%s\n" % json.dumps(payload["thr"], sort_keys=True))
-            self._prune_fail_files(out_dir)
-            logger.info(
-                "[tracker] saved fail frame %s (reject=%s kp=%s)",
-                base,
-                diag.get("reject"),
-                diag.get("kp_mm"),
-            )
-        except Exception:  # noqa: BLE001
-            pass
+        """Autosave a failed frame for post-run analysis (see fail_dump)."""
+        save_fail_frame(
+            diag,
+            mm,
+            bgr,
+            mask,
+            locator_cfg=self.locator_cfg,
+            prev_xy=self._prev_xy,
+            attempt=self.attempt,
+        )
 
     @staticmethod
     def _prune_fail_files(out_dir: str, keep: int = FAIL_KEEP_FILES) -> None:
-        """Keep only the newest `keep` debug_fail_* files (names sort by time)."""
-        files = sorted(p for p in os.listdir(out_dir) if p.startswith("debug_fail_"))
-        while len(files) > keep:
-            try:
-                os.remove(os.path.join(out_dir, files[0]))
-            except OSError:
-                pass
-            files = files[1:]
+        """Keep only the newest `keep` debug_fail_* files (see fail_dump)."""
+        prune_fail_files(out_dir, keep)
