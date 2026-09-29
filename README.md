@@ -84,8 +84,9 @@ flowchart LR
 - **Input** is a single serial byte per tick (key mask). The firmware releases all
   keys if no valid byte arrives for 200 ms.
 - **Studio (PySide6)**: minimap ROI calibration, live capture diagnostics, the map
-  with the route editor, locator/vehicle/corridor tuning (applies live), map cache
-  and SIFT index management, and manual-driving recording.
+  with the route editor, locator/vehicle/corridor tuning (applies live), map asset
+  download (sha256-verified release archives) with SIFT index rebuild, and
+  manual-driving recording.
 
 ## Requirements
 
@@ -104,6 +105,9 @@ uv run python tools/download_map.py zestafona   # derived artifacts (index + cac
 uv run python tools/download_map.py --all --verify
 uv run python main.py ui    # or autopilot.bat (windowless pythonw)
 ```
+
+Maps can also be fetched from the studio itself: Capture tab → **Map Cache →
+Download** (same archive verification and extraction as the CLI).
 
 Each map ships as a single release archive (`<map>.zip`) with derived
 artifacts only (`<map>_feat.npz`, `<map>_mu.npy`, the top
@@ -183,7 +187,7 @@ The firmware has a 200 ms watchdog.
 
 | Tool | Purpose |
 | --- | --- |
-| `tools/download_map.py` | fetch the derived map artifacts from GitHub Releases (`--verify` checks sha256) |
+| `tools/download_map.py` | CLI for the map asset archives (the studio has a Download button too; `--verify` checks sha256) |
 | `tools/build_map_assets.py` | refresh `catalog.json` from the artifacts; `--rebuild` regenerates caches from the source PNG (maintainer) |
 | `python -m autopilot.vision.featureindex` | build the SIFT index (`--build <map>`) |
 | `tools/selfcheck_features.py` | offline localization regression |

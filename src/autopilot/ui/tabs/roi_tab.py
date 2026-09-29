@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from ... import PROJECT_ROOT, crashlog
-from ...vision import locator
+from ...vision import asset_sync, locator
 from ..debug_collage import save_debug_snapshot
 from ..imaging import to_qpixmap
 from ..roi_selector import RoiSelector
@@ -118,6 +118,8 @@ class RoiTab(QWidget):
     sig_cache_progress = Signal(str)
     sig_cache_done = Signal(str)
     sig_cache_failed = Signal(str)
+    sig_download_done = Signal(str)
+    sig_download_failed = Signal(str)
     sig_save_done = Signal(str)
     sig_save_failed = Signal(str)
 
@@ -141,6 +143,7 @@ class RoiTab(QWidget):
         self._pick_target = "minimap"
         self._roi_pick_busy = False
         self._cache_rebuild_busy = False
+        self._cache_download_busy = False
         self._snap_busy = False
         self._last_snapshot_dir: str | None = None
         self._selector: RoiSelector | None = None
@@ -151,6 +154,8 @@ class RoiTab(QWidget):
         self.sig_cache_progress.connect(self._on_cache_progress)
         self.sig_cache_done.connect(self._on_cache_done)
         self.sig_cache_failed.connect(self._on_cache_failed)
+        self.sig_download_done.connect(self._on_download_done)
+        self.sig_download_failed.connect(self._on_download_failed)
         self.sig_save_done.connect(self._on_save_done)
         self.sig_save_failed.connect(self._on_save_failed)
 
@@ -310,7 +315,17 @@ class RoiTab(QWidget):
         self._cache_map_sel.currentTextChanged.connect(lambda: self.cache_status_refresh())
         row_map.addWidget(self._cache_map_sel)
 
+        self._cache_download_btn = QPushButton("Download", card_cache)
+        self._cache_download_btn.setToolTip(
+            "Download the map assets (archive + sha256 verification) from the release"
+        )
+        self._cache_download_btn.clicked.connect(self._cache_download_click)
+        row_map.addWidget(self._cache_download_btn)
+
         self._cache_rebuild_btn = QPushButton("Rebuild Cache & SIFT Index", card_cache)
+        self._cache_rebuild_btn.setToolTip(
+            "Rebuild mu/previews/SIFT index from the source PNG (maintainer machines only)"
+        )
         self._cache_rebuild_btn.clicked.connect(self._cache_rebuild_click)
         row_map.addWidget(self._cache_rebuild_btn)
         row_map.addStretch()
@@ -628,24 +643,33 @@ class RoiTab(QWidget):
         self.update_preview()
 
     def cache_status_refresh(self) -> None:
-        name = self._cache_map_sel.currentText()
+        name = self._cache_map_sel.currentText().strip()
         txt, color = self._get_map_cache_status(name)
         self._cache_status_lbl.setText(txt)
         self._cache_status_lbl.setStyleSheet(f"color: {color};")
+        busy = self._cache_rebuild_busy or self._cache_download_busy
+        ready = color == "#8ae234"
+        self._cache_download_btn.setEnabled(bool(name) and not busy and not ready)
+        has_png = bool(name) and os.path.exists(
+            os.path.join(PROJECT_ROOT, "data", "maps", f"{name}_map.png")
+        )
+        self._cache_rebuild_btn.setEnabled(not busy and has_png)
 
     def _get_map_cache_status(self, name: str) -> tuple[str, str]:
         return map_cache_status(name)
 
     def _cache_rebuild_click(self) -> None:
         name = self._cache_map_sel.currentText().strip()
-        if not name or self._cache_rebuild_busy:
+        if not name or self._cache_rebuild_busy or self._cache_download_busy:
             return
         png_path = os.path.join(PROJECT_ROOT, "data", "maps", f"{name}_map.png")
         if not os.path.exists(png_path):
             QMessageBox.critical(
                 self,
                 "Map Missing",
-                f"Map file '{name}_map.png' not found.\n\nPlease download it with:\n  python tools/download_map.py {name}",
+                f"Map file '{name}_map.png' not found.\n\n"
+                "Rebuilding requires the source PNG (maintainer machines).\n"
+                "Use the Download button to fetch the prebuilt assets instead.",
             )
             return
 
@@ -674,12 +698,54 @@ class RoiTab(QWidget):
             crashlog.log(f"rebuild map cache {name}", exc)
             self.sig_cache_failed.emit(str(exc))
 
+    def _cache_download_click(self) -> None:
+        name = self._cache_map_sel.currentText().strip()
+        if not name or self._cache_download_busy or self._cache_rebuild_busy:
+            return
+        catalog = asset_sync.load_catalog(locator.get_store().data_maps_dir)
+        archive = (catalog.get("maps", {}).get(name, {}) or {}).get("archive") or {}
+        size = int(archive.get("size") or 0)
+        size_txt = f"\n\nArchive size: {asset_sync.format_bytes(size)}" if size else ""
+        res = QMessageBox.question(
+            self,
+            "Download Map",
+            f'Download map assets for "{name}"?{size_txt}\n\n'
+            "The archive is verified against the catalog and extracted into data/maps.",
+        )
+        if res != QMessageBox.StandardButton.Yes:
+            return
+        self._cache_download_busy = True
+        self.cache_status_refresh()  # disables both buttons while busy
+        self._cache_status_lbl.setText("Starting download...")
+        self._cache_status_lbl.setStyleSheet("color: #ffaa00;")
+        threading.Thread(
+            target=self._cache_download_worker, args=(name, catalog), daemon=True
+        ).start()
+
+    def _cache_download_worker(self, name: str, catalog: dict[str, Any]) -> None:
+        try:
+            store = locator.get_store()
+            repo, tag = asset_sync.resolve_repo_tag(catalog)
+            ok = asset_sync.download_map(
+                name,
+                catalog,
+                repo,
+                tag,
+                store.data_maps_dir,
+                progress=lambda msg: self.sig_cache_progress.emit(msg),
+            )
+            if not ok:
+                raise RuntimeError("download failed (see output/autopilot.log)")
+            self.sig_download_done.emit(name)
+        except Exception as exc:
+            crashlog.log(f"download map assets {name}", exc)
+            self.sig_download_failed.emit(str(exc))
+
     def _on_cache_progress(self, msg: str) -> None:
         self._cache_status_lbl.setText(msg)
 
     def _on_cache_done(self, name: str) -> None:
         self._cache_rebuild_busy = False
-        self._cache_rebuild_btn.setEnabled(True)
         self.cache_status_refresh()
         if self.on_map_rebuilt is not None:
             self.on_map_rebuilt(name)
@@ -689,10 +755,24 @@ class RoiTab(QWidget):
 
     def _on_cache_failed(self, err_msg: str) -> None:
         self._cache_rebuild_busy = False
-        self._cache_rebuild_btn.setEnabled(True)
+        self.cache_status_refresh()
         self._cache_status_lbl.setText(f"Rebuild error: {err_msg}")
         self._cache_status_lbl.setStyleSheet("color: #ff3b3b;")
         QMessageBox.critical(self, "Map Cache", f"Rebuild failed: {err_msg}")
+
+    def _on_download_done(self, name: str) -> None:
+        self._cache_download_busy = False
+        self.cache_status_refresh()
+        if self.on_map_rebuilt is not None:
+            self.on_map_rebuilt(name)
+        QMessageBox.information(self, "Map Download", f'Map assets downloaded for "{name}"!')
+
+    def _on_download_failed(self, err_msg: str) -> None:
+        self._cache_download_busy = False
+        self.cache_status_refresh()
+        self._cache_status_lbl.setText(f"Download error: {err_msg}")
+        self._cache_status_lbl.setStyleSheet("color: #ff3b3b;")
+        QMessageBox.critical(self, "Map Download", f"Download failed: {err_msg}")
 
     def update_preview(self) -> None:
         """Poll latest captured frame and render diagnostic preview."""

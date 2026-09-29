@@ -558,5 +558,69 @@ class TestAppSmoke(unittest.TestCase):
             self.assertEqual(AppConfig.load(target).capture.fps, 17)
 
 
+class TestMapDownloadUi(unittest.TestCase):
+    def _app(self):
+        from autopilot.ui.app import App
+        from autopilot.vision.tracker import LiveLocator
+
+        with (
+            patch.object(LiveLocator, "start", lambda _self: None),
+            patch.object(App, "_load_map_worker", lambda _self, _name: None),
+            patch.object(App, "_save_cfg", lambda _self: None),
+        ):
+            return App(AppConfig())
+
+    def test_download_button_follows_cache_status(self):
+        app = self._app()
+        try:
+            with patch.object(
+                app.roi_tab,
+                "_get_map_cache_status",
+                lambda _n: ("Not downloaded: run python tools/download_map.py x", "#ff7c7c"),
+            ):
+                app.roi_tab.cache_status_refresh()
+                self.assertTrue(app.roi_tab._cache_download_btn.isEnabled())
+
+            with patch.object(
+                app.roi_tab, "_get_map_cache_status", lambda _n: ("Ready: mu OK", "#8ae234")
+            ):
+                app.roi_tab.cache_status_refresh()
+                self.assertFalse(app.roi_tab._cache_download_btn.isEnabled())
+        finally:
+            app.close()
+
+    def test_download_worker_reports_success_and_failure(self):
+        from autopilot.ui.tabs import roi_tab as roi_tab_mod
+        from autopilot.vision import asset_sync
+
+        app = self._app()
+        try:
+            app.roi_tab.on_map_rebuilt = None  # keep the test off the map reload thread
+            done: list[str] = []
+            failed: list[str] = []
+            app.roi_tab.sig_download_done.connect(done.append)
+            app.roi_tab.sig_download_failed.connect(failed.append)
+
+            with (
+                patch.object(asset_sync, "download_map", lambda *_a, **_k: True),
+                patch.object(roi_tab_mod.QMessageBox, "information", lambda *_a, **_k: None),
+            ):
+                app.roi_tab._cache_download_worker("zestafona", {"repo": "x/y", "tag": "v"})
+
+            self.assertEqual(done, ["zestafona"])
+            self.assertFalse(app.roi_tab._cache_download_busy)
+
+            with (
+                patch.object(asset_sync, "download_map", lambda *_a, **_k: False),
+                patch.object(roi_tab_mod.QMessageBox, "critical", lambda *_a, **_k: None),
+            ):
+                app.roi_tab._cache_download_worker("zestafona", {"repo": "x/y", "tag": "v"})
+
+            self.assertEqual(len(failed), 1)
+            self.assertFalse(app.roi_tab._cache_download_busy)
+        finally:
+            app.close()
+
+
 if __name__ == "__main__":
     unittest.main()

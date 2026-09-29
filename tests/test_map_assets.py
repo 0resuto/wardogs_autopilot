@@ -88,9 +88,9 @@ class TestArchiveDistribution(unittest.TestCase):
                 self.assertEqual(sorted(zf.namelist()), sorted(f"zestafona{s}" for s in suffixes))
 
     def test_extract_archive_verifies_and_places_files(self):
-        tool = _load_tool("download_map")
+        from autopilot.vision import asset_sync
+
         with tempfile.TemporaryDirectory() as tmp:
-            tool.DATA_MAPS = tmp
             payload = b"map-artifact"
             zip_path = os.path.join(tmp, "mini.zip")
             with zipfile.ZipFile(zip_path, "w") as zf:
@@ -104,15 +104,15 @@ class TestArchiveDistribution(unittest.TestCase):
                 }
             }
 
-            self.assertTrue(tool.extract_archive("mini", info, zip_path))
+            self.assertTrue(asset_sync.extract_archive("mini", info, zip_path, tmp))
 
             self.assertTrue(os.path.exists(os.path.join(tmp, "mini_mu.npy")))
             self.assertFalse(os.path.exists(os.path.join(tmp, ".extract_mini")))
 
     def test_extract_archive_rejects_corruption_and_unsafe_names(self):
-        tool = _load_tool("download_map")
+        from autopilot.vision import asset_sync
+
         with tempfile.TemporaryDirectory() as tmp:
-            tool.DATA_MAPS = tmp
             zip_path = os.path.join(tmp, "mini.zip")
             with zipfile.ZipFile(zip_path, "w") as zf:
                 zf.writestr("mini_mu.npy", b"corrupted")
@@ -126,7 +126,7 @@ class TestArchiveDistribution(unittest.TestCase):
                     }
                 }
             }
-            self.assertFalse(tool.extract_archive("mini", info, zip_path))
+            self.assertFalse(asset_sync.extract_archive("mini", info, zip_path, tmp))
             self.assertFalse(os.path.exists(os.path.join(tmp, "mini_mu.npy")))
 
             unsafe = {
@@ -134,14 +134,14 @@ class TestArchiveDistribution(unittest.TestCase):
                     "../evil.txt": {"size": 1, "sha256": hashlib.sha256(b"x").hexdigest()}
                 }
             }
-            self.assertFalse(tool.extract_archive("mini", unsafe, zip_path))
+            self.assertFalse(asset_sync.extract_archive("mini", unsafe, zip_path, tmp))
 
 
 class TestDownloadMapCatalog(unittest.TestCase):
     def test_repo_catalog_describes_derived_artifacts_only(self):
-        tool = _load_tool("download_map")
+        from autopilot.vision import asset_sync
 
-        catalog = tool.load_catalog()
+        catalog = asset_sync.load_catalog(os.path.join(ROOT, "data", "maps"))
 
         self.assertNotEqual(catalog.get("repo"), "owner/wardogs-autopilot")
         for name, info in catalog["maps"].items():
@@ -160,9 +160,9 @@ class TestDownloadMapCatalog(unittest.TestCase):
             self.assertEqual(len(archive["sha256"]), 64, name)
 
     def test_verify_map_accepts_matching_and_rejects_corrupt(self):
-        tool = _load_tool("download_map")
+        from autopilot.vision import asset_sync
+
         with tempfile.TemporaryDirectory() as tmp:
-            tool.DATA_MAPS = tmp
             data = b"artifact"
             path = os.path.join(tmp, "bakurani_mu.npy")
             with open(path, "wb") as f:
@@ -180,12 +180,12 @@ class TestDownloadMapCatalog(unittest.TestCase):
                 }
             }
 
-            self.assertTrue(tool.verify_map("bakurani", catalog))
+            self.assertTrue(asset_sync.verify_map("bakurani", catalog, tmp))
 
             with open(path, "wb") as f:
                 f.write(b"corrupted")
 
-            self.assertFalse(tool.verify_map("bakurani", catalog))
+            self.assertFalse(asset_sync.verify_map("bakurani", catalog, tmp))
 
 
 if __name__ == "__main__":
