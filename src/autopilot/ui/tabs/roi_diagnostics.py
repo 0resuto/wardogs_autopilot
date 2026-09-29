@@ -8,6 +8,7 @@ import threading
 import cv2
 import numpy as np
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
@@ -123,16 +124,34 @@ class RoiDiagnosticsMixin(RoiTabBase):
         # Backward compatibility alias
         self.preview_lbl = self.raw_preview_lbl
 
+    def _panel_placeholder(self, lbl: QLabel, text: str) -> None:
+        """Muted text instead of an empty black rectangle."""
+        lbl.setPixmap(QPixmap())
+        lbl.setText(text)
+        lbl.setStyleSheet(
+            "background-color: rgba(26,27,30,0.85); border-radius: 4px; "
+            "border: 1px solid rgba(234,234,234,0.10); color: rgba(234,234,234,0.45);"
+        )
+
+    def _show_panel_placeholders(self, reason: str) -> None:
+        self._panel_placeholder(self.raw_preview_lbl, f"no frames\n({reason})")
+        self._panel_placeholder(self.mask_preview_lbl, "—")
+        self._panel_placeholder(self.sift_preview_lbl, "—")
+        self._panel_placeholder(self.speed_preview_lbl, "—")
+
     def update_preview(self) -> None:
         """Poll latest captured frame and render diagnostic preview."""
         loc = self.get_loc()
         if loc is None:
+            self._show_panel_placeholders("no capture thread")
             return
         try:
             mm_gray, mm_bgr, mask, latest = loc.snapshot_debug()
         except Exception:
+            self._show_panel_placeholders("capture unavailable")
             return
         if mm_gray is None:
+            self._show_panel_placeholders("waiting for frames")
             return
 
         frame = (
@@ -238,14 +257,18 @@ class RoiDiagnosticsMixin(RoiTabBase):
                     f"color: {YELLOW}; font-weight: bold; font-size: 9pt;"
                 )
         else:
-            p4 = np.full((60, 160, 3), 26, np.uint8)
             if self.cfg.get("capture", {}).get("speed_roi"):
                 self.speed_title_lbl.setText("Speed OCR: waiting")
+                self._panel_placeholder(self.speed_preview_lbl, "waiting for the speed ROI…")
             else:
                 self.speed_title_lbl.setText("Speed OCR: disabled")
+                self._panel_placeholder(
+                    self.speed_preview_lbl, "disabled\n(pick a speed zone to enable)"
+                )
             self.speed_title_lbl.setStyleSheet(
                 f"color: {TEXT_DIM}; font-weight: bold; font-size: 9pt;"
             )
+            return
         set_panel(self.speed_preview_lbl, p4)
 
     def save_debug_frame(self) -> None:

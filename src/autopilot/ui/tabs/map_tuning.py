@@ -88,26 +88,6 @@ class MapTuningMixin(MapTabBase):
         self._add_tune_field(l_misc, grp_misc, "hold", "hold_frames", 5, 24, is_int=True)
         tune_row.addWidget(grp_misc)
 
-        # Action buttons
-        btn_box = QVBoxLayout()
-        btn_box.setSpacing(4)
-        top_btns = QHBoxLayout()
-        apply_btn = QPushButton("Apply", self._tune_container)
-        apply_btn.setObjectName("AccentButton")
-        apply_btn.clicked.connect(self.apply_tune)
-        top_btns.addWidget(apply_btn)
-
-        reset_btn = QPushButton("Reset", self._tune_container)
-        reset_btn.clicked.connect(self.reset_tune)
-        top_btns.addWidget(reset_btn)
-        btn_box.addLayout(top_btns)
-
-        self.tune_status = QLabel("", self._tune_container)
-        self.tune_status.setStyleSheet(f"color: {GREEN}; font-weight: 500;")
-        compact_label(self.tune_status)
-        btn_box.addWidget(self.tune_status)
-        tune_row.addLayout(btn_box)
-
         tune_vbox.addLayout(tune_row)
 
         tune_row2 = QHBoxLayout()
@@ -271,6 +251,24 @@ class MapTuningMixin(MapTabBase):
 
         tune_row2.addStretch()
         tune_vbox.addLayout(tune_row2)
+
+        # Action footer: status left, Reset/Apply right (they apply to every group)
+        footer = QHBoxLayout()
+        footer.setSpacing(6)
+        self.tune_status = QLabel("", self._tune_container)
+        self.tune_status.setStyleSheet(f"color: {GREEN}; font-weight: 500;")
+        compact_label(self.tune_status)
+        footer.addWidget(self.tune_status, stretch=1)
+
+        reset_btn = QPushButton("Reset", self._tune_container)
+        reset_btn.clicked.connect(self.reset_tune)
+        footer.addWidget(reset_btn)
+
+        apply_btn = QPushButton("Apply", self._tune_container)
+        apply_btn.setObjectName("AccentButton")
+        apply_btn.clicked.connect(self.apply_tune)
+        footer.addWidget(apply_btn)
+        tune_vbox.addLayout(footer)
 
         # Diagnostic fail logs bar
         dbg_bar = QHBoxLayout()

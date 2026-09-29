@@ -15,7 +15,7 @@ from string import Template
 from typing import Any
 
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QPalette
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLabel
 
 from .. import PROJECT_ROOT
 
@@ -358,6 +358,40 @@ QWidget#MapHud {
     border-radius: 10px;
 }
 
+QLabel#StatusBadge {
+    background-color: rgba(56,58,68,0.60);
+    border: 1px solid $BORDER;
+    border-radius: 10px;
+    padding: 2px 10px;
+    color: $TEXT_MUTED;
+    font-weight: 700;
+    font-size: 11px;
+}
+
+QLabel#StatusBadge[state="green"] {
+    background-color: rgba(16,185,129,0.18);
+    border-color: rgba(16,185,129,0.50);
+    color: #a7f3d0;
+}
+
+QLabel#StatusBadge[state="yellow"] {
+    background-color: rgba(245,158,11,0.18);
+    border-color: rgba(245,158,11,0.50);
+    color: #fcd34d;
+}
+
+QLabel#StatusBadge[state="blue"] {
+    background-color: rgba(56,189,248,0.18);
+    border-color: rgba(56,189,248,0.50);
+    color: #bae6fd;
+}
+
+QLabel#StatusBadge[state="red"] {
+    background-color: rgba(239,68,68,0.20);
+    border-color: rgba(239,68,68,0.45);
+    color: #fecaca;
+}
+
 QMenu {
     background-color: $GLASS_DEEP;
     border: 1px solid $BORDER_SOFT;
@@ -397,6 +431,21 @@ def build_qss() -> str:
         BORDER_SOFT=BORDER_SOFT,
         BORDER_STRONG=BORDER_STRONG,
     )
+
+
+def set_status_badge(label: QLabel, state: str, text: str | None = None) -> None:
+    """Style a QLabel as a kit-style pill badge.
+
+    `state` is one of 'green'/'yellow'/'blue'/'red' (semantic accents) or
+    'off' for the neutral grey pill.
+    """
+    if text is not None:
+        label.setText(text)
+    if label.objectName() != "StatusBadge":
+        label.setObjectName("StatusBadge")
+    label.setProperty("state", state)
+    label.style().unpolish(label)
+    label.style().polish(label)
 
 
 def windows_dark_mode() -> bool:

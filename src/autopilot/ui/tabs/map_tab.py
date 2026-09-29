@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
     QMessageBox,
     QPushButton,
     QVBoxLayout,
@@ -152,23 +153,38 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
         self._map_notice.show()
         self._map_notice.raise_()
 
-    def _update_map_notice(self) -> None:
-        """Reflect the map asset/load state on the canvas overlay."""
+    def map_asset_state(self) -> str:
+        """Asset state of the active map: 'missing', 'no_index' or 'ok'."""
         name = self.get_map_name()
         data_dir = getattr(self.get_store(), "data_maps_dir", None)
         if not data_dir:
-            self._map_notice.hide()
-            return
+            return "ok"
 
         def exists(fname: str) -> bool:
             return os.path.exists(os.path.join(str(data_dir), fname))
 
-        has_preview = any(exists(f"{name}_preview_{n}.npy") for n in locator.PREVIEW_SIZES)
-        has_base = all(exists(f"{name}_{s}") for s in ("mu.npy", "feat.npz"))
-        if not has_preview or not has_base:
+        if not any(exists(f"{name}_preview_{n}.npy") for n in locator.PREVIEW_SIZES):
+            return "missing"
+        if not exists(f"{name}_mu.npy"):
+            return "missing"
+        if not exists(f"{name}_feat.npz"):
+            return "no_index"
+        return "ok"
+
+    def _update_map_notice(self) -> None:
+        """Reflect the map asset/load state on the canvas overlay."""
+        state = self.map_asset_state()
+        if state == "missing":
             self._show_map_notice(
-                f'Map assets for "{name}" are not downloaded.\n'
+                f'Map assets for "{self.get_map_name()}" are not downloaded.\n'
                 "Open Capture zone → Map Cache → Download.",
+                with_button=True,
+            )
+        elif state == "no_index":
+            self._show_map_notice(
+                f'SIFT index for "{self.get_map_name()}" is missing '
+                "(localization reports no_index).\n"
+                "Use Capture zone → Map Cache → Download.",
                 with_button=True,
             )
         elif not self._map_loaded:
@@ -199,29 +215,23 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
         self.p_sel.setFixedWidth(130)
         top_bar.addWidget(self.p_sel)
 
-        btn_reload = QPushButton("⟳", self)
-        btn_reload.setFixedWidth(28)
-        btn_reload.setToolTip("Reload the preset list (e.g. after route_from_manual.py)")
-        btn_reload.clicked.connect(self.preset_reload)
-        top_bar.addWidget(btn_reload)
-
-        btn_load = QPushButton("Load", self)
-        btn_load.clicked.connect(lambda: self.preset_load_sel())
-        top_bar.addWidget(btn_load)
-
-        btn_del = QPushButton("Delete", self)
-        btn_del.clicked.connect(self.preset_delete)
-        top_bar.addWidget(btn_del)
-
-        self._new_btn = QPushButton("New", self)
-        self._new_btn.setToolTip("Create a new empty route preset, then draw it")
-        self._new_btn.clicked.connect(self.route_new)
-        top_bar.addWidget(self._new_btn)
-
-        btn_save = QPushButton("Save As", self)
-        btn_save.setToolTip("Save the current route under a new preset name")
-        btn_save.clicked.connect(self.preset_save)
-        top_bar.addWidget(btn_save)
+        self._preset_menu_btn = QPushButton("⋯", self)
+        self._preset_menu_btn.setFixedWidth(30)
+        self._preset_menu_btn.setToolTip("Preset actions: load, save as, new, delete, reload")
+        preset_menu = QMenu(self._preset_menu_btn)
+        act_load = preset_menu.addAction("Load preset")
+        act_load.triggered.connect(lambda: self.preset_load_sel())
+        act_save = preset_menu.addAction("Save As…")
+        act_save.triggered.connect(self.preset_save)
+        act_new = preset_menu.addAction("New route…")
+        act_new.triggered.connect(self.route_new)
+        act_del = preset_menu.addAction("Delete preset")
+        act_del.triggered.connect(self.preset_delete)
+        preset_menu.addSeparator()
+        act_reload = preset_menu.addAction("Reload list")
+        act_reload.triggered.connect(self.preset_reload)
+        self._preset_menu_btn.setMenu(preset_menu)
+        top_bar.addWidget(self._preset_menu_btn)
 
         btn_clear = QPushButton("🗑 Clear", self)
         btn_clear.clicked.connect(self.routes_clear)
@@ -249,13 +259,9 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
 
         self._route_locked: list[QWidget] = [
             self.p_sel,
-            btn_reload,
-            btn_load,
-            btn_del,
-            btn_save,
+            self._preset_menu_btn,
             btn_clear,
             self._reverse_btn,
-            self._new_btn,
         ]
 
         self.dbg_ck = QCheckBox("Nav log", self)
@@ -316,12 +322,12 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
         info_bar.setSpacing(8)
 
         self.map_status = QLabel("", self)
-        self.map_status.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 8pt;")
+        self.map_status.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 9pt;")
         compact_label(self.map_status)
         info_bar.addWidget(self.map_status, stretch=1)
 
         self._hint_lbl = QLabel("LMB: Pan | Wheel: Zoom | ✏ Edit to modify the route", self)
-        self._hint_lbl.setStyleSheet(f"color: {TEXT_DIM}; font-size: 8pt;")
+        self._hint_lbl.setStyleSheet(f"color: {TEXT_DIM}; font-size: 9pt;")
         info_bar.addWidget(self._hint_lbl)
         bot_box.addLayout(info_bar)
 

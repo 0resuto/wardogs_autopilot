@@ -138,8 +138,13 @@ class RoiCacheMixin(RoiTabBase):
         self._cache_status_lbl.setText(txt)
         self._cache_status_lbl.setStyleSheet(f"color: {color};")
         busy = self._cache_rebuild_busy or self._cache_download_busy
-        ready = color == f"{GREEN}"
+        ready = color == GREEN
         self._cache_download_btn.setEnabled(bool(name) and not busy and not ready)
+        self._cache_download_btn.setToolTip(
+            "All map assets are already present"
+            if ready
+            else "Download the map assets (archive + sha256 verification) from the release"
+        )
         has_png = bool(name) and os.path.exists(
             os.path.join(PROJECT_ROOT, "data", "maps", f"{name}_map.png")
         )

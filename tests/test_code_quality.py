@@ -492,6 +492,31 @@ class TestMapEmptyState(unittest.TestCase):
 
             self.assertTrue(tab._map_notice.isHidden())
 
+    def test_map_asset_state_distinguishes_missing_and_no_index(self):
+        with tempfile.TemporaryDirectory() as tmp:
+
+            class _Store:
+                data_maps_dir = tmp
+
+            tab = MapTab(
+                None,
+                AppConfig(),
+                save_cfg_fn=lambda: None,
+                loc_thread_supplier=lambda: None,
+                map_store_supplier=lambda: _Store(),
+                map_name_supplier=lambda: "zestafona",
+            )
+            self.assertEqual(tab.map_asset_state(), "missing")
+
+            for suffix in ("mu.npy", "preview_16384.npy"):
+                with open(os.path.join(tmp, f"zestafona_{suffix}"), "wb") as fh:
+                    fh.write(b"x")
+            self.assertEqual(tab.map_asset_state(), "no_index")
+
+            with open(os.path.join(tmp, "zestafona_feat.npz"), "wb") as fh:
+                fh.write(b"x")
+            self.assertEqual(tab.map_asset_state(), "ok")
+
 
 class TestPresetSanitization(unittest.TestCase):
     def test_traversal_is_neutralized(self):
@@ -639,10 +664,34 @@ class TestMapDownloadUi(unittest.TestCase):
                 app._update_hw_status()
             self.assertIn("COM6", app._status_hw.text())
             self.assertIn("●", app._status_hw.text())
+            self.assertEqual(app._status_hw.property("state"), "green")
 
             with patch.object(app_mod.list_ports, "comports", lambda: []):
                 app._update_hw_status()
             self.assertIn("○", app._status_hw.text())
+            self.assertEqual(app._status_hw.property("state"), "off")
+        finally:
+            app.close()
+
+    def test_preset_menu_exposes_the_actions(self):
+        app = self._app()
+        try:
+            menu = app.map_tab._preset_menu_btn.menu()
+            assert menu is not None
+            texts = [a.text() for a in menu.actions() if not a.isSeparator()]
+            self.assertEqual(
+                texts,
+                ["Load preset", "Save As…", "New route…", "Delete preset", "Reload list"],
+            )
+        finally:
+            app.close()
+
+    def test_capture_panels_show_placeholders_without_frames(self):
+        app = self._app()
+        try:
+            app.roi_tab.get_loc = lambda: None
+            app.roi_tab.update_preview()
+            self.assertIn("no frames", app.roi_tab.raw_preview_lbl.text())
         finally:
             app.close()
 
