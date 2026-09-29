@@ -53,7 +53,10 @@ for maps without a catalog scale.
 The speedometer OCR ratio (`mv / (kmh/3.6)`) validates the constant: a
 persistent deviation beyond 15% is logged and the measured value adopted once,
 because it is a direct measurement and the catalog may describe an older map
-revision. Validate in game with
+revision. An OCR estimate is only trusted after 25 samples with a tight
+inter-quartile spread (IQR/median <= 15%, which rejects acceleration lag, gear
+shifts and localization jitter) and plausible bounds (0.3..10 px/m); outside
+those gates it is ignored with a warning. Validate in game with
 `python tools/calibrate_vehicle.py output/nav_dbg_*.jsonl`.
 
 The catalog's png sizes/sha256 now describe the current asset extracts (the

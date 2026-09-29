@@ -36,7 +36,7 @@ class TestBrakeDistance(unittest.TestCase):
 class TestScaleEstimation(unittest.TestCase):
     def test_ocr_anchored_median_resists_spikes(self):
         ctrl = SpeedController()
-        for _ in range(12):
+        for _ in range(30):
             ctrl.update_scale(43.5, ocr_kmh=79.0)
         expect = 43.5 / (79.0 / 3.6)
         self.assertAlmostEqual(ctrl.px_per_m_now(), expect, delta=1e-3)
@@ -152,7 +152,7 @@ class TestKnownScale(unittest.TestCase):
 
     def test_ocr_agreement_keeps_catalog_scale(self):
         ctrl = SpeedController(px_per_m=2.0)
-        for _ in range(12):
+        for _ in range(35):
             ctrl.update_scale(29.4, ocr_kmh=53.0)  # ~2.0 px/m
 
         self.assertAlmostEqual(ctrl.px_per_m_now(), 2.0, delta=1e-9)
@@ -160,11 +160,36 @@ class TestKnownScale(unittest.TestCase):
     def test_ocr_mismatch_warns_and_adopts_measured_scale(self):
         ctrl = SpeedController(px_per_m=2.0)
         with self.assertLogs("speed_controller", level="WARNING") as captured:
-            for _ in range(10):
+            for _ in range(30):
                 ctrl.update_scale(60.0, ocr_kmh=40.0)  # 5.4 px/m
 
         self.assertTrue(any("scale mismatch" in line for line in captured.output))
         self.assertAlmostEqual(ctrl.px_per_m_now(), 5.4, delta=0.05)
+
+    def test_noisy_ocr_ratios_are_not_adopted(self):
+        ctrl = SpeedController(px_per_m=2.0)
+        for i in range(40):
+            ocr = 40.0 if i % 2 == 0 else 80.0  # ratios 5.4 / 2.7, spread too wide
+            ctrl.update_scale(60.0, ocr_kmh=ocr)
+
+        self.assertAlmostEqual(ctrl.px_per_m_now(), 2.0, delta=1e-9)
+
+    def test_implausible_ocr_scale_is_ignored(self):
+        ctrl = SpeedController(px_per_m=2.0)
+        with self.assertLogs("speed_controller", level="WARNING") as captured:
+            for _ in range(30):
+                ctrl.update_scale(1.4, ocr_kmh=100.0)  # 0.05 px/m
+
+        self.assertTrue(any("implausible" in line for line in captured.output))
+        self.assertAlmostEqual(ctrl.px_per_m_now(), 2.0, delta=1e-9)
+
+    def test_no_catalog_adopts_solid_ocr_scale(self):
+        ctrl = SpeedController(speed_cap_kmh=79.0)
+        for _ in range(30):
+            ctrl.update_scale(29.4, ocr_kmh=53.0)  # ~2.0 px/m
+
+        self.assertAlmostEqual(ctrl.px_per_m_now(), 1.997, delta=0.01)
+        self.assertAlmostEqual(ctrl.calc_target_speed(0.0), 79.0 / 3.6 * 1.997, delta=0.5)
 
     def test_legacy_estimate_without_catalog_scale(self):
         ctrl = SpeedController(speed_cap_kmh=79.0)

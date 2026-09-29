@@ -23,7 +23,10 @@ class SpeedController:
 
     # rolling windows for the px/m scale estimate (one entry per measured pose)
     _SCALE_WINDOW = 200
-    _SCALE_MIN_SAMPLES = 8
+    _SCALE_ADOPT_SAMPLES = 25  # samples before an OCR estimate may be trusted
+    _SCALE_MAX_SPREAD = 0.15  # IQR/median gate: rejects noisy or shifting ratios
+    _SCALE_MIN_PX_PER_M = 0.3  # plausibility bounds of a map scale
+    _SCALE_MAX_PX_PER_M = 10.0
     _SCALE_MIN_KMH = 30.0
     _SCALE_RECONCILE = 0.15  # relative drift at which the measured scale wins
 
@@ -49,6 +52,7 @@ class SpeedController:
         self._vmax_px = 45.0
         self._px_per_m = max(0.0, float(px_per_m))
         self._scale_source = "map" if self._px_per_m > 0 else None
+        self._scale_warned = False
         self._braking = False
         # Scale anchoring: the OCR ratio is preferred; the speed-profile
         # fallback uses a rolling percentile, never a running max (a single
@@ -114,9 +118,7 @@ class SpeedController:
         if ocr_kmh is not None and ocr_kmh >= self._SCALE_MIN_KMH and mv > 1.0:
             self._ratio_hist.append(float(mv) / (float(ocr_kmh) / 3.6))
 
-        measured = None
-        if len(self._ratio_hist) >= self._SCALE_MIN_SAMPLES:
-            measured = float(statistics.median(self._ratio_hist))
+        measured = self._measured_scale()
 
         if self._scale_source == "map":
             self._reconcile_known_scale(measured)
@@ -130,10 +132,38 @@ class SpeedController:
             self._scale_source = "ocr"
             return
 
-        self._px_per_m = (
-            self._vmax_px * 3.6 / self.speed_cap_kmh if self.speed_cap_kmh > 0 else 0.0
-        )
+        self._px_per_m = self._vmax_px * 3.6 / self.speed_cap_kmh if self.speed_cap_kmh > 0 else 0.0
         self._scale_source = "legacy" if self._px_per_m > 0 else None
+
+    def _measured_scale(self) -> float | None:
+        """Solid OCR scale estimate, or None while it is not trustworthy.
+
+        Three gates: enough samples (a couple of seconds of cruise), a tight
+        inter-quartile spread (rejects acceleration lag, gear shifts and
+        localization jitter) and plausible bounds (rejects a systematically
+        misread speedometer before it can poison the corridor math).
+        """
+        if len(self._ratio_hist) < self._SCALE_ADOPT_SAMPLES:
+            return None
+        values = sorted(self._ratio_hist)
+        median = float(statistics.median(values))
+        if median <= 0.0:
+            return None
+        q1 = values[len(values) // 4]
+        q3 = values[(3 * len(values)) // 4]
+        if (q3 - q1) / median > self._SCALE_MAX_SPREAD:
+            return None
+        if not (self._SCALE_MIN_PX_PER_M <= median <= self._SCALE_MAX_PX_PER_M):
+            if not self._scale_warned:
+                self._scale_warned = True
+                logger.warning(
+                    "[speed] implausible OCR map scale %.3f px/m (outside %.1f..%.1f) - ignored",
+                    median,
+                    self._SCALE_MIN_PX_PER_M,
+                    self._SCALE_MAX_PX_PER_M,
+                )
+            return None
+        return median
 
     def _reconcile_known_scale(self, measured: float | None) -> None:
         """Adopt the measured scale once when it strongly disagrees."""
