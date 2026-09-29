@@ -29,7 +29,7 @@ def _map_cache_ready(name: str) -> bool:
     suffixes = ("mu.npy", "feat.npz", "gray.txt")
     if not all(os.path.exists(os.path.join(data_dir, f"{name}_{s}")) for s in suffixes):
         return False
-    return all(
+    return any(
         os.path.exists(os.path.join(data_dir, f"{name}_preview_{sz}.npy"))
         for sz in (512, 1024, 2048, 4096, 8192, 16384)
     )

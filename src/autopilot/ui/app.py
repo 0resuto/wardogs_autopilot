@@ -269,6 +269,7 @@ class App(QMainWindow):
         try:
             sz = locator.full_map_size(name)
             map_size = sz[0] if isinstance(sz, (tuple, list)) else (sz or 32768)
+            locator.ensure_previews()  # derive the smaller levels from the shipped top
             pyr = locator.load_previews()
             self.sig_map_loaded.emit(name, pyr, map_size)
         except Exception as exc:

@@ -71,3 +71,6 @@ data/maps/*
 !data/maps/.gitkeep
 !data/maps/catalog.json
 !data/maps/*_gray.txt
+
+# Release staging produced by tools/build_map_assets.py --export
+dist-assets/

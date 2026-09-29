@@ -3,6 +3,7 @@
   "tag": "v1.0.0",
   "notes": [
     "Derived artifacts only: the original map PNG is not distributed. A machine holding the source PNG refreshes this catalog with tools/build_map_assets.py (--rebuild regenerates the caches first).",
+    "Only the top preview level ships per map (16384 for 32768 maps, the native 8192 gray for 16384 maps); the smaller pyramid levels are derived locally from it on first use (MapStore.ensure_previews).",
     "m_per_px is the physical map scale from the game's minimap texture spec: every map is 16320 m across (0.498046875 m/px at 32768, 0.99609375 m/px at 16384).",
     "'source' is the identity (size-mtime) of the PNG the artifacts were built from; the runtime cache signature is <palette>|<mini_scale>|<source>, so a different palette or mini_scale makes the caches stale (a rebuild requires the source PNG).",
     "Validate the scale in game with: python tools/calibrate_vehicle.py output/nav_dbg_*.jsonl (px_per_m report).",
@@ -30,26 +31,6 @@
         "zestafona_gray.txt": {
           "size": 52,
           "sha256": "bc752f0537489277f05dcbf715d520d733ca3d13fb4aa4847606e6fd0b482a91"
-        },
-        "zestafona_preview_512.npy": {
-          "size": 262272,
-          "sha256": "8e8d820198e2db0d151801bbe3db33543209ee1d6d89460414d9693c1388e446"
-        },
-        "zestafona_preview_1024.npy": {
-          "size": 1048704,
-          "sha256": "1165c645f36c2282cdfee2e2181fd14b1b7e1ef19512213dafc614b122d57b05"
-        },
-        "zestafona_preview_2048.npy": {
-          "size": 4194432,
-          "sha256": "0cbc55e177c041e061b5678d877e7d50ca3c586be7443e0649276bfe61775eff"
-        },
-        "zestafona_preview_4096.npy": {
-          "size": 16777344,
-          "sha256": "a18fb1e221a1366fa207f453651efb5c03a31d3dcb8d63c2fdf4adcd04c30507"
-        },
-        "zestafona_preview_8192.npy": {
-          "size": 67108992,
-          "sha256": "36f0ba8579b9d9e4d1e61e252388132f85785f55e7607d742fddbbe46c621b9e"
         },
         "zestafona_preview_16384.npy": {
           "size": 268435584,
@@ -79,29 +60,9 @@
           "size": 51,
           "sha256": "8967717092d2c69e89788144c647c0754a8bc770e734ec3a7110a0cb5e24a536"
         },
-        "bakurani_preview_512.npy": {
-          "size": 262272,
-          "sha256": "e95b62abdc9528606e31af913a08258abd299534ed2ca695300cb7e674305653"
-        },
-        "bakurani_preview_1024.npy": {
-          "size": 1048704,
-          "sha256": "11af9ed9069b18a56cf6ed1fdb969054da963297c976af3f794b2c9f6d937ed9"
-        },
-        "bakurani_preview_2048.npy": {
-          "size": 4194432,
-          "sha256": "8a1574eb671f7ce1871d72a48474e6a50c870b0e9d957fa20e969b62b5cacce8"
-        },
-        "bakurani_preview_4096.npy": {
-          "size": 16777344,
-          "sha256": "67a94fa6df90d89023bc9b0ac6a84bd99360fb8e405a111d3ee8c5782f58cba5"
-        },
         "bakurani_preview_8192.npy": {
           "size": 67108992,
           "sha256": "198192911d6bae7bc2f5e5feadfb4d6d5dd6407d74b3f57c0416a0ef9e98ed45"
-        },
-        "bakurani_preview_16384.npy": {
-          "size": 268435584,
-          "sha256": "a0169aa9dca762a561429df57dec7ef5723a8418fe27895f6db549ccce197c4f"
         }
       }
     },
@@ -126,26 +87,6 @@
         "ozeti_gray.txt": {
           "size": 52,
           "sha256": "c4851f8906f11d1a33c5b3fcc045c3a59eee169f84a9e8ec29d86945a5ed7e54"
-        },
-        "ozeti_preview_512.npy": {
-          "size": 262272,
-          "sha256": "f0567fbf32fd02b4ef40cbc409d2fb0aff2a5a2b29c1ec70448929ad2375e5ef"
-        },
-        "ozeti_preview_1024.npy": {
-          "size": 1048704,
-          "sha256": "01d2e2a0e9f3ab04253a9df8613ee29395f59a442ed1073da6a5db7fb4e8e339"
-        },
-        "ozeti_preview_2048.npy": {
-          "size": 4194432,
-          "sha256": "625d8c10e25a33316010000eb0e1359e390dde0ecc7c4a97f2a19db646f04542"
-        },
-        "ozeti_preview_4096.npy": {
-          "size": 16777344,
-          "sha256": "683b1b4ebd3621cd3f235e4bebe321400ac572263afead45f3f7b4faae869907"
-        },
-        "ozeti_preview_8192.npy": {
-          "size": 67108992,
-          "sha256": "185d7d61b5e24c5477c3ccee4a04a0fe911ce1835710bc51e081dc24d055c24f"
         },
         "ozeti_preview_16384.npy": {
           "size": 268435584,

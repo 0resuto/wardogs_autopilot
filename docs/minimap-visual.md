@@ -62,9 +62,12 @@ those gates it is ignored with a warning. Validate in game with
 ## Distributed artifacts and the cache signature
 
 `data/maps/catalog.json` lists the derived artifact set of every map
-(`<map>_feat.npz`, `<map>_mu.npy`, `<map>_preview_*.npy`, `<map>_gray.txt`)
-with sizes and sha256, plus `source` - the identity of the source PNG the
-caches were built from. The original map PNG is not distributed; only a
+(`<map>_feat.npz`, `<map>_mu.npy`, the top `<map>_preview_<n>.npy` level,
+`<map>_gray.txt`) with sizes and sha256, plus `source` - the identity of the
+source PNG the caches were built from. Only the top preview ships (16384 for
+32768 maps, the native 8192 gray for 16384 maps); the smaller pyramid levels
+are derived from it locally on first open (`MapStore.ensure_previews`).
+The original map PNG is not distributed; only a
 maintainer machine holding it can rebuild the caches
 (`tools/build_map_assets.py --rebuild`). The runtime signature is
 `<palette>|<mini_scale>|<source>`; it is compared against `gray.txt` and the

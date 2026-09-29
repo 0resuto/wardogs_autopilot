@@ -199,6 +199,38 @@ class TestIndexLifecycle(unittest.TestCase):
         self.assertEqual(self.store.map_name(), "zestafona")
 
 
+class TestPreviewDerivation(unittest.TestCase):
+    def _store(self, tmp: str) -> MapStore:
+        store = MapStore(full_dir=tmp, data_maps_dir=tmp, default_map="mini")
+        store.set_map("mini")
+        return store
+
+    def test_build_previews_skips_upscaling(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = self._store(tmp)
+
+            store.build_previews(np.zeros((1024, 1024), np.uint8))
+
+            self.assertTrue(os.path.exists(store.preview_path("mini", 1024)))
+            self.assertFalse(os.path.exists(store.preview_path("mini", 2048)))
+            self.assertFalse(os.path.exists(store.preview_path("mini", 16384)))
+
+    def test_missing_levels_derive_from_the_shipped_top(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = self._store(tmp)
+            top = np.zeros((1024, 1024), np.uint8)
+            top[::2] = 200
+            np.save(store.preview_path("mini", 1024), top)
+
+            self.assertTrue(store.ensure_previews())
+
+            previews = store.load_previews()
+            assert previews is not None
+            self.assertEqual(sorted(previews), [512, 1024])
+            self.assertEqual(previews[512].shape, (512, 512))
+            self.assertGreater(float(previews[512].mean()), 0.0)
+
+
 class TestCompactIndexFormat(unittest.TestCase):
     def test_uint8_compressed_index_round_trips(self):
         with tempfile.TemporaryDirectory() as tmp:

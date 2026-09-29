@@ -273,6 +273,12 @@ class MapStore:
         m_per_px = self.m_per_px(name)
         return 1.0 / m_per_px if m_per_px > 0.0 else 0.0
 
+    def catalog_artifacts(self, name: str | None = None) -> dict[str, dict[str, Any]]:
+        """Artifact metadata (size, sha256) the catalog lists for a map."""
+        entry = self._catalog().get("maps", {}).get(name or self._cur_name) or {}
+        arts = entry.get("artifacts")
+        return dict(arts) if isinstance(arts, dict) else {}
+
     def get_index(self) -> Any:
         """Load cached SIFT feature index for active map, checking signature matches."""
         idx = self._g.get("idx")
@@ -319,9 +325,20 @@ class MapStore:
     # ---------- Previews & Map caches ----------
 
     def build_previews(self, full: np.ndarray) -> None:
-        """Build and cache downscaled levels (512..16384) from the full map."""
+        """Build and cache the level ladder from a full-resolution gray map.
+
+        Levels larger than the source are skipped: the shipped top preview of
+        a 16384 map is the native 8192 gray, and upscaling it to 16384 would
+        only write an interpolated 268 MB copy per map.
+        """
         for n in PREVIEW_SIZES:
-            img = cv2.resize(full, (n, n), interpolation=cv2.INTER_AREA)
+            if n > full.shape[0]:
+                continue
+            img = (
+                full
+                if n == full.shape[0]
+                else cv2.resize(full, (n, n), interpolation=cv2.INTER_AREA)
+            )
             try:
                 np.save(self.preview_path(self._cur_name, n), img)
             except OSError as exc:
@@ -341,15 +358,40 @@ class MapStore:
         return d
 
     def ensure_previews(self) -> bool:
-        """Ensure preview pyramid exists on disk."""
+        """Ensure the preview pyramid: derive missing smaller levels locally.
+
+        Only the largest level ships with the map (release size); the rest are
+        regenerated from it on first use and cached in data/maps. With no
+        preview at all, a maintainer machine rebuilds the ladder from the
+        source PNG instead.
+        """
         name = self._cur_name
         if all(os.path.exists(self.preview_path(name, n)) for n in PREVIEW_SIZES):
             return True
-        full = self._read_map_gray(name)
-        if full is None:
-            return False
-        self.build_previews(full)
-        return True
+        with self._cache_lock:
+            if all(os.path.exists(self.preview_path(name, n)) for n in PREVIEW_SIZES):
+                return True
+            levels = [n for n in PREVIEW_SIZES if os.path.exists(self.preview_path(name, n))]
+            if not levels:
+                full = self._read_map_gray(name)
+                if full is None:
+                    return False
+                self.build_previews(full)
+                return True
+            top = max(levels)
+            try:
+                img = np.load(self.preview_path(name, top))
+            except Exception:
+                return False
+            for n in [s for s in PREVIEW_SIZES if s < top][::-1]:
+                img = cv2.resize(img, (n, n), interpolation=cv2.INTER_AREA)
+                if os.path.exists(self.preview_path(name, n)):
+                    continue
+                try:
+                    np.save(self.preview_path(name, n), img)
+                except OSError as exc:
+                    logger.warning("[map_store] failed to save preview %d: %s", n, exc)
+            return True
 
     def load_global_map(self) -> np.ndarray:
         """Load or build the global mu map at minimap scale."""

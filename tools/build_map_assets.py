@@ -3,9 +3,10 @@
 
 The app never needs the original map PNG at runtime: localization uses
 <map>_feat.npz, the global match uses <map>_mu.npy, the Map tab renders the
-<map>_preview_*.npy pyramid and <map>_gray.txt carries the cache signature.
-This tool records that artifact set (size + sha256) plus the build source in
-catalog.json, so tools/download_map.py can distribute derived files only.
+top <map>_preview_*.npy level (smaller levels are derived locally from it) and
+<map>_gray.txt carries the cache signature. This tool records that artifact
+set (size + sha256) plus the build source in catalog.json, so
+tools/download_map.py can distribute derived files only.
 
 Usage:
     python tools/build_map_assets.py --all
@@ -30,22 +31,29 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_MAPS = os.path.join(ROOT, "data", "maps")
 CATALOG_PATH = os.path.join(DATA_MAPS, "catalog.json")
 
-ARTIFACT_SUFFIXES = (
-    "_feat.npz",
-    "_mu.npy",
-    "_gray.txt",
-    "_preview_512.npy",
-    "_preview_1024.npy",
-    "_preview_2048.npy",
-    "_preview_4096.npy",
-    "_preview_8192.npy",
-    "_preview_16384.npy",
-)
+BASE_ARTIFACT_SUFFIXES = ("_feat.npz", "_mu.npy", "_gray.txt")
+PREVIEW_TOP_MAX = 16384
+
+
+def artifact_suffixes(entry: dict) -> tuple[str, ...]:
+    """Artifacts to ship for a map: only the top preview level.
+
+    The smaller pyramid levels are derived locally from it on first use
+    (MapStore.ensure_previews), so a 32768 map ships 16384 and a 16384 map
+    ships the native 8192 gray.
+    """
+    size = entry.get("size") or (32768, 32768)
+    top = min(PREVIEW_TOP_MAX, int(size[0]) // 2)
+    return BASE_ARTIFACT_SUFFIXES + (f"_preview_{top}.npy",)
+
 
 CATALOG_NOTES = [
     "Derived artifacts only: the original map PNG is not distributed. A machine "
     "holding the source PNG refreshes this catalog with tools/build_map_assets.py "
     "(--rebuild regenerates the caches first).",
+    "Only the top preview level ships per map (16384 for 32768 maps, the native "
+    "8192 gray for 16384 maps); the smaller pyramid levels are derived locally "
+    "from it on first use (MapStore.ensure_previews).",
     "m_per_px is the physical map scale from the game's minimap texture spec: "
     "every map is 16320 m across (0.498046875 m/px at 32768, 0.99609375 m/px at "
     "16384).",
@@ -112,7 +120,7 @@ def refresh_entry(catalog: dict, name: str) -> tuple[int, int]:
 
     artifacts: dict[str, dict] = {}
     total_bytes = 0
-    for suffix in ARTIFACT_SUFFIXES:
+    for suffix in artifact_suffixes(entry):
         fname = f"{name}{suffix}"
         path = os.path.join(DATA_MAPS, fname)
         if not os.path.exists(path):
@@ -139,11 +147,12 @@ def rebuild_caches(name: str) -> None:
     store.rebuild_map_cache(name, progress_cb=lambda msg: print(f"  {msg}"))
 
 
-def export_artifacts(name: str, dest_root: str) -> None:
+def export_artifacts(name: str, entry: dict, dest_root: str) -> None:
     """Place the release set of `name` under dest_root (hardlink, copy fallback)."""
     out_dir = os.path.join(dest_root, name)
     os.makedirs(out_dir, exist_ok=True)
-    for suffix in ARTIFACT_SUFFIXES:
+    suffixes = artifact_suffixes(entry)
+    for suffix in suffixes:
         fname = f"{name}{suffix}"
         src = os.path.join(DATA_MAPS, fname)
         dst = os.path.join(out_dir, fname)
@@ -153,7 +162,7 @@ def export_artifacts(name: str, dest_root: str) -> None:
             os.link(src, dst)
         except OSError:
             shutil.copy2(src, dst)
-    print(f"  exported {len(ARTIFACT_SUFFIXES)} files to {out_dir}")
+    print(f"  exported {len(suffixes)} files to {out_dir}")
 
 
 def main() -> None:
@@ -192,7 +201,7 @@ def main() -> None:
         _count, total_bytes = refresh_entry(catalog, name)
         grand_total += total_bytes
         if args.export:
-            export_artifacts(name, args.export)
+            export_artifacts(name, catalog["maps"][name], args.export)
         print()
 
     catalog["notes"] = CATALOG_NOTES

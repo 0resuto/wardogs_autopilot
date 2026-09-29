@@ -48,9 +48,10 @@ class _StringVarCompat:
 def map_cache_status(name: str) -> tuple[str, str]:
     """Human-readable cache status of `name` and its display color.
 
-    The distributed map is a derived artifact set (feat.npz, mu.npy, gray.txt,
-    preview mipmaps); the source PNG only exists on a maintainer machine, which
-    is also the only place a rebuild is possible.
+    The distributed map is a derived artifact set (feat.npz, mu.npy, gray.txt
+    and the top preview level; smaller pyramid levels are generated locally on
+    first open). The source PNG only exists on a maintainer machine, which is
+    also the only place a rebuild is possible.
     """
     if not name:
         return "No map selected", "#8a8a8a"
@@ -65,14 +66,21 @@ def map_cache_status(name: str) -> tuple[str, str]:
         for label, path in (("feat.npz", feat_path), ("mu.npy", mu_path), ("gray.txt", gray_path))
         if not os.path.exists(path)
     ]
-    missing_previews = [
-        sz
-        for sz in locator.PREVIEW_SIZES
-        if not os.path.exists(os.path.join(data_dir, f"{name}_preview_{sz}.npy"))
-    ]
+    artifacts = locator.get_store().catalog_artifacts(name)
+    if artifacts:
+        absent = [f for f in artifacts if not os.path.exists(os.path.join(data_dir, f))]
+        missing_previews = [f for f in absent if "_preview_" in f]
+    else:
+        absent = []
+        missing_previews = [
+            f"{name}_preview_{sz}.npy"
+            for sz in locator.PREVIEW_SIZES
+            if not os.path.exists(os.path.join(data_dir, f"{name}_preview_{sz}.npy"))
+        ]
 
-    all_previews_gone = len(missing_previews) == len(locator.PREVIEW_SIZES)
-    if len(missing) == 3 and all_previews_gone and not has_png:
+    all_artifacts_gone = bool(artifacts) and len(absent) == len(artifacts)
+    no_artifacts_at_all = not artifacts and len(missing_previews) == len(locator.PREVIEW_SIZES)
+    if len(missing) == 3 and not has_png and (all_artifacts_gone or no_artifacts_at_all):
         return f"Not downloaded: run python tools/download_map.py {name}", "#ff7c7c"
     if missing:
         hint = "re-download the map assets"
@@ -83,7 +91,7 @@ def map_cache_status(name: str) -> tuple[str, str]:
         hint = "re-download the map assets"
         if has_png:
             hint = "press Rebuild"
-        return f"Cache incomplete: missing previews {missing_previews} ({hint})", "#ffaa00"
+        return f"Cache incomplete: missing {', '.join(missing_previews)} ({hint})", "#ffaa00"
 
     try:
         with np.load(feat_path) as idx:

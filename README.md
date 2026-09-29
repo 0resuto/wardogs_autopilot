@@ -106,8 +106,9 @@ uv run python main.py ui    # or autopilot.bat (windowless pythonw)
 ```
 
 Map assets are distributed as derived artifacts only (`<map>_feat.npz`,
-`<map>_mu.npy`, the `<map>_preview_*.npy` pyramid and `<map>_gray.txt`), listed
-with sizes and sha256 in `data/maps/catalog.json`; the original map PNG is not
+`<map>_mu.npy`, the top `<map>_preview_*.npy` level and `<map>_gray.txt`),
+listed with sizes and sha256 in `data/maps/catalog.json`; smaller preview
+levels are derived locally on first open. The original map PNG is not
 distributed. Rebuilding the caches from the source PNG is a maintainer flow:
 
 ```bash

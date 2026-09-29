@@ -28,7 +28,8 @@ class TestBuildMapAssets(unittest.TestCase):
         tool = _load_tool("build_map_assets")
         with tempfile.TemporaryDirectory() as tmp:
             tool.DATA_MAPS = tmp
-            for suffix in tool.ARTIFACT_SUFFIXES:
+            suffixes = tool.artifact_suffixes({"size": [32768, 32768]})
+            for suffix in suffixes:
                 with open(os.path.join(tmp, f"zestafona{suffix}"), "wb") as f:
                     f.write(f"payload-{suffix}".encode())
             with open(os.path.join(tmp, "zestafona_gray.txt"), "w", encoding="utf-8") as f:
@@ -39,7 +40,7 @@ class TestBuildMapAssets(unittest.TestCase):
             count, total = tool.refresh_entry(catalog, "zestafona")
 
             entry = catalog["maps"]["zestafona"]
-            self.assertEqual(count, len(tool.ARTIFACT_SUFFIXES))
+            self.assertEqual(count, len(suffixes))
             self.assertGreater(total, 0)
             self.assertNotIn("files", entry)
             self.assertEqual(entry["source"], "123-456")
