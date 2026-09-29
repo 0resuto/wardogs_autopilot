@@ -18,6 +18,7 @@ import time
 import unittest
 from ctypes import wintypes
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -200,6 +201,23 @@ class TestHardwareDrivers(unittest.TestCase):
         self.assertEqual(driver.held(), [])
 
 
+class _FakePumpThread:
+    """Thread stub: tracks join calls and whether it survives them."""
+
+    def __init__(self, alive: bool, alive_after_join: bool | None = None) -> None:
+        self.native_id = 4242
+        self.alive = alive
+        self._alive_after_join = alive if alive_after_join is None else alive_after_join
+        self.joins = 0
+
+    def is_alive(self) -> bool:
+        return self.alive
+
+    def join(self, timeout=None) -> None:
+        self.joins += 1
+        self.alive = self._alive_after_join
+
+
 class TestHotkeyManager(unittest.TestCase):
     @staticmethod
     def _fake_windll(pending, registered, unregistered, register_ok=None):
@@ -297,6 +315,62 @@ class TestHotkeyManager(unittest.TestCase):
             sorted(registered), sorted([hotkeys_mod._HK_F6, hotkeys_mod._HK_F7, hotkeys_mod._HK_F8])
         )
         self.assertIn(True, states)
+
+    def test_stop_posts_quit_and_clears_the_handle(self):
+        manager = HotkeyManager(None)
+        fake_thread = _FakePumpThread(alive=True, alive_after_join=False)
+        manager._thread = fake_thread  # type: ignore[assignment]
+        posted: list[tuple[int, int, int, int]] = []
+        fake = self._fake_windll([], [], [])
+        fake.user32.PostThreadMessageW = lambda tid, msg, wp, lp: posted.append((tid, msg, wp, lp))
+
+        with patch.object(hotkeys_mod.ctypes, "windll", fake):
+            manager.stop()
+
+        self.assertEqual(fake_thread.joins, 1)
+        self.assertEqual(posted, [(4242, hotkeys_mod._WM_QUIT, 0, 0)])
+        self.assertIsNone(manager._thread)
+
+    def test_stop_keeps_the_handle_when_the_pump_will_not_die(self):
+        manager = HotkeyManager(None)
+        fake_thread = _FakePumpThread(alive=True, alive_after_join=True)
+        manager._thread = fake_thread  # type: ignore[assignment]
+        fake = self._fake_windll([], [], [])
+        fake.user32.PostThreadMessageW = lambda *_args: 1
+
+        with (
+            patch.object(hotkeys_mod.ctypes, "windll", fake),
+            self.assertLogs("hotkeys", level="WARNING") as captured,
+        ):
+            manager.stop()
+
+        self.assertIs(manager._thread, fake_thread)
+        self.assertTrue(any("did not stop" in line for line in captured.output))
+
+    def test_start_replaces_a_dead_handle_without_spawning_twins(self):
+        created: list[Any] = []
+
+        class _StubThread:
+            def __init__(self, target=None, daemon=None):
+                self.daemon = daemon
+                self.alive = False
+                created.append(self)
+
+            def start(self):
+                self.alive = True
+
+            def is_alive(self):
+                return self.alive
+
+        manager = HotkeyManager(None)
+        manager._thread = _FakePumpThread(alive=False)  # type: ignore[assignment]
+
+        with patch.object(hotkeys_mod.threading, "Thread", _StubThread):
+            manager.start()
+            manager.start()
+
+        self.assertEqual(len(created), 1)
+        self.assertIs(manager._thread, created[0])
 
 
 if __name__ == "__main__":

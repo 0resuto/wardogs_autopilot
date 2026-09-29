@@ -238,6 +238,38 @@ class TestRouteEditor(unittest.TestCase):
 
         self.assertEqual(self.tab.route_pts, [[10.0, 10.0], [30.0, 30.0]])
 
+    def test_route_new_keeps_the_current_route_when_saving_fails(self):
+        self.tab.route_pts = [[1.0, 1.0], [2.0, 2.0]]
+
+        with (
+            patch.object(self.tab, "_ask_preset_name", return_value="fresh"),
+            patch.object(self.tab, "_save_route_to_preset", return_value=False),
+        ):
+            self.tab.route_new()
+
+        self.assertEqual(self.tab.route_pts, [[1.0, 1.0], [2.0, 2.0]])
+
+    def test_route_new_saves_empty_points_and_enters_edit_mode(self):
+        self.tab.route_pts = [[1.0, 1.0]]
+        saved: dict = {}
+
+        def save(name: str) -> bool:
+            saved["name"] = name
+            saved["pts"] = list(self.tab.route_pts)
+            return True
+
+        with (
+            patch.object(self.tab, "_ask_preset_name", return_value="fresh"),
+            patch.object(self.tab, "_save_route_to_preset", side_effect=save),
+        ):
+            self.tab.route_new()
+
+        self.assertEqual(saved["name"], "fresh")
+        self.assertEqual(saved["pts"], [])
+        self.assertEqual(self.tab.route_pts, [])
+        self.assertTrue(self.tab.map_widget.view._route_edit_mode)
+        self.assertTrue(self.tab._edit_btn.isHidden())
+
 
 class TestPresetStartup(unittest.TestCase):
     def test_reload_selects_and_loads_the_last_preset(self):

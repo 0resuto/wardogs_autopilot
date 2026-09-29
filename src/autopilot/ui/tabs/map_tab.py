@@ -893,8 +893,10 @@ class MapTab(QWidget):
                 f'Preset "{name}" already exists. Load it or use "Save As" to overwrite.',
             )
             return
+        previous = self.route_pts
         self.route_pts = []
         if not self._save_route_to_preset(name):
+            self.route_pts = previous
             return
         self._set_edit_mode(True)
 

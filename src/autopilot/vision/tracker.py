@@ -38,6 +38,7 @@ FAIL_REASONS = (
     "index_no_match",
     "no_features_frame",
     "vote_reject",
+    "locator_error",
 )
 
 

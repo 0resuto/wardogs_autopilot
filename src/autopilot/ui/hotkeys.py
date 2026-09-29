@@ -56,8 +56,8 @@ class HotkeyManager(QObject):
         return self._all_ok is True
 
     def start(self) -> None:
-        """Spawn the message pump thread."""
-        if self._thread is not None:
+        """Spawn the message pump thread (no-op while one is alive)."""
+        if self._thread is not None and self._thread.is_alive():
             return
         t = threading.Thread(target=self._walk, daemon=True)
         self._thread = t
@@ -118,10 +118,19 @@ class HotkeyManager(QObject):
             self.registration_changed.emit(False)
 
     def stop(self) -> None:
-        """Wake the pump thread with WM_QUIT and join it."""
+        """Wake the pump thread with WM_QUIT and join it.
+
+        On join timeout the handle is kept: dropping it would let `start()`
+        spawn a twin pump next to the still-waking one.
+        """
         t = self._thread
-        if t is None or not t.is_alive():
+        if t is None:
             return
-        ctypes.windll.user32.PostThreadMessageW(self._thread_id, _WM_QUIT, 0, 0)
-        t.join(timeout=1.0)
+        if t.is_alive():
+            tid = t.native_id or self._thread_id
+            ctypes.windll.user32.PostThreadMessageW(tid, _WM_QUIT, 0, 0)
+            t.join(timeout=1.0)
+        if t.is_alive():
+            logger.warning("[studio] hotkey pump thread did not stop within 1 s")
+            return
         self._thread = None
