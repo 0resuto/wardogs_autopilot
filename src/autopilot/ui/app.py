@@ -388,7 +388,7 @@ class App(QMainWindow):
             self._hotkey_lbl.setText(_HOTKEY_HINT)
             self._hotkey_lbl.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 9pt;")
         else:
-            self._hotkey_lbl.setText("⚠ hotkeys F6/F7/F8 busy - retrying")
+            self._hotkey_lbl.setText("hotkeys F6/F7/F8 busy - retrying")
             self._hotkey_lbl.setStyleSheet(f"color: {RED}; font-size: 9pt;")
 
     def _on_global_hotkey(self, key_id: int) -> None:

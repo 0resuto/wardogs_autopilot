@@ -28,9 +28,9 @@ class MapRouteEditMixin(MapTabBase):
             self.map_widget.view.set_route_mode(False)
         self._set_route_controls_enabled()
         self._hint_lbl.setText(
-            "LMB: Add point | Middle-drag: Pan | Wheel: Zoom | ✓ Apply / ✕ Cancel"
+            "LMB: Add point | Middle-drag: Pan | Wheel: Zoom | Apply / Cancel"
             if editing
-            else "LMB: Pan | Wheel: Zoom | ✏ Edit to modify the route"
+            else "LMB: Pan | Wheel: Zoom | Edit to modify the route"
         )
 
     def route_edit_apply(self) -> None:

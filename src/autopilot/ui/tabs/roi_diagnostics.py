@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 
 from ... import PROJECT_ROOT, crashlog
 from ..debug_collage import save_debug_snapshot
+from ..icons import icon
 from ..imaging import to_qpixmap
 from ..theme import BLUE, BORDER, GREEN, PANEL_BG, RED, TEXT_DIM, YELLOW
 from .common import RoiTabBase
@@ -42,13 +43,15 @@ class RoiDiagnosticsMixin(RoiTabBase):
         self.save_status_lbl.setStyleSheet(f"color: {GREEN}; font-size: 8pt; font-weight: 500;")
         hdr_row.addWidget(self.save_status_lbl, stretch=1)
 
-        self.open_snap_btn = QPushButton("📁 Open snapshot", card_prev)
+        self.open_snap_btn = QPushButton("Open snapshot", card_prev)
+        self.open_snap_btn.setIcon(icon("folder"))
         self.open_snap_btn.setToolTip("Open last saved diagnostic snapshot folder")
         self.open_snap_btn.setVisible(False)
         self.open_snap_btn.clicked.connect(self._open_last_snapshot)
         hdr_row.addWidget(self.open_snap_btn)
 
-        self.save_snap_btn = QPushButton("📷 Save frame", card_prev)
+        self.save_snap_btn = QPushButton("Save frame", card_prev)
+        self.save_snap_btn.setIcon(icon("camera"))
         self.save_snap_btn.setToolTip(
             "Save diagnostic snapshot: 3 preview frames, map crop, and state log to output/"
         )
@@ -323,13 +326,13 @@ class RoiDiagnosticsMixin(RoiTabBase):
         self.save_status_lbl.setStyleSheet(f"color: {GREEN}; font-size: 8pt; font-weight: 500;")
         self.open_snap_btn.setVisible(True)
         self.save_snap_btn.setEnabled(True)
-        self.save_snap_btn.setText("📷 Save frame")
+        self.save_snap_btn.setText("Save frame")
 
     def _on_save_failed(self, err_msg: str) -> None:
         self.save_status_lbl.setText(f"Save failed: {err_msg}")
-        self.save_status_lbl.setStyleSheet(f"color: {RED}; font-size: 8pt;")
+        self.save_status_lbl.setStyleSheet(f"color: {RED}; font-size: 9pt;")
         self.save_snap_btn.setEnabled(True)
-        self.save_snap_btn.setText("📷 Save frame")
+        self.save_snap_btn.setText("Save frame")
 
     def _open_last_snapshot(self) -> None:
         if self._last_snapshot_dir and os.path.isdir(self._last_snapshot_dir):

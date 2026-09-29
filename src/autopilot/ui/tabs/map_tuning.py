@@ -158,7 +158,7 @@ class MapTuningMixin(MapTabBase):
             "ahead m",
             "plan_ahead_m",
             200.0,
-            46,
+            48,
             section="navigator",
             tip="Speed planning horizon along the route (meters)",
         )
@@ -299,7 +299,7 @@ class MapTuningMixin(MapTabBase):
         """Toggle visibility of locator tuning controls."""
         visible = not self._tune_container.isVisible()
         self._tune_container.setVisible(visible)
-        self._tune_toggle_btn.setText("⚙ Tuning ▴" if visible else "⚙ Tuning ▾")
+        self._tune_toggle_btn.setText("Tuning ▴" if visible else "Tuning ▾")
 
     def _add_tune_field(
         self,

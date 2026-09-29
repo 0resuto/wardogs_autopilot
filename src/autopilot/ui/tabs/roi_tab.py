@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from ... import PROJECT_ROOT
+from ..icons import icon
 from ..roi_selector import RoiSelector
 from ..theme import BLUE, GREEN, RED, TEXT_DIM, TEXT_MUTED
 from .common import StringVarCompat
@@ -130,12 +131,14 @@ class RoiTab(RoiCacheMixin, RoiDiagnosticsMixin, QWidget):
             self._mon_sel.currentIndexChanged.connect(self._on_monitor_changed)
             top_row.addWidget(self._mon_sel)
 
-        self.pick_btn = QPushButton("⛶ Pick zone on screen", card_roi)
+        self.pick_btn = QPushButton("Pick zone on screen", card_roi)
         self.pick_btn.setObjectName("AccentButton")
+        self.pick_btn.setIcon(icon("crop"))
         self.pick_btn.clicked.connect(self.pick_roi)
         top_row.addWidget(self.pick_btn)
 
-        self.mask_btn = QPushButton("📁 Open mask folder", card_roi)
+        self.mask_btn = QPushButton("Open mask folder", card_roi)
+        self.mask_btn.setIcon(icon("folder"))
         self.mask_btn.setToolTip("Open folder containing minimap mask (mm_mask.png)")
         self.mask_btn.clicked.connect(self.open_mask_folder)
         top_row.addWidget(self.mask_btn)
@@ -156,7 +159,7 @@ class RoiTab(RoiCacheMixin, RoiDiagnosticsMixin, QWidget):
 
             val = str(current_roi[i]) if i < len(current_roi) else "0"
             inp = QLineEdit(val, card_roi)
-            inp.setFixedWidth(54)
+            inp.setFixedWidth(56)
             coord_row.addWidget(inp)
             self.coord_inputs[name] = inp
             compat_var = StringVarCompat(val)
@@ -188,7 +191,8 @@ class RoiTab(RoiCacheMixin, RoiDiagnosticsMixin, QWidget):
         speed_guide.setStyleSheet(f"color: {TEXT_MUTED};")
         speed_top.addWidget(speed_guide, stretch=1)
 
-        self.pick_speed_btn = QPushButton("⛶ Pick speed zone", card_speed)
+        self.pick_speed_btn = QPushButton("Pick speed zone", card_speed)
+        self.pick_speed_btn.setIcon(icon("crop"))
         self.pick_speed_btn.clicked.connect(self.pick_speed_roi)
         speed_top.addWidget(self.pick_speed_btn)
 
@@ -212,7 +216,7 @@ class RoiTab(RoiCacheMixin, RoiDiagnosticsMixin, QWidget):
             speed_row.addWidget(lbl)
             val = str(saved_speed[i]) if saved_speed and i < len(saved_speed) else "0"
             inp = QLineEdit(val, card_speed)
-            inp.setFixedWidth(54)
+            inp.setFixedWidth(56)
             speed_row.addWidget(inp)
             self.speed_inputs[name] = inp
             self.speed_vars[name] = StringVarCompat(val)

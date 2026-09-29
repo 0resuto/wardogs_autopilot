@@ -139,12 +139,12 @@ class TestMapView(unittest.TestCase):
         widget.btn_center.setChecked(True)
         self.assertTrue(widget.is_follow_centered())
         self.assertEqual(calls, [1])
-        self.assertEqual(widget.btn_center.text(), "🎯 Following")
+        self.assertEqual(widget.btn_center.text(), "Following")
 
         widget.btn_center.setChecked(False)
         self.assertFalse(widget.is_follow_centered())
         self.assertEqual(calls, [1])
-        self.assertEqual(widget.btn_center.text(), "🎯 Center")
+        self.assertEqual(widget.btn_center.text(), "Center")
 
     def test_route_mode_toggle(self):
         widget = InteractiveMapWidget(map_size=1000, thumb=8, enable_route_editing=True)
@@ -152,11 +152,11 @@ class TestMapView(unittest.TestCase):
 
         widget.btn_mode.setChecked(False)
         self.assertFalse(widget.view._route_edit_mode)
-        self.assertEqual(widget.btn_mode.text(), "🤚 Pan Mode")
+        self.assertEqual(widget.btn_mode.text(), "Pan Mode")
 
         widget.btn_mode.setChecked(True)
         self.assertTrue(widget.view._route_edit_mode)
-        self.assertEqual(widget.btn_mode.text(), "✏ Route Mode")
+        self.assertEqual(widget.btn_mode.text(), "Route Mode")
 
 
 if __name__ == "__main__":

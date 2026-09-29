@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 
 from ... import PROJECT_ROOT, crashlog
 from ...vision import asset_sync, locator
+from ..icons import icon
 from ..theme import BLUE, GREEN, RED, TEXT_DIM, YELLOW
 from .common import RoiTabBase
 
@@ -111,6 +112,7 @@ class RoiCacheMixin(RoiTabBase):
         row_map.addWidget(self._cache_map_sel)
 
         self._cache_download_btn = QPushButton("Download", card_cache)
+        self._cache_download_btn.setIcon(icon("download"))
         self._cache_download_btn.setToolTip(
             "Download the map assets (archive + sha256 verification) from the release"
         )
@@ -118,6 +120,7 @@ class RoiCacheMixin(RoiTabBase):
         row_map.addWidget(self._cache_download_btn)
 
         self._cache_rebuild_btn = QPushButton("Rebuild Cache & SIFT Index", card_cache)
+        self._cache_rebuild_btn.setIcon(icon("refresh"))
         self._cache_rebuild_btn.setToolTip(
             "Rebuild mu/previews/SIFT index from the source PNG (maintainer machines only)"
         )

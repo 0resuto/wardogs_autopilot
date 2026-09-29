@@ -30,6 +30,7 @@ from ...common.config import AppConfig
 from ...navigation.follow import FollowDriver
 from ...navigation.manual_record import ManualDriveRecorder
 from ...vision import locator
+from ..icons import icon
 from ..map_view import InteractiveMapWidget
 from ..presets import PresetManager
 from ..theme import BLUE, BORDER, GREEN, PANEL_BG, RED, TEXT, TEXT_DIM, TEXT_MUTED, YELLOW
@@ -233,26 +234,31 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
         self._preset_menu_btn.setMenu(preset_menu)
         top_bar.addWidget(self._preset_menu_btn)
 
-        btn_clear = QPushButton("🗑 Clear", self)
+        btn_clear = QPushButton("Clear", self)
+        btn_clear.setIcon(icon("trash"))
         btn_clear.clicked.connect(self.routes_clear)
         top_bar.addWidget(btn_clear)
 
-        self._reverse_btn = QPushButton("⇄ Reverse", self)
+        self._reverse_btn = QPushButton("Reverse", self)
+        self._reverse_btn.setIcon(icon("swap"))
         self._reverse_btn.setToolTip("Reverse the route direction (F8)")
         self._reverse_btn.clicked.connect(lambda: self.routes_invert())
         top_bar.addWidget(self._reverse_btn)
 
-        self._edit_btn = QPushButton("✏ Edit", self)
+        self._edit_btn = QPushButton("Edit", self)
+        self._edit_btn.setIcon(icon("pencil"))
         self._edit_btn.setToolTip("Edit the route points on the map")
         self._edit_btn.clicked.connect(lambda: self._set_edit_mode(True))
         top_bar.addWidget(self._edit_btn)
 
-        self._apply_btn = QPushButton("✓ Apply", self)
+        self._apply_btn = QPushButton("Apply", self)
+        self._apply_btn.setIcon(icon("check"))
         self._apply_btn.clicked.connect(self.route_edit_apply)
         self._apply_btn.hide()
         top_bar.addWidget(self._apply_btn)
 
-        self._cancel_btn = QPushButton("✕ Cancel", self)
+        self._cancel_btn = QPushButton("Cancel", self)
+        self._cancel_btn.setIcon(icon("x"))
         self._cancel_btn.clicked.connect(self.route_edit_cancel)
         self._cancel_btn.hide()
         top_bar.addWidget(self._cancel_btn)
@@ -268,7 +274,7 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
         self.dbg_ck.setChecked(bool(self.app_cfg.navigator.debug))
         top_bar.addWidget(self.dbg_ck)
 
-        self._manual_rec_ck = QCheckBox("⏺ Record my driving", self)
+        self._manual_rec_ck = QCheckBox("Record my driving", self)
         self._manual_rec_ck.setToolTip(
             "Temporary: log your own W/A/S/D/SPACE presses and poses to "
             "output/manual_dbg_*.jsonl while driving by hand"
@@ -278,7 +284,8 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
 
         top_bar.addStretch()
 
-        self._tune_toggle_btn = QPushButton("⚙ Tuning ▾", self)
+        self._tune_toggle_btn = QPushButton("Tuning ▾", self)
+        self._tune_toggle_btn.setIcon(icon("sliders"))
         self._tune_toggle_btn.clicked.connect(self.toggle_tuning_panel)
         top_bar.addWidget(self._tune_toggle_btn)
 
@@ -302,13 +309,15 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
         bot_bar = QHBoxLayout()
         bot_bar.setSpacing(8)
 
-        self.follow_btn = QPushButton("▶ Start Follow (F6)", self)
+        self.follow_btn = QPushButton("Start Follow (F6)", self)
         self.follow_btn.setObjectName("SuccessButton")
+        self.follow_btn.setIcon(icon("play"))
         self.follow_btn.clicked.connect(self.follow_toggle)
         bot_bar.addWidget(self.follow_btn)
 
-        self.estop_btn = QPushButton("🛑 EMERGENCY STOP (F7)", self)
+        self.estop_btn = QPushButton("EMERGENCY STOP (F7)", self)
         self.estop_btn.setObjectName("EStopButton")
+        self.estop_btn.setIcon(icon("stop"))
         self.estop_btn.clicked.connect(self.emergency_stop)
         bot_bar.addWidget(self.estop_btn)
 
@@ -326,7 +335,7 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
         compact_label(self.map_status)
         info_bar.addWidget(self.map_status, stretch=1)
 
-        self._hint_lbl = QLabel("LMB: Pan | Wheel: Zoom | ✏ Edit to modify the route", self)
+        self._hint_lbl = QLabel("LMB: Pan | Wheel: Zoom | Edit to modify the route", self)
         self._hint_lbl.setStyleSheet(f"color: {TEXT_DIM}; font-size: 9pt;")
         info_bar.addWidget(self._hint_lbl)
         bot_box.addLayout(info_bar)
@@ -412,10 +421,12 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
 
     def _set_follow_state(self, running: bool) -> None:
         if running:
-            self.follow_btn.setText("⏸ Pause (F6)")
+            self.follow_btn.setText("Pause (F6)")
+            self.follow_btn.setIcon(icon("pause"))
             self.follow_btn.setObjectName("DangerButton")
         else:
-            self.follow_btn.setText("▶ Start Follow (F6)")
+            self.follow_btn.setText("Start Follow (F6)")
+            self.follow_btn.setIcon(icon("play"))
             self.follow_btn.setObjectName("SuccessButton")
         self.follow_btn.style().unpolish(self.follow_btn)
         self.follow_btn.style().polish(self.follow_btn)

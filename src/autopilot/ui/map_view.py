@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .icons import icon
 from .map_scene import MapGraphicsScene
 
 
@@ -160,18 +161,21 @@ class InteractiveMapWidget(QWidget):
         btn_out.clicked.connect(lambda: self.view.zoom_out())
         self.toolbar_layout.addWidget(btn_out)
 
-        btn_fit = QPushButton("⛶ Fit", tb)
+        btn_fit = QPushButton("Fit", tb)
+        btn_fit.setIcon(icon("maximize"))
         btn_fit.clicked.connect(self.view.fit_view)
         self.toolbar_layout.addWidget(btn_fit)
 
-        self.btn_center = QPushButton("🎯 Center", tb)
+        self.btn_center = QPushButton("Center", tb)
+        self.btn_center.setIcon(icon("crosshair"))
         self.btn_center.setCheckable(True)
         self.btn_center.setToolTip("Follow the vehicle position on the map")
         self.btn_center.toggled.connect(self._on_follow_toggled)
         self.toolbar_layout.addWidget(self.btn_center)
 
         if enable_route_editing:
-            self.btn_mode = QPushButton("✏ Route Mode", tb)
+            self.btn_mode = QPushButton("Route Mode", tb)
+            self.btn_mode.setIcon(icon("pencil"))
             self.btn_mode.setCheckable(True)
             self.btn_mode.setChecked(True)
             self.btn_mode.toggled.connect(self._toggle_mode)
@@ -194,7 +198,7 @@ class InteractiveMapWidget(QWidget):
         return self.btn_center.isChecked()
 
     def _on_follow_toggled(self, checked: bool) -> None:
-        self.btn_center.setText("🎯 Following" if checked else "🎯 Center")
+        self.btn_center.setText("Following" if checked else "Center")
         if checked:
             self._on_center_click()
 
@@ -206,7 +210,5 @@ class InteractiveMapWidget(QWidget):
 
     def _toggle_mode(self, checked: bool) -> None:
         self.view.set_route_mode(checked)
-        if checked:
-            self.btn_mode.setText("✏ Route Mode")
-        else:
-            self.btn_mode.setText("🤚 Pan Mode")
+        self.btn_mode.setIcon(icon("pencil" if checked else "move"))
+        self.btn_mode.setText("Route Mode" if checked else "Pan Mode")
