@@ -6,18 +6,11 @@
 ![Pydantic](https://img.shields.io/badge/Pydantic-2.0+-E92063.svg)
 ![PySide6](https://img.shields.io/badge/GUI-PySide6-41CD52.svg)
 
-Autonomous delivery autopilot for WARDOGS.
-This project captures the in-game minimap, localizes the vehicle on full game maps using offline SIFT feature indexes, and drives the supply truck with WASD/Space keystrokes injected through an Arduino Micro that emulates a USB HID keyboard.
+Captures the in-game minimap, localizes the vehicle on the full map with an offline
+SIFT feature index, and drives the truck by injecting WASD/Space keystrokes through
+an Arduino Micro that emulates a USB HID keyboard.
 
-## Features
-- **SIFT Feature Index Localization**: Radius-based search on multi-scale tile feature indexes (`*_feat.npz`), delivering ~0.2 px precision in ~1.5s cold start and sub-second tracking.
-- **Hardware-Level Input Injection**: Arduino Micro emulates real USB keyboard keypresses, bypassing OS-level software injection restrictions. 200 ms watchdog auto-releases keys on connection loss.
-- **Interactive Studio GUI**: PySide6 desktop studio with minimap ROI calibration, real-time map viewer with pan/zoom, visual waypoint route editor, map cache & SIFT index management, and global hotkeys (**F6** toggle follow, **F7** emergency stop).
-- **HUD Speed OCR**: reads the in-game speedometer from its own ROI using a digit atlas rendered from the game font (no OCR dependency); the final stop trusts the measured speed over the position-derived estimate.
-- **Multi-Map Support**: Three game maps (Zestafona, Bakurani, Ozeti) with automatic mipmap pyramids and grayscale signature tracking for cache invalidation.
-- **Vote-Gated Relocalization**: Configurable inlier voting across multiple frames prevents false-positive jumps during map matching.
-
-## System Architecture
+## How it works
 
 ```mermaid
 %%{init: {
@@ -70,7 +63,6 @@ flowchart LR
     Keys -->|Input injection| Screen
 
     classDef core fill:#1565C0,stroke:#90CAF9,stroke-width:1.5px,color:#ffffff
-    classDef bridge fill:#E65100,stroke:#FFCC80,stroke-width:1.5px,color:#ffffff
     classDef app fill:#2E7D32,stroke:#A5D6A7,stroke-width:1.5px,color:#ffffff
     classDef hw fill:#AD1457,stroke:#F48FB1,stroke-width:1.5px,color:#ffffff
 
@@ -83,126 +75,147 @@ flowchart LR
     style HW fill:none,stroke:#78909C,stroke-width:1px,color:#90A4AE
 ```
 
-## Project Structure
+- **Localization** matches minimap SIFT descriptors against a per-map tile index
+  (three pyramid levels; radius search around the previous pose, global fallback,
+  multi-frame vote gate against jump re-acquisitions).
+- **Navigation** follows a waypoint route: pure-pursuit bearing with two corridors,
+  pulse/hold steering, a corner-speed planner based on the vehicle model, and a
+  final waypoint stop that trusts the speedometer OCR over the position estimate.
+- **Input** is a single serial byte per tick (key mask). The firmware releases all
+  keys if no valid byte arrives for 200 ms.
+- **Studio (PySide6)**: minimap ROI calibration, live capture diagnostics, the map
+  with the route editor, locator/vehicle/corridor tuning (applies live), map cache
+  and SIFT index management, and manual-driving recording.
+
+## Requirements
+
+- Windows, Python 3.11+ (3.13 pinned in `.python-version`), [uv](https://docs.astral.sh/uv/)
+- Arduino Micro / Pro Micro (ATmega32U4) on the default port `COM6`
+  (the studio still localizes and previews without it)
+
+---
+
+## Setup
+
+```bash
+uv sync                     # runtime + dev dependencies
+uv run python tools/download_map.py --list
+uv run python tools/download_map.py zestafona --rebuild   # mipmaps + SIFT index
+uv run python main.py ui    # or autopilot.bat (windowless pythonw)
+```
+
+If the feature index is missing, the locator reports `no_index`; build it with
+`uv run python -m autopilot.vision.featureindex --build zestafona`.
+
+### Arduino firmware
+
+FQBN `arduino:avr:micro`, sketch `arduino/keyboard_emulator/keyboard_emulator.ino`.
+`arduino-cli` is not on PATH (bundled with the Arduino IDE), and the `Keyboard`
+library lives outside the AVR core, so it must be passed at compile time:
+
+```powershell
+$cli = "C:\Program Files\Arduino IDE\resources\app\lib\backend\resources\arduino-cli.exe"
+$libs = "$env:LOCALAPPDATA\Arduino15\libraries"
+$build = "$env:TEMP\kb_build"
+& $cli compile --fqbn arduino:avr:micro --libraries $libs --build-path $build arduino\keyboard_emulator
+& $cli upload -p COM6 --fqbn arduino:avr:micro --input-dir $build arduino\keyboard_emulator
+```
+
+## Configuration
+
+`config.json` (validated by the Pydantic schema in `src/autopilot/common/config.py`)
+holds capture (`monitor`, `mmap_roi`, `speed_roi`), map, locator, navigator and UI
+settings. Most navigator/locator values can be tuned live in Map → `⚙ Tuning`;
+changes are written back to `config.json`.
+
+## Hotkeys
+
+| Key | Action |
+| --- | --- |
+| F6 | start / pause follow |
+| F7 | emergency stop (release all keys) |
+| F8 | reverse the route direction |
+
+Registration is retried while another process holds the keys, and the studio
+toolbar shows their state.
+
+## Routes, presets and teach-and-repeat
+
+- Map → `New` creates an empty preset; `✏ Edit` enables point editing and is
+  replaced by `✓ Apply` / `✕ Cancel` (`Apply` saves into the selected preset).
+- The last used preset is loaded on startup; window geometry is remembered.
+- Map → `⏺ Record my driving` logs your own keys + poses to
+  `output/manual_dbg_*.jsonl`; convert a recording into a route preset with
+  `uv run python tools/route_from_manual.py output/manual_dbg_*.jsonl --map zestafona --name my_route`.
+
+## Arduino protocol
+
+One byte per command over USB serial (115200 baud):
+
+| Bit | Key |
+| --- | --- |
+| 0x01 | W (throttle) |
+| 0x02 | A (steer left) |
+| 0x04 | S (brake / reverse) |
+| 0x08 | D (steer right) |
+| 0x10 | SPACE |
+
+`0xFF` releases all keys; bytes with bits above `0x1F` are treated as garbage.
+The firmware has a 200 ms watchdog.
+
+---
+
+## Tools
+
+| Tool | Purpose |
+| --- | --- |
+| `tools/download_map.py` | fetch map assets from GitHub Releases |
+| `python -m autopilot.vision.featureindex` | build the SIFT index (`--build <map>`) |
+| `tools/selfcheck_features.py` | offline localization regression |
+| `tools/nav_dbg.py` | navigation trace inspector (`--tail`, `--bursts`) |
+| `tools/calibrate_vehicle.py` | fit `yaw_gain` / `brake_g` from nav logs |
+| `tools/route_from_manual.py` | convert a manual-driving recording into a preset |
+| `tools/map_match_debug.py` | frame matching collage for failed matches |
+| `tools/replay_fails.py` | replay saved failed frames |
+| `tools/regray_map.py`, `tools/build_hud_atlas.py`, `tools/extract_vehicle_profile.py` | asset/profile build helpers |
+
+## Layout
 
 ```text
 wardogs-autopilot/
 ├── main.py                     # CLI & GUI entry point
-├── config.json                 # Primary configuration
-├── autopilot.bat               # Windows launcher (pythonw, no console)
-├── pyproject.toml              # Build & dependency configuration (uv / pip)
+├── config.json                 # validated runtime configuration
+├── autopilot.bat               # windowless launcher (pythonw)
 ├── arduino/
 │   └── keyboard_emulator/      # ATmega32U4 firmware (byte mask → HID WASD/Space)
 ├── data/
-│   ├── maps/                   # Map catalog, SIFT indexes (*_feat.npz), mipmaps
-│   ├── masks/                  # Minimap static mask (mm_mask.png)
-│   ├── hud/                    # Barlow font + digit atlas for the speed OCR
-│   └── presets/                # Saved waypoint route JSON presets
-├── src/autopilot/              # Main application package
-│   ├── common/                 # Typed config (Pydantic), logging & crash reporting
-│   ├── hardware/               # ScreenCapture (mss) & ArduinoKeyDriver (serial)
-│   ├── navigation/             # FollowDriver, PathTracker, Speed & Steering controllers
-│   ├── ui/                     # PySide6 studio GUI, interactive map view, tab controllers
-│   └── vision/                 # MapStore, FeatureIndex, SIFT matcher, tracker, speed OCR
-├── tests/                      # 90+ unit & regression tests
-└── tools/                      # Developer CLI utilities
-    ├── download_map.py         # Map asset downloader from GitHub Releases
-    ├── nav_dbg.py              # Navigation trace inspector & tailer
-    ├── selfcheck_features.py   # Offline feature index regression checker
-    └── map_match_debug.py      # Frame matching collage analyzer
+│   ├── maps/                   # map images, mipmaps, SIFT indices (*_feat.npz)
+│   ├── masks/                  # minimap static mask (mm_mask.png)
+│   ├── hud/                    # digit atlas + font for the speed OCR
+│   ├── presets/<map>/          # waypoint route presets
+│   └── vehicles/               # vehicle physics profiles (ural.json)
+├── src/autopilot/
+│   ├── common/                 # typed config, logging, crash logging
+│   ├── hardware/               # screen capture (mss), Arduino key driver
+│   ├── navigation/             # follow driver, path/speed/steering controllers, telemetry
+│   ├── ui/                     # PySide6 studio, map view, tabs, presets, manual recorder
+│   └── vision/                 # map store, feature index, locator, tracker, speed OCR
+├── docs/                       # minimap visuals, vehicle model and tuning runbook
+├── tests/                      # unit and regression tests
+├── tools/                      # developer CLI utilities
+└── output/                     # logs, nav traces, debug dumps (git-ignored)
 ```
 
-## Tech Stack
-- **Vision**: Python 3.11, OpenCV (SIFT), NumPy
-- **Hardware**: Arduino Micro (ATmega32U4), PySerial
-- **Capture**: mss (multi-monitor screen grab)
-- **GUI**: PySide6 (Qt)
-- **Config & Validation**: Pydantic 2.0
-- **Testing**: Pytest, Ruff, mypy
-
----
-
-## Getting Started
-
-### Prerequisites
-- Python 3.11+
-- [uv](https://docs.astral.sh/uv/) package manager *(recommended)* or pip
-- Arduino Micro (ATmega32U4) connected via USB (default: `COM6`)
-
-### Step 1: Install Dependencies
+## Development
 
 ```bash
-# Using uv (installs all runtime and dev dependencies deterministically):
-uv sync
-
-# Or using pip:
-pip install -e ".[dev]"
-```
-
-### Step 2: Download Map Assets
-
-High-resolution game maps (up to 32768×32768) are hosted on GitHub Releases:
-
-```bash
-# List available maps and their download status:
-python tools/download_map.py --list
-
-# Download a specific map:
-python tools/download_map.py zestafona
-
-# Or download all maps at once:
-python tools/download_map.py --all
-```
-
-### Step 3: Flash the Arduino Firmware
-
-Compile and upload the keyboard emulator sketch to the Arduino Micro using Arduino CLI.
-
-### Step 4: Run the Application
-
-```bash
-python main.py ui
-```
-
-Or double-click `autopilot.bat` (launches windowless via `pythonw.exe`).
-
----
-
-## Configuration
-
-Configuration is stored in `config.json` at the project root:
-- `capture`: Monitor index, FPS, minimap ROI coordinates.
-- `map`: Active map name (`zestafona`, `bakurani`, `ozeti`), dimensions, grayscale conversion.
-- `navigator`: Serial port (`COM6`), speed caps, arrival/slow radii.
-- `locator`: Feature matching thresholds, RANSAC inlier gates, voting parameters.
-
----
-
-## Arduino Protocol
-
-The Python driver communicates with the Arduino Micro over USB Serial (115200 baud):
-- **1 byte command**: Bitmask of pressed keys:
-  - `0x01`: 'W' (Throttle)
-  - `0x02`: 'A' (Steer Left)
-  - `0x04`: 'S' (Brake / Reverse)
-  - `0x08`: 'D' (Steer Right)
-  - `0x10`: 'SPACE' (Handbrake)
-- `0xFF`: Reset / release all keys.
-- **Watchdog**: Arduino automatically releases all keys if no command is received for 200 ms.
-
----
-
-## Running Tests
-
-```bash
-# Full test suite:
-pytest
-
-# Lint & code quality:
-ruff check .
+uv run pytest          # unit and regression tests
+uv run ruff check .    # lint
+uv run mypy            # types
 ```
 
 ---
 
 ## License
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+
+MIT — see [LICENSE](LICENSE).
