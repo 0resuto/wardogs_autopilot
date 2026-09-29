@@ -25,6 +25,24 @@ from autopilot.vision.map_store import MapStore  # noqa: E402
 MAPS = ("zestafona", "bakurani")
 
 
+class TestCatalogScale(unittest.TestCase):
+    def test_catalog_scale_for_known_maps(self):
+        store = MapStore()
+        self.assertAlmostEqual(store.m_per_px("zestafona"), 0.498046875, delta=1e-9)
+        self.assertAlmostEqual(store.px_per_m("zestafona"), 1.0 / 0.498046875, delta=1e-6)
+        self.assertAlmostEqual(store.m_per_px("bakurani"), 0.99609375, delta=1e-9)
+        self.assertAlmostEqual(store.px_per_m("bakurani"), 1.0 / 0.99609375, delta=1e-6)
+        self.assertEqual(store.px_per_m("no_such_map"), 0.0)
+
+    def test_catalog_file_sizes_match_disk(self):
+        store = MapStore()
+        for _name, entry in store._catalog().get("maps", {}).items():
+            for fname, meta in (entry.get("files") or {}).items():
+                path = os.path.join(store.data_maps_dir, fname)
+                if os.path.exists(path):
+                    self.assertEqual(os.path.getsize(path), meta["size"], fname)
+
+
 class TestIndexLifecycle(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

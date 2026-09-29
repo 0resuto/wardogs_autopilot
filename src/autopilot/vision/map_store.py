@@ -53,6 +53,7 @@ class MapStore:
 
         self._g: dict[str, Any] = {"mu": None, "ms": 2.6544}
         self._color_map_cache: dict[str, Any] = {"name": None, "img": None}
+        self._catalog_cache: tuple[float | None, dict[str, Any] | None] = (None, None)
         self._loc_cfg_cache: tuple[str | None, float | None, dict[str, Any] | None] = (
             None,
             None,
@@ -258,6 +259,40 @@ class MapStore:
         if cfg_scale is not None:
             return float(cfg_scale)
         return float(self._g.get("ms", 2.6544))
+
+    def _catalog(self) -> dict[str, Any]:
+        """data/maps/catalog.json, cached by file mtime."""
+        path = os.path.join(self.data_maps_dir, "catalog.json")
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            mtime = None
+        cache = self._catalog_cache
+        if cache[0] == mtime and cache[1] is not None:
+            return cache[1]
+        try:
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+            if not isinstance(data, dict):
+                data = {}
+        except (OSError, ValueError):
+            data = {}
+        self._catalog_cache = (mtime, data)
+        return data
+
+    def m_per_px(self, name: str | None = None) -> float:
+        """Physical map scale (meters per native map px); 0 when unknown."""
+        entry = self._catalog().get("maps", {}).get(name or self._cur_name) or {}
+        try:
+            value = float(entry.get("m_per_px", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            value = 0.0
+        return value if value > 0.0 else 0.0
+
+    def px_per_m(self, name: str | None = None) -> float:
+        """Known map scale in native map px per meter; 0 when unknown."""
+        m_per_px = self.m_per_px(name)
+        return 1.0 / m_per_px if m_per_px > 0.0 else 0.0
 
     def get_index(self) -> Any:
         """Load cached SIFT feature index for active map, checking signature matches."""

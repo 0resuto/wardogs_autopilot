@@ -390,6 +390,38 @@ class TestSpeedRoiValidation(unittest.TestCase):
         self.assertEqual(self.tab.speed_status_lbl.text(), "disabled")
 
 
+class TestMapScaleDisplay(unittest.TestCase):
+    @staticmethod
+    def _tab(store: Any) -> MapTab:
+        return MapTab(
+            None,
+            AppConfig(),
+            save_cfg_fn=lambda: None,
+            loc_thread_supplier=lambda: None,
+            map_store_supplier=lambda: store,
+            map_name_supplier=lambda: "zestafona",
+        )
+
+    def test_route_length_uses_catalog_scale(self):
+        class _Store:
+            def px_per_m(self, name: str) -> float:
+                return 2.0
+
+        tab = self._tab(_Store())
+        self.assertAlmostEqual(tab._map_px_per_m(), 2.0, delta=1e-9)
+
+        tab.route_pts = [[0.0, 0.0], [200.0, 0.0]]
+        self.assertIn("100 m", tab.routes_status.text())
+
+    def test_route_length_falls_back_without_catalog_scale(self):
+        tab = self._tab(object())
+
+        self.assertEqual(tab._map_px_per_m(), 0.0)
+
+        tab.route_pts = [[0.0, 0.0], [200.0, 0.0]]
+        self.assertIn("100 m", tab.routes_status.text())
+
+
 class TestPresetSanitization(unittest.TestCase):
     def test_traversal_is_neutralized(self):
         manager = PresetManager()

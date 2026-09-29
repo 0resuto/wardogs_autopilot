@@ -23,6 +23,7 @@ if ROOT not in sys.path:
 from autopilot.common.config import AppConfig  # noqa: E402
 from autopilot.navigation.manual_record import build_route  # noqa: E402
 from autopilot.ui.presets import PresetManager  # noqa: E402
+from autopilot.vision.map_store import MapStore  # noqa: E402
 
 
 def load_manual(path: str) -> tuple[dict, list[dict]]:
@@ -80,10 +81,21 @@ def main() -> int:
         ((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2) ** 0.5
         for a, b in zip(points, points[1:], strict=False)
     )
+    px_per_m = MapStore().px_per_m(map_name) or 2.0
     print(
         "wrote %s\n  map=%s name=%s points=%d (from %d measured poses)\n"
-        "  length=%.0f px (~%.0f m at 2.0 px/m), step=%.0f px"
-        % (path, map_name, name, len(points), measured, length_px, length_px / 2.0, args.step_px)
+        "  length=%.0f px (~%.0f m at %.2f px/m), step=%.0f px"
+        % (
+            path,
+            map_name,
+            name,
+            len(points),
+            measured,
+            length_px,
+            length_px / px_per_m,
+            px_per_m,
+            args.step_px,
+        )
     )
     return 0
 

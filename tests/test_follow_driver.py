@@ -385,6 +385,20 @@ class TestSpeedPlanning(unittest.TestCase):
         self.assertEqual(tgt, driver.speed_ctrl.v_min)
 
 
+class TestKnownMapScale(unittest.TestCase):
+    def test_driver_uses_injected_scale(self):
+        driver = FollowDriver(
+            loc=None,
+            pts=[(0.0, 0.0), (100.0, 0.0)],
+            nav_cfg=NavigatorConfig(),
+            kb=None,
+            px_per_m=2.0,
+        )
+
+        self.assertAlmostEqual(driver._px_per_m_now(), 2.0, delta=1e-9)
+        self.assertAlmostEqual(driver._speed_target(0.0, None), 79.0 / 3.6 * 2.0, delta=1e-6)
+
+
 class TestVehicleAuthority(unittest.TestCase):
     @staticmethod
     def _driver(**nav_kwargs) -> FollowDriver:

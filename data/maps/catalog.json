@@ -2,6 +2,11 @@
   "repo": "owner/wardogs-autopilot",
   "tag": "v1.0.0",
   "base_url": "https://github.com/{repo}/releases/download/{tag}",
+  "notes": [
+    "m_per_px is the physical map scale from the game's minimap texture spec: every map is 16320 m across (0.498046875 m/px at 32768, 0.99609375 m/px at 16384).",
+    "The png sizes/sha256 below describe the current in-repo asset extracts; release assets on GitHub must be re-uploaded to match before download_map.py can verify them.",
+    "Validate the scale in game with: python tools/calibrate_vehicle.py output/nav_dbg_*.jsonl (px_per_m report)."
+  ],
   "maps": {
     "zestafona": {
       "display_name": "Zestafona",
@@ -9,11 +14,12 @@
         32768,
         32768
       ],
+      "m_per_px": 0.498046875,
       "mini_scale": 2.6544,
       "files": {
         "zestafona_map.png": {
-          "size": 604442507,
-          "sha256": "d8c20f1048609d76a897ea7d10368533f4ad1416b82679c8b340ab7a72e2c4e6"
+          "size": 1037093929,
+          "sha256": "582fa91808671276bad2a102b8a2c975df7dd62fa20f09ce874565151cfb3e0d"
         }
       }
     },
@@ -23,11 +29,12 @@
         16384,
         16384
       ],
+      "m_per_px": 0.99609375,
       "mini_scale": 2.6544,
       "files": {
         "bakurani_map.png": {
-          "size": 179380156,
-          "sha256": "d8bea1f309bcc36e8a1578d1c35cbfdb57b3ec28f31fc773b7d7a9c229f67d74"
+          "size": 298668480,
+          "sha256": "7e1cb040ccfef9efa80981e0e6e7f0b81b0b22ddb1b7499f498f387c67013453"
         }
       }
     },
@@ -37,11 +44,12 @@
         32768,
         32768
       ],
+      "m_per_px": 0.498046875,
       "mini_scale": 2.6544,
       "files": {
         "ozeti_map.png": {
-          "size": 612385645,
-          "sha256": "dee6749f96845224f5100710c97089e73f31c752fc11186be8d2839dd80079ca"
+          "size": 1031050135,
+          "sha256": "f44c7b4e9f739d896a90b653a65ef1489c58f85d2f0637d8e372fd853a35a407"
         }
       }
     }

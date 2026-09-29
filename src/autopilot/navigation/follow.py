@@ -53,6 +53,7 @@ class FollowDriver(threading.Thread):
         stop_hold: float | None = None,
         stop_timeout: float | None = None,
         vehicle_model: Any = None,
+        px_per_m: float | None = None,
         nav_cfg: NavigatorConfig | dict[str, Any] | None = None,
     ) -> None:
         super().__init__(daemon=True)
@@ -143,6 +144,7 @@ class FollowDriver(threading.Thread):
             brake_d=self.brake_d,
             corner_min_kmh=self.nav_cfg.corner_min_kmh,
             corner_max_kmh=self.nav_cfg.corner_max_kmh,
+            px_per_m=float(px_per_m or 0.0),
         )
         self.steer_ctrl = SteeringController(
             dead=self.dead,

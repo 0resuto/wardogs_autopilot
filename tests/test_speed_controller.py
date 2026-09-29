@@ -135,6 +135,45 @@ class TestCornerHoldWindow(unittest.TestCase):
         self.assertFalse(brake)
 
 
+class TestKnownScale(unittest.TestCase):
+    def test_injected_scale_drives_cruise_from_the_cap(self):
+        ctrl = SpeedController(speed_cap_kmh=79.0, px_per_m=2.0)
+
+        self.assertAlmostEqual(ctrl.px_per_m_now(), 2.0, delta=1e-9)
+        self.assertAlmostEqual(ctrl.calc_target_speed(0.0), 79.0 / 3.6 * 2.0, delta=1e-6)
+
+    def test_known_scale_survives_pose_spikes(self):
+        ctrl = SpeedController(px_per_m=2.0)
+        ctrl.update_scale(300.0)
+        ctrl.update_scale(12.0)
+
+        self.assertAlmostEqual(ctrl.px_per_m_now(), 2.0, delta=1e-9)
+        self.assertAlmostEqual(ctrl.calc_target_speed(0.0), 79.0 / 3.6 * 2.0, delta=1e-6)
+
+    def test_ocr_agreement_keeps_catalog_scale(self):
+        ctrl = SpeedController(px_per_m=2.0)
+        for _ in range(12):
+            ctrl.update_scale(29.4, ocr_kmh=53.0)  # ~2.0 px/m
+
+        self.assertAlmostEqual(ctrl.px_per_m_now(), 2.0, delta=1e-9)
+
+    def test_ocr_mismatch_warns_and_adopts_measured_scale(self):
+        ctrl = SpeedController(px_per_m=2.0)
+        with self.assertLogs("speed_controller", level="WARNING") as captured:
+            for _ in range(10):
+                ctrl.update_scale(60.0, ocr_kmh=40.0)  # 5.4 px/m
+
+        self.assertTrue(any("scale mismatch" in line for line in captured.output))
+        self.assertAlmostEqual(ctrl.px_per_m_now(), 5.4, delta=0.05)
+
+    def test_legacy_estimate_without_catalog_scale(self):
+        ctrl = SpeedController(speed_cap_kmh=79.0)
+        for _ in range(20):
+            ctrl.update_scale(40.0)
+
+        self.assertAlmostEqual(ctrl.px_per_m_now(), 45.0 * 3.6 / 79.0, delta=1e-6)
+
+
 class TestThrottleBrake(unittest.TestCase):
     @staticmethod
     def _decide(

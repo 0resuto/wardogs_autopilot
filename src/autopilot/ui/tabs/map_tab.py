@@ -48,6 +48,10 @@ class _StringVarCompat:
         self._val = str(val)
 
 
+# Only used when the map catalog has no m_per_px entry for the active map.
+_FALLBACK_PX_PER_M = 2.0
+
+
 def _compact_label(label: QLabel) -> None:
     """Let dynamic status text clip instead of forcing the window to grow."""
     label.setMinimumWidth(0)
@@ -902,12 +906,24 @@ class MapTab(QWidget):
         self.route_pts = pts
         self.routes_refresh()
 
+    def _map_px_per_m(self) -> float:
+        """Known scale of the active map from the catalog (0 when unknown)."""
+        store = self.get_store()
+        getter = getattr(store, "px_per_m", None)
+        if not callable(getter):
+            return 0.0
+        try:
+            return max(0.0, float(getter(self.get_map_name())))
+        except Exception:
+            return 0.0
+
     def routes_refresh(self) -> None:
+        px_per_m = self._map_px_per_m() or _FALLBACK_PX_PER_M
         length_m = 0.0
         for i in range(1, len(self.route_pts)):
             p0, p1 = self.route_pts[i - 1], self.route_pts[i]
             d_px = math.hypot(p1[0] - p0[0], p1[1] - p0[1])
-            length_m += d_px / 1.7
+            length_m += d_px / px_per_m
         speed_cap = getattr(self.app_cfg.navigator, "speed_cap_kmh", 36.0) or 36.0
         speed_mps = max(2.0, speed_cap / 3.6)
         est_sec = int(length_m / speed_mps)
@@ -982,6 +998,7 @@ class MapTab(QWidget):
             pts=[(p[0], p[1]) for p in self.route_pts],
             nav_cfg=nav_cfg,
             kb=kb,
+            px_per_m=self._map_px_per_m(),
             debug=self.dbg_ck.isChecked(),
         )
         self.driver.start()

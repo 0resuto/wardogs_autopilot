@@ -35,6 +35,31 @@ Findings:
 4. Rebuilding the caches from the current source raised matching from 22 to
    147 inliers on the reference frame.
 
+## Map scale is data
+
+The physical map scale is a catalog constant, not a runtime guess:
+
+| Map | size | m_per_px | px_per_m |
+| --- | --- | --- | --- |
+| zestafona, ozeti | 32768 | 0.498046875 (16320 m / 32768) | 2.008 |
+| bakurani | 16384 | 0.99609375 (16320 m / 16384) | 1.004 |
+
+`data/maps/catalog.json` carries `m_per_px`; `MapStore.px_per_m(name)` feeds
+`SpeedController` (injected by the studio), so corridors, corner radii,
+braking distances and the cruise baseline are correct from the first frame -
+the old "max observed speed equals the configured cap" estimate survives only
+for maps without a catalog scale.
+
+The speedometer OCR ratio (`mv / (kmh/3.6)`) validates the constant: a
+persistent deviation beyond 15% is logged and the measured value adopted once,
+because it is a direct measurement and the catalog may describe an older map
+revision. Validate in game with
+`python tools/calibrate_vehicle.py output/nav_dbg_*.jsonl`.
+
+The catalog's png sizes/sha256 now describe the current asset extracts (the
+previous ones were stale); GitHub release assets must be re-uploaded before
+`tools/download_map.py` can verify them again.
+
 ## What the app does
 
 - `map.gray_conv = "desat"` (`preprocessing.bgr_to_gray` palette) - the
