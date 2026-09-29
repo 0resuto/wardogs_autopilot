@@ -24,8 +24,8 @@ import argparse
 import hashlib
 import json
 import os
-import shutil
 import sys
+import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_MAPS = os.path.join(ROOT, "data", "maps")
@@ -51,6 +51,10 @@ CATALOG_NOTES = [
     "Derived artifacts only: the original map PNG is not distributed. A machine "
     "holding the source PNG refreshes this catalog with tools/build_map_assets.py "
     "(--rebuild regenerates the caches first).",
+    "Each map ships as a single <map>.zip (npz members stored uncompressed, "
+    "raw npy/txt members deflated); tools/download_map.py downloads the archive, "
+    "checks its sha256, then extracts every artifact and verifies the per-file "
+    "sha256 before replacing the local files.",
     "Only the top preview level ships per map (16384 for 32768 maps, the native "
     "8192 gray for 16384 maps); the smaller pyramid levels are derived locally "
     "from it on first use (MapStore.ensure_previews).",
@@ -147,22 +151,27 @@ def rebuild_caches(name: str) -> None:
     store.rebuild_map_cache(name, progress_cb=lambda msg: print(f"  {msg}"))
 
 
-def export_artifacts(name: str, entry: dict, dest_root: str) -> None:
-    """Place the release set of `name` under dest_root (hardlink, copy fallback)."""
-    out_dir = os.path.join(dest_root, name)
-    os.makedirs(out_dir, exist_ok=True)
+def export_artifacts(name: str, entry: dict, dest_root: str) -> dict:
+    """Write the release archive <map>.zip under dest_root; returns its metadata.
+
+    Compressed npz members are stored as-is (recompressing them is wasted CPU
+    for ~0 gain); the raw .npy/.txt members are deflated.
+    """
+    os.makedirs(dest_root, exist_ok=True)
+    zip_path = os.path.join(dest_root, f"{name}.zip")
     suffixes = artifact_suffixes(entry)
-    for suffix in suffixes:
-        fname = f"{name}{suffix}"
-        src = os.path.join(DATA_MAPS, fname)
-        dst = os.path.join(out_dir, fname)
-        if os.path.exists(dst):
-            os.remove(dst)
-        try:
-            os.link(src, dst)
-        except OSError:
-            shutil.copy2(src, dst)
-    print(f"  exported {len(suffixes)} files to {out_dir}")
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        for suffix in suffixes:
+            fname = f"{name}{suffix}"
+            compression = zipfile.ZIP_STORED if fname.endswith(".npz") else zipfile.ZIP_DEFLATED
+            zf.write(os.path.join(DATA_MAPS, fname), arcname=fname, compress_type=compression)
+    meta = {
+        "name": f"{name}.zip",
+        "size": os.path.getsize(zip_path),
+        "sha256": sha256_file(zip_path),
+    }
+    print(f"  exported {len(suffixes)} artifacts to {zip_path}")
+    return meta
 
 
 def main() -> None:
@@ -179,7 +188,7 @@ def main() -> None:
     parser.add_argument(
         "--export",
         metavar="DIR",
-        help="Also place the release artifact set under DIR/<map>/ (hardlinked)",
+        help="Also build the release archives DIR/<map>.zip and record their hashes",
     )
     args = parser.parse_args()
 
@@ -201,7 +210,9 @@ def main() -> None:
         _count, total_bytes = refresh_entry(catalog, name)
         grand_total += total_bytes
         if args.export:
-            export_artifacts(name, catalog["maps"][name], args.export)
+            catalog["maps"][name]["archive"] = export_artifacts(
+                name, catalog["maps"][name], args.export
+            )
         print()
 
     catalog["notes"] = CATALOG_NOTES

@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Map asset downloader for WARDOGS Autopilot.
 
-Downloads the derived map artifacts listed in data/maps/catalog.json
-(feat.npz, mu.npy, preview mipmaps, gray.txt) from GitHub Releases into
-data/maps/ and verifies their SHA-256 integrity. The original map PNG is not
-distributed: only a maintainer machine holding it can rebuild the caches
-(tools/build_map_assets.py --rebuild).
+Downloads the per-map release archive (<map>.zip) listed in
+data/maps/catalog.json from GitHub Releases, checks the archive SHA-256, then
+extracts every artifact (feat.npz, mu.npy, the top preview level, gray.txt)
+into data/maps/ verifying each file against its own SHA-256. A catalog without
+archives falls back to downloading the loose artifacts directly. The original
+map PNG is not distributed: only a maintainer machine holding it can rebuild
+the caches (tools/build_map_assets.py --rebuild).
 """
 
 from __future__ import annotations
@@ -14,10 +16,12 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import sys
 import time
 import urllib.error
 import urllib.request
+import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_MAPS = os.path.join(ROOT, "data", "maps")
@@ -44,7 +48,7 @@ def list_maps(catalog: dict) -> None:
     maps = catalog.get("maps", {})
     print(
         f"\n{'Map Name':<12} {'Display Name':<14} {'Resolution':<14} "
-        f"{'Status':<14} {'Artifact Size'}"
+        f"{'Status':<14} {'Download Size'}"
     )
     print("-" * 76)
     for name, info in maps.items():
@@ -52,17 +56,16 @@ def list_maps(catalog: dict) -> None:
         size_str = f"{info['size'][0]}x{info['size'][1]}"
         artifacts = info.get("artifacts", {})
         present = [f for f in artifacts if os.path.exists(os.path.join(DATA_MAPS, f))]
-        expected_size = sum(meta["size"] for meta in artifacts.values())
+        archive = info.get("archive") or {}
+        size_disp = format_bytes(
+            int(archive.get("size") or 0) or sum(meta["size"] for meta in artifacts.values())
+        )
         if artifacts and len(present) == len(artifacts):
-            actual = sum(os.path.getsize(os.path.join(DATA_MAPS, f)) for f in present)
             status = "Downloaded"
-            size_disp = format_bytes(actual)
         elif present:
             status = f"Partial {len(present)}/{len(artifacts)}"
-            size_disp = format_bytes(expected_size)
         else:
             status = "Missing"
-            size_disp = format_bytes(expected_size)
         print(f"{name:<12} {disp:<14} {size_str:<14} {status:<14} {size_disp}")
     print()
 
@@ -142,6 +145,44 @@ def download_file(
         return False
 
 
+def extract_archive(name: str, info: dict, zip_path: str) -> bool:
+    """Extract the artifact set from the archive, verifying every file.
+
+    Members land in a staging directory first and are moved into data/maps
+    only after all of them verified, so a corrupt archive cannot leave a
+    half-replaced cache behind.
+    """
+    artifacts = info.get("artifacts", {})
+    staging = os.path.join(DATA_MAPS, f".extract_{name}")
+    shutil.rmtree(staging, ignore_errors=True)
+    os.makedirs(staging, exist_ok=True)
+    try:
+        with zipfile.ZipFile(zip_path) as zf:
+            names = set(zf.namelist())
+            for filename, meta in artifacts.items():
+                if os.path.basename(filename) != filename:
+                    raise ValueError(f"unsafe artifact name: {filename}")
+                if filename not in names:
+                    raise ValueError(f"archive is missing {filename}")
+                out_path = os.path.join(staging, filename)
+                hasher = hashlib.sha256()
+                with zf.open(filename) as src, open(out_path, "wb") as dst:
+                    while chunk := src.read(1024 * 1024):
+                        hasher.update(chunk)
+                        dst.write(chunk)
+                if hasher.hexdigest() != str(meta.get("sha256", "")).lower():
+                    raise ValueError(f"checksum mismatch after extraction: {filename}")
+        for filename in artifacts:
+            os.replace(os.path.join(staging, filename), os.path.join(DATA_MAPS, filename))
+    except Exception as exc:  # noqa: BLE001 — any bad archive is a failed download
+        print(f"Extract error: {exc}", file=sys.stderr)
+        return False
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    print(f"Extracted {len(artifacts)} artifacts into {DATA_MAPS}")
+    return True
+
+
 def download_map(name: str, catalog: dict, repo: str, tag: str, force: bool = False) -> bool:
     maps = catalog.get("maps", {})
     if name not in maps:
@@ -156,6 +197,27 @@ def download_map(name: str, catalog: dict, repo: str, tag: str, force: bool = Fa
     base_url = f"https://github.com/{repo}/releases/download/{tag}"
 
     print(f"\n--- Downloading Map: {info.get('display_name', name)} ({name}) ---")
+
+    archive = info.get("archive") or {}
+    zip_name = str(archive.get("name", ""))
+    if zip_name:
+        zip_path = os.path.join(DATA_MAPS, zip_name)
+        present = all(os.path.exists(os.path.join(DATA_MAPS, f)) for f in artifacts)
+        if present and not force:
+            print(f"All artifacts already present for '{name}' (use --force to re-download)")
+            return True
+        url = f"{base_url}/{zip_name}"
+        if not download_file(url, zip_path, archive.get("size"), archive.get("sha256")):
+            return False
+        try:
+            return extract_archive(name, info, zip_path)
+        finally:
+            try:
+                os.remove(zip_path)
+            except OSError:
+                pass
+
+    # Catalog without archives: download the loose artifacts (custom or old catalogs)
     all_ok = True
     for filename, meta in artifacts.items():
         dest = os.path.join(DATA_MAPS, filename)

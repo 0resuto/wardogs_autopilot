@@ -3,6 +3,7 @@
   "tag": "v1.0.0",
   "notes": [
     "Derived artifacts only: the original map PNG is not distributed. A machine holding the source PNG refreshes this catalog with tools/build_map_assets.py (--rebuild regenerates the caches first).",
+    "Each map ships as a single <map>.zip (npz members stored uncompressed, raw npy/txt members deflated); tools/download_map.py downloads the archive, checks its sha256, then extracts every artifact and verifies the per-file sha256 before replacing the local files.",
     "Only the top preview level ships per map (16384 for 32768 maps, the native 8192 gray for 16384 maps); the smaller pyramid levels are derived locally from it on first use (MapStore.ensure_previews).",
     "m_per_px is the physical map scale from the game's minimap texture spec: every map is 16320 m across (0.498046875 m/px at 32768, 0.99609375 m/px at 16384).",
     "'source' is the identity (size-mtime) of the PNG the artifacts were built from; the runtime cache signature is <palette>|<mini_scale>|<source>, so a different palette or mini_scale makes the caches stale (a rebuild requires the source PNG).",
@@ -36,6 +37,11 @@
           "size": 268435584,
           "sha256": "de9f5ff0fede5f29adaf53bc22fcb2b1fa136ddd27be6342ed6c469aab88e042"
         }
+      },
+      "archive": {
+        "name": "zestafona.zip",
+        "size": 552570641,
+        "sha256": "2cad94d9c0e7416ca26b5da225b939d42c35394d20e3837213ec47d8a95ef544"
       }
     },
     "bakurani": {
@@ -64,6 +70,11 @@
           "size": 67108992,
           "sha256": "198192911d6bae7bc2f5e5feadfb4d6d5dd6407d74b3f57c0416a0ef9e98ed45"
         }
+      },
+      "archive": {
+        "name": "bakurani.zip",
+        "size": 175959758,
+        "sha256": "21f00ad3bd84d9fbd20cac3c777d5693e8a018b89889a7a497af332e307a3cd6"
       }
     },
     "ozeti": {
@@ -92,6 +103,11 @@
           "size": 268435584,
           "sha256": "a82a4aa586477ec82a1ee71c00068427c6e02402c3bc5bbe86c9595e33f60abb"
         }
+      },
+      "archive": {
+        "name": "ozeti.zip",
+        "size": 610893727,
+        "sha256": "04ea6e7f18b3cf5c116a54a2bd99b7d17610770a77958f3742d27a8192c5d293"
       }
     }
   }
