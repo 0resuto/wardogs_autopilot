@@ -9,13 +9,12 @@ from PySide6.QtGui import QPainter, QResizeEvent, QWheelEvent
 from PySide6.QtWidgets import (
     QFrame,
     QGraphicsView,
-    QHBoxLayout,
     QPushButton,
-    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
+from .flow_layout import FlowLayout
 from .icons import icon
 from .map_scene import MapGraphicsScene
 
@@ -143,13 +142,14 @@ class InteractiveMapWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
 
-        # Docked HUD toolbar (styled as a compact floating glass pill)
+        # Docked HUD toolbar (styled as a compact floating glass pill). It hugs
+        # its content on one row and wraps onto a second row instead of clipping
+        # out of the pane when the map is squeezed by a narrow window.
         tb = QWidget(self)
         tb.setObjectName("MapHud")
-        tb.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
-        self.toolbar_layout = QHBoxLayout(tb)
+        self.toolbar_layout = FlowLayout(h_spacing=4, v_spacing=3, one_row_hint=True)
         self.toolbar_layout.setContentsMargins(6, 3, 6, 3)
-        self.toolbar_layout.setSpacing(4)
+        tb.setLayout(self.toolbar_layout)
 
         # Zoom is the mouse wheel and Fit happens at maximum zoom-out; only
         # the follow-centering toggle stays here.

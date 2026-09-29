@@ -2,6 +2,8 @@
 
 The groups are stacked vertically and the fields sit in a two-column grid so
 the narrow sidebar stays readable; the panel itself scrolls with the sidebar.
+Log switches and the last-reject readout live in the Logs sidebar section
+(`logs_tab.py`), not here.
 """
 
 from __future__ import annotations
@@ -9,8 +11,6 @@ from __future__ import annotations
 from typing import Any
 
 from PySide6.QtWidgets import (
-    QApplication,
-    QCheckBox,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from ...common.config import LocatorConfig, NavigatorConfig
-from ..theme import CONTROL_BG, GREEN, RED, TEXT_MUTED, YELLOW
+from ..theme import GREEN, RED, TEXT_MUTED
 from .common import MapTabBase, StringVarCompat, compact_label
 
 # (label, config key, default, is_int, section, tooltip)
@@ -220,6 +220,8 @@ class MapTuningMixin(MapTabBase):
             grid.setContentsMargins(8, 10, 8, 8)
             grid.setHorizontalSpacing(10)
             grid.setVerticalSpacing(4)
+            grid.setColumnStretch(0, 1)
+            grid.setColumnStretch(1, 1)
             for i, (lbl_text, var, default, is_int, section, tip) in enumerate(fields):
                 row, col = divmod(i, 2)
                 self._add_tune_cell(
@@ -245,28 +247,6 @@ class MapTuningMixin(MapTabBase):
         footer.addWidget(apply_btn)
         tune_vbox.addLayout(footer)
 
-        # Diagnostic fail logs bar
-        dbg_bar = QHBoxLayout()
-        self._collect_ck = QCheckBox("Collect fail logs", self._tune_container)
-        self._collect_ck.setChecked(
-            bool(self.cfg.setdefault("debug", {}).get("collect_fail_logs", False))
-        )
-        self._collect_ck.toggled.connect(self.apply_collect_logs)
-        dbg_bar.addWidget(self._collect_ck)
-
-        self.dbg_text = QLabel("", self._tune_container)
-        self.dbg_text.setStyleSheet(
-            f"background-color: {CONTROL_BG}; color: {YELLOW}; padding: 2px 6px; border-radius: 4px;"
-        )
-        compact_label(self.dbg_text)
-        dbg_bar.addWidget(self.dbg_text, stretch=1)
-
-        copy_btn = QPushButton("Copy", self._tune_container)
-        copy_btn.clicked.connect(self.copy_debug)
-        dbg_bar.addWidget(copy_btn)
-
-        tune_vbox.addLayout(dbg_bar)
-
         root_layout.addWidget(self._tune_container)
 
     def _add_tune_cell(
@@ -283,12 +263,11 @@ class MapTuningMixin(MapTabBase):
         tip: str,
     ) -> None:
         cell = QHBoxLayout()
-        cell.setSpacing(4)
+        cell.setSpacing(6)
 
-        lbl = QLabel(lbl_text, parent)
-        lbl.setStyleSheet(f"color: {TEXT_MUTED};")
-        cell.addWidget(lbl)
-
+        # Field first with its label to the right: both columns then align at
+        # the left edge and a label can never read as the neighbouring field's
+        # caption.
         cur = self._nav_tune_cur if section == "navigator" else self._loc_tune_cur
         value = cur(var_name, default)
         val = str(int(value) if is_int else value)
@@ -297,10 +276,15 @@ class MapTuningMixin(MapTabBase):
         inp.setFixedWidth(_FIELD_W)
         inp.setCursorPosition(0)  # narrow fields must show the leading digits
         if tip:
-            lbl.setToolTip(tip)
             inp.setToolTip(tip)
         cell.addWidget(inp)
-        cell.addStretch()
+
+        lbl = QLabel(lbl_text, parent)
+        lbl.setStyleSheet(f"color: {TEXT_MUTED};")
+        if tip:
+            lbl.setToolTip(tip)
+        cell.addWidget(lbl)
+        cell.addStretch(1)
         grid.addLayout(cell, row, col)
         self.tune_inputs[var_name] = inp
         self.tune_vars[var_name] = StringVarCompat(val)
@@ -411,14 +395,3 @@ class MapTuningMixin(MapTabBase):
                 if k in self.tune_inputs:
                     self.tune_inputs[k].setText(str(v))
         self.apply_tune()
-
-    def apply_collect_logs(self) -> None:
-        enabled = self._collect_ck.isChecked()
-        self.cfg.setdefault("debug", {})["collect_fail_logs"] = enabled
-        self.save_cfg()
-        loc = self.get_loc()
-        if loc is not None and hasattr(loc, "set_collect_fail_logs"):
-            loc.set_collect_fail_logs(enabled)
-
-    def copy_debug(self) -> None:
-        QApplication.clipboard().setText(self.dbg_text.text())

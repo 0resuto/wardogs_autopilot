@@ -63,18 +63,11 @@ class RoiTabBase(_BaseQt):
     capture_title_lbl: Any
     speed_title_lbl: Any
     speed_preview_lbl: Any
-    save_status_lbl: Any
-    save_snap_btn: Any
-    open_snap_btn: Any
-    _snap_busy: bool
-    _last_snapshot_dir: str | None
     sig_cache_progress: Any
     sig_cache_done: Any
     sig_cache_failed: Any
     sig_download_done: Any
     sig_download_failed: Any
-    sig_save_done: Any
-    sig_save_failed: Any
 
     def update_preview(self) -> None: ...
 
@@ -93,6 +86,7 @@ class MapTabBase(_BaseQt):
     get_loc: Callable[[], Any]
     get_map_name: Callable[[], str]
     get_store: Callable[[], Any]
+    logs_supplier: Callable[[], Any] | None
     route_pts: Any
     driver: Any
     map_widget: Any
@@ -102,8 +96,6 @@ class MapTabBase(_BaseQt):
     tune_inputs: dict[str, QLineEdit]
     tune_status: Any
     _tune_container: Any
-    _collect_ck: Any
-    dbg_text: Any
     _edit_snapshot: list[list[float]] | None
     _route_locked: list[Any]
     _edit_btn: Any

@@ -2,8 +2,9 @@
 
 The tab is assembled from mixins that keep each responsibility in its own
 module: `RoiCacheMixin` (map cache card, asset download, rebuild) and
-`RoiDiagnosticsMixin` (live preview panels and diagnostic snapshots). This
-module keeps the ROI/monitor selection and the assembly.
+`RoiDiagnosticsMixin` (the live preview panels shown in the right pane). This
+module keeps the ROI/monitor selection and the assembly. Everything that writes
+to `output/` lives in the separate Logs section (`logs_tab.py`).
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 from ... import PROJECT_ROOT
+from ..flow_layout import FlowLayout
 from ..icons import icon
 from ..roi_selector import RoiSelector
 from ..theme import BLUE, GREEN, RED, TEXT_DIM, TEXT_MUTED
@@ -49,8 +51,6 @@ class RoiTab(RoiCacheMixin, RoiDiagnosticsMixin, QWidget):
     sig_cache_failed = Signal(str)
     sig_download_done = Signal(str)
     sig_download_failed = Signal(str)
-    sig_save_done = Signal(str)
-    sig_save_failed = Signal(str)
 
     def __init__(
         self,
@@ -73,8 +73,6 @@ class RoiTab(RoiCacheMixin, RoiDiagnosticsMixin, QWidget):
         self._roi_pick_busy = False
         self._cache_rebuild_busy = False
         self._cache_download_busy = False
-        self._snap_busy = False
-        self._last_snapshot_dir: str | None = None
         self._selector: RoiSelector | None = None
 
         # Connect signals to GUI thread slots
@@ -85,8 +83,6 @@ class RoiTab(RoiCacheMixin, RoiDiagnosticsMixin, QWidget):
         self.sig_cache_failed.connect(self._on_cache_failed)
         self.sig_download_done.connect(self._on_download_done)
         self.sig_download_failed.connect(self._on_download_failed)
-        self.sig_save_done.connect(self._on_save_done)
-        self.sig_save_failed.connect(self._on_save_failed)
 
         self._build_ui()
 
@@ -95,10 +91,12 @@ class RoiTab(RoiCacheMixin, RoiDiagnosticsMixin, QWidget):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(10)
 
+        # The live preview is the primary feedback of the Capture section, so it
+        # goes first; configuration cards follow below it.
+        self._build_diagnostics_card(layout)
         self._build_roi_card(layout)
         self._build_speed_card(layout)
         self._build_cache_card(layout)
-        self._build_diagnostics_card(layout)
         layout.addStretch()  # keep the sidebar content top-aligned
 
     def _build_roi_card(self, layout: QVBoxLayout) -> None:
@@ -118,8 +116,8 @@ class RoiTab(RoiCacheMixin, RoiDiagnosticsMixin, QWidget):
         compact_label(guide_lbl)
         roi_layout.addWidget(guide_lbl)
 
-        top_row = QHBoxLayout()
-        top_row.setSpacing(6)
+        # The button row wraps instead of pinning the sidebar to its width.
+        top_row = FlowLayout(h_spacing=6, v_spacing=6)
         cap = self.get_cap()
         if cap and len(cap.monitors) > 2:
             mon_lbl = QLabel("Monitor:", card_roi)
@@ -150,7 +148,6 @@ class RoiTab(RoiCacheMixin, RoiDiagnosticsMixin, QWidget):
         self.mask_btn.setToolTip("Open folder containing minimap mask (mm_mask.png)")
         self.mask_btn.clicked.connect(self.open_mask_folder)
         top_row.addWidget(self.mask_btn)
-        top_row.addStretch()
         roi_layout.addLayout(top_row)
 
         coord_title = QLabel("Coordinates (px):", card_roi)
@@ -208,8 +205,7 @@ class RoiTab(RoiCacheMixin, RoiDiagnosticsMixin, QWidget):
         compact_label(speed_guide)
         speed_layout.addWidget(speed_guide)
 
-        speed_top = QHBoxLayout()
-        speed_top.setSpacing(8)
+        speed_top = FlowLayout(h_spacing=8, v_spacing=6)
 
         self.pick_speed_btn = QPushButton("Pick speed zone", card_speed)
         self.pick_speed_btn.setIcon(icon("crop"))
@@ -219,7 +215,6 @@ class RoiTab(RoiCacheMixin, RoiDiagnosticsMixin, QWidget):
         self.disable_speed_btn = QPushButton("Disable", card_speed)
         self.disable_speed_btn.clicked.connect(self.disable_speed_roi)
         speed_top.addWidget(self.disable_speed_btn)
-        speed_top.addStretch()
         speed_layout.addLayout(speed_top)
 
         saved_speed = self.cfg.get("capture", {}).get("speed_roi")

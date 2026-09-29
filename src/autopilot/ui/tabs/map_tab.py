@@ -2,7 +2,9 @@
 
 The tab is assembled from mixins that keep each responsibility in its own
 module: `MapTuningMixin` (locator/vehicle tuning panel), `MapPresetsMixin`
-(preset management), `MapRouteEditMixin` (route editing and status).
+(preset management), `MapRouteEditMixin` (route editing and status). Logging
+switches, recorders, and the last-reject readout belong to the Logs section
+(`logs_tab.py`), which is reached through `logs_supplier`.
 """
 
 from __future__ import annotations
@@ -13,10 +15,8 @@ from typing import Any
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QFrame,
-    QHBoxLayout,
     QLabel,
     QLineEdit,
     QMenu,
@@ -28,8 +28,8 @@ from PySide6.QtWidgets import (
 
 from ...common.config import AppConfig
 from ...navigation.follow import FollowDriver
-from ...navigation.manual_record import ManualDriveRecorder
 from ...vision import locator
+from ..flow_layout import FlowLayout
 from ..icons import icon
 from ..map_view import InteractiveMapWidget
 from ..presets import PresetManager
@@ -53,6 +53,7 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
         map_store_supplier: Callable[[], Any] | None = None,
         on_pick_roi: Callable[[], None] | None = None,
         on_open_capture: Callable[[], None] | None = None,
+        logs_supplier: Callable[[], Any] | None = None,
         app_cfg: AppConfig | None = None,
     ) -> None:
         super().__init__(parent)
@@ -71,6 +72,7 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
         self.get_store = map_store_supplier or locator.get_store
         self.on_pick_roi = on_pick_roi
         self.on_open_capture = on_open_capture
+        self.logs_supplier = logs_supplier
         self._map_loaded = False
 
         self.map_name = self.get_map_name()
@@ -79,7 +81,6 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
 
         self.preset_mgr = PresetManager()
         self.driver: FollowDriver | None = None
-        self._manual_rec: ManualDriveRecorder | None = None
         self._edit_snapshot: list[list[float]] | None = None
 
         self.tune_vars: dict[str, StringVarCompat] = {}
@@ -216,8 +217,8 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
 
     def _build_toolbar(self, root_layout: QVBoxLayout) -> None:
         # --- Top toolbar: Route presets & Tuning toggle ---
-        top_bar = QHBoxLayout()
-        top_bar.setSpacing(6)
+        # Wrapping layout: the button cluster must not overflow the narrow column.
+        top_bar = FlowLayout(h_spacing=6, v_spacing=6)
 
         lbl_preset = QLabel("Preset:", self)
         lbl_preset.setStyleSheet("font-weight: bold;")
@@ -294,26 +295,6 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
 
         root_layout.addLayout(top_bar)
 
-        # Second row: diagnostics toggles (the sidebar column is too narrow for
-        # a single toolbar row).
-        diag_bar = QHBoxLayout()
-        diag_bar.setSpacing(6)
-
-        self.dbg_ck = QCheckBox("Nav log", self)
-        self.dbg_ck.setChecked(bool(self.app_cfg.navigator.debug))
-        diag_bar.addWidget(self.dbg_ck)
-
-        self._manual_rec_ck = QCheckBox("Record my driving", self)
-        self._manual_rec_ck.setToolTip(
-            "Temporary: log your own W/A/S/D/SPACE presses and poses to "
-            "output/manual_dbg_*.jsonl while driving by hand"
-        )
-        self._manual_rec_ck.toggled.connect(self.toggle_manual_record)
-        diag_bar.addWidget(self._manual_rec_ck)
-        diag_bar.addStretch()
-
-        root_layout.addLayout(diag_bar)
-
     def _build_map_area(self, root_layout: QVBoxLayout) -> None:
         # --- Interactive Map Canvas / Scene ---
         # Route editing is off until the Edit button is pressed: by default the
@@ -365,34 +346,16 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
 
         root_layout.addLayout(bot_box)
 
-    def toggle_manual_record(self, enabled: bool) -> None:
-        """Start/stop recording the user's own driving (temporary tuning aid)."""
-        if not enabled:
-            self.stop_manual_record()
-            return
-        loc = self.get_loc()
-        if loc is None:
-            self._manual_rec_ck.setChecked(False)
-            return
-        params = dict(
-            source="manual",
-            map=self.get_map_name(),
-            vehicle=self.app_cfg.navigator.vehicle_profile,
-            speed_cap_kmh=self.app_cfg.navigator.speed_cap_kmh,
-        )
-        self._manual_rec = ManualDriveRecorder(
-            loc=loc, route=self.route_pts, params=params, out_dir="output"
-        )
-        self._manual_rec.start()
+    def _logs_tab(self) -> Any:
+        """The Logs sidebar section (owns the recorders and the reject readout)."""
+        return self.logs_supplier() if self.logs_supplier is not None else None
 
-    def stop_manual_record(self) -> None:
-        """Stop manual-driving recording if it is running."""
-        rec = self._manual_rec
-        if rec is not None:
-            rec.stop()
-            self._manual_rec = None
-        if self._manual_rec_ck.isChecked():
-            self._manual_rec_ck.setChecked(False)
+    def _nav_log_enabled(self) -> bool:
+        """Nav-log switch state (Logs section, config as the source of truth)."""
+        logs = self._logs_tab()
+        if logs is not None:
+            return bool(logs.nav_log_enabled())
+        return bool(self.app_cfg.navigator.debug)
 
     def update_loc(self, last_loc: dict[str, Any] | None) -> None:
         """Receive latest localization pose from main event loop."""
@@ -430,7 +393,9 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
 
         diag = last_loc.get("diag")
         if isinstance(diag, dict) and diag.get("reject"):
-            self.dbg_text.setText(f"{diag.get('reject')}: {diag.get('detail', '')[:50]}")
+            logs = self._logs_tab()
+            if logs is not None:
+                logs.set_last_reject(f"{diag.get('reject')}: {diag.get('detail', '')[:50]}")
 
     def _center_vehicle(self) -> None:
         loc = self._last_loc
@@ -481,7 +446,9 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
                 QMessageBox.warning(self, "Routes", "Route not set (at least 2 points required)")
             return
 
-        self.stop_manual_record()
+        logs = self._logs_tab()
+        if logs is not None:
+            logs.stop_manual_record()
         loc_thread = self.get_loc()
         nav_cfg = self.app_cfg.navigator
         try:
@@ -499,7 +466,7 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
             nav_cfg=nav_cfg,
             kb=kb,
             px_per_m=self._map_px_per_m(),
-            debug=self.dbg_ck.isChecked(),
+            debug=self._nav_log_enabled(),
         )
         self.driver.start()
         self._set_follow_state(True)

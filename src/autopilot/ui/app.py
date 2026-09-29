@@ -1,7 +1,8 @@
 """Studio: Visual tuning and control dashboard for WARDOGS autopilot (PySide6).
 
-Coordinates the main window, map selector toolbar, global hotkeys,
-and the three primary tabs: Capture Zone (ROI), Map Diagnostics, and Routes.
+Coordinates the main window, map selector toolbar, global hotkeys, the
+persistent sidebar sections (Capture Zone (ROI), Map, Logs) and the map canvas
+in the right pane.
 """
 
 from __future__ import annotations
@@ -44,6 +45,7 @@ from ..hardware.screen_capture import ScreenCapture
 from ..vision import locator
 from ..vision.tracker import LiveLocator
 from .hotkeys import _HK_F6, _HK_F7, _HK_F8, HotkeyManager
+from .tabs.logs_tab import LogsTab
 from .tabs.map_tab import MapTab
 from .tabs.roi_tab import RoiTab
 from .theme import (
@@ -241,6 +243,7 @@ class App(QMainWindow):
         side.setObjectName("Sidebar")
         side.setMinimumWidth(330)
         side.setMaximumWidth(470)
+        self.side = side
         side_layout = QVBoxLayout(side)
         side_layout.setContentsMargins(8, 8, 8, 8)
         side_layout.setSpacing(6)
@@ -249,6 +252,7 @@ class App(QMainWindow):
         self.side_tabs.setExpanding(True)
         self.side_tabs.addTab("Capture")
         self.side_tabs.addTab("Map")
+        self.side_tabs.addTab("Logs")
         side_layout.addWidget(self.side_tabs)
 
         self.side_stack = QStackedWidget(side)
@@ -261,14 +265,11 @@ class App(QMainWindow):
         side_layout.addWidget(side_scroll, stretch=1)
         self.side_tabs.currentChanged.connect(self.side_stack.setCurrentIndex)
 
-        # --- Right: the map canvas and the live preview are always visible ---
+        # --- Right: the map canvas gets the whole pane ---
         self.right_pane = QWidget(splitter)
         right_layout = QVBoxLayout(self.right_pane)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(6)
-        self.right_split = QSplitter(Qt.Orientation.Vertical, self.right_pane)
-        self.right_split.setChildrenCollapsible(False)
-        right_layout.addWidget(self.right_split)
 
         self.roi_tab = RoiTab(
             side,
@@ -288,25 +289,36 @@ class App(QMainWindow):
             map_name_supplier=lambda: self._map_name,
             map_store_supplier=lambda: self._map_store,
             on_pick_roi=self.roi_tab.pick_roi,
+            logs_supplier=lambda: self.logs_tab,
             app_cfg=self.app_cfg,
         )
         self.routes_tab = self.map_tab  # Backward-compatibility alias
 
+        # Every control that writes to output/ lives in its own section.
+        self.logs_tab = LogsTab(
+            side,
+            cfg=self.cfg,
+            save_cfg_fn=self._save_cfg,
+            loc_thread_supplier=lambda: self._loc_thread,
+            map_name_supplier=lambda: self._map_name,
+            route_supplier=lambda: self.map_tab.route_pts,
+            app_cfg=self.app_cfg,
+        )
+
         self.map_tab.detach_map_widget()
-        self.right_split.addWidget(self.map_tab.map_widget)
-        self.right_split.addWidget(self.roi_tab.detach_diagnostics())
-        self.right_split.setStretchFactor(0, 1)
-        self.right_split.setStretchFactor(1, 0)
-        self.right_split.setSizes([640, 210])
+        self.right_layout = right_layout
+        self.right_layout.addWidget(self.map_tab.map_widget)
 
         self.side_stack.addWidget(self.roi_tab)
         self.side_stack.addWidget(self.map_tab)
+        self.side_stack.addWidget(self.logs_tab)
 
         splitter.addWidget(side)
         splitter.addWidget(self.right_pane)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([400, 880])
+        self.splitter = splitter
 
         # First run without map assets: show the Capture section where the
         # download action lives instead of an empty canvas.
@@ -470,7 +482,7 @@ class App(QMainWindow):
         self._remember_window_geometry()
         self._save_cfg()
         self._hotkeys.stop()
-        self.routes_tab.stop_manual_record()
+        self.logs_tab.stop_manual_record()
         self.routes_tab.emergency_stop()
         self._loc_thread.stop()
         if hasattr(self, "_cap") and hasattr(self._cap, "close"):

@@ -9,13 +9,21 @@ full main window with map loading and the locator thread stubbed out.
 import os
 import sys
 import tempfile
+import time
 import unittest
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
-from PySide6.QtCore import QRect
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QEvent, QRect
+from PySide6.QtWidgets import (
+    QApplication,
+    QGroupBox,
+    QLayoutItem,
+    QPushButton,
+    QSizePolicy,
+    QWidget,
+)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if os.path.join(ROOT, "src") not in sys.path:
@@ -25,7 +33,10 @@ if ROOT not in sys.path:
 
 from autopilot.common.config import AppConfig, CaptureConfig  # noqa: E402
 from autopilot.ui import theme  # noqa: E402
+from autopilot.ui.flow_layout import FlowLayout  # noqa: E402
 from autopilot.ui.presets import PresetManager  # noqa: E402
+from autopilot.ui.tabs import logs_tab as logs_tab_mod  # noqa: E402
+from autopilot.ui.tabs.logs_tab import LogsTab  # noqa: E402
 from autopilot.ui.tabs.map_tab import MapTab  # noqa: E402
 from autopilot.ui.tabs.roi_tab import RoiTab  # noqa: E402
 from autopilot.vision import locator  # noqa: E402
@@ -552,16 +563,20 @@ class TestAppSmoke(unittest.TestCase):
             app = App(AppConfig())
             try:
                 # persistent sidebar with its own sections
-                self.assertEqual(app.side_tabs.count(), 2)
+                self.assertEqual(app.side_tabs.count(), 3)
                 self.assertEqual(app.side_tabs.tabText(1), "Map")
-                self.assertEqual(app.side_stack.count(), 2)
+                self.assertEqual(app.side_tabs.tabText(2), "Logs")
+                self.assertEqual(app.side_stack.count(), 3)
                 self.assertIs(app.side_stack.widget(1), app.map_tab)
+                self.assertIs(app.side_stack.widget(2), app.logs_tab)
                 self.assertIs(app.routes_tab, app.map_tab)
                 self.assertIsNotNone(app._loc_thread)
                 self.assertIsNotNone(app._hotkeys)
-                # the map canvas and the live preview live in the right pane
+                # the map canvas fills the right pane, the live capture preview
+                # stays in the Capture section
                 self.assertTrue(app.right_pane.isAncestorOf(app.map_tab.map_widget))
-                self.assertTrue(app.right_pane.isAncestorOf(app.roi_tab.diagnostics_card))
+                self.assertFalse(app.right_pane.isAncestorOf(app.roi_tab.diagnostics_card))
+                self.assertTrue(app.roi_tab.isAncestorOf(app.roi_tab.diagnostics_card))
             finally:
                 app.close()
 
@@ -729,6 +744,425 @@ class TestMapDownloadUi(unittest.TestCase):
 
             self.assertEqual(len(failed), 1)
             self.assertFalse(app.roi_tab._cache_download_busy)
+        finally:
+            app.close()
+
+
+class _FakeLogsSection:
+    """Stand-in for the Logs section when the Map tab is wired on its own."""
+
+    def __init__(self, nav_log: bool = False) -> None:
+        self.nav_log = nav_log
+        self.rejects: list[str] = []
+        self.stop_calls = 0
+
+    def nav_log_enabled(self) -> bool:
+        return self.nav_log
+
+    def set_last_reject(self, text: str) -> None:
+        self.rejects.append(text)
+
+    def stop_manual_record(self) -> None:
+        self.stop_calls += 1
+
+
+class TestMapDelegatesLogging(unittest.TestCase):
+    @staticmethod
+    def _tab(logs: _FakeLogsSection, cfg: AppConfig) -> MapTab:
+        return MapTab(
+            None,
+            cfg,
+            save_cfg_fn=lambda: None,
+            loc_thread_supplier=lambda: None,
+            logs_supplier=lambda: logs,
+            app_cfg=cfg,
+        )
+
+    def test_nav_log_state_comes_from_the_logs_section(self):
+        cfg = AppConfig()
+        cfg.navigator.debug = False
+        self.assertTrue(self._tab(_FakeLogsSection(nav_log=True), cfg)._nav_log_enabled())
+
+        cfg.navigator.debug = True
+        self.assertFalse(self._tab(_FakeLogsSection(nav_log=False), cfg)._nav_log_enabled())
+
+    def test_nav_log_falls_back_to_the_config_without_the_logs_section(self):
+        cfg = AppConfig()
+        cfg.navigator.debug = True
+        tab = MapTab(
+            None,
+            cfg,
+            save_cfg_fn=lambda: None,
+            loc_thread_supplier=lambda: None,
+            app_cfg=cfg,
+        )
+
+        self.assertTrue(tab._nav_log_enabled())
+
+    def test_reject_reason_is_forwarded_to_the_logs_section(self):
+        logs = _FakeLogsSection()
+        tab = self._tab(logs, AppConfig())
+
+        tab.update_loc(
+            {
+                "pose": {"th": 90.0, "s": 1.0, "inl": 5},
+                "map_px": [10.0, 20.0],
+                "diag": {"reject": "vote_reject", "detail": "d" * 80},
+            }
+        )
+
+        self.assertEqual(logs.rejects, ["vote_reject: " + "d" * 50])
+
+        tab.update_loc({"pose": {"th": 0.0, "s": 0.0}, "map_px": [1.0, 1.0], "diag": {}})
+        self.assertEqual(len(logs.rejects), 1)
+
+    def test_follow_start_stops_the_manual_recorder_of_the_logs_section(self):
+        logs = _FakeLogsSection()
+        tab = self._tab(logs, AppConfig())
+        tab.route_pts = [[0.0, 0.0], [100.0, 0.0]]
+
+        with (
+            patch.object(tab, "_make_kb", lambda _port: object()),
+            patch("autopilot.navigation.follow.FollowDriver.start", lambda _self: None),
+            patch("autopilot.navigation.follow.FollowDriver.stop", lambda _self: None),
+        ):
+            tab.follow_toggle(silent=True)
+            self.assertEqual(logs.stop_calls, 1)
+            self.assertIsNotNone(tab.driver)
+            tab.emergency_stop()
+
+
+class _FakeLogLocator:
+    def __init__(self) -> None:
+        self.collect: list[bool] = []
+
+    def set_collect_fail_logs(self, enabled: bool) -> None:
+        self.collect.append(enabled)
+
+    def snapshot_debug(self):
+        return None, None, None, None
+
+
+class _FakeRecorder:
+    """Stand-in for ManualDriveRecorder (no thread, no file)."""
+
+    instances: list["_FakeRecorder"] = []
+
+    def __init__(self, **_kwargs: Any) -> None:
+        self.starts = 0
+        self.stops = 0
+        _FakeRecorder.instances.append(self)
+
+    def start(self) -> None:
+        self.starts += 1
+
+    def stop(self) -> None:
+        self.stops += 1
+
+
+class TestLogsSection(unittest.TestCase):
+    def setUp(self):
+        _FakeRecorder.instances.clear()
+        self.cfg = AppConfig()
+        self.saved = 0
+        self.loc = _FakeLogLocator()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.tab = self._tab()
+
+    def _tab(self) -> LogsTab:
+        tab = LogsTab(
+            None,
+            self.cfg,
+            save_cfg_fn=lambda: setattr(self, "saved", self.saved + 1),
+            loc_thread_supplier=lambda: self.loc,
+            app_cfg=self.cfg,
+        )
+        tab.output_dir = self.tmp.name
+        tab.refresh_files()
+        return tab
+
+    def test_nav_log_switch_is_persisted(self):
+        self.tab.nav_ck.setChecked(True)
+
+        self.assertTrue(self.tab.nav_log_enabled())
+        self.assertTrue(self.cfg.navigator.debug)
+        self.assertTrue(self.tab.cfg["navigator"]["debug"])
+        self.assertEqual(self.saved, 1)
+
+        self.tab.nav_ck.setChecked(False)
+        self.assertFalse(self.cfg.navigator.debug)
+        self.assertEqual(self.saved, 2)
+
+    def test_collect_fail_logs_reaches_the_locator(self):
+        self.tab.collect_ck.setChecked(True)
+
+        self.assertEqual(self.loc.collect, [True])
+        self.assertTrue(self.cfg.debug.collect_fail_logs)
+        self.assertTrue(self.tab.cfg["debug"]["collect_fail_logs"])
+        self.assertEqual(self.saved, 1)
+
+    def test_inventory_lists_files_and_counts_the_runs(self):
+        for name in (
+            "autopilot.log",
+            "crash.log",
+            "nav_dbg_20260101_101010.jsonl",
+            "nav_dbg_20260101_111111.jsonl",
+            "manual_dbg_20260101_121212.jsonl",
+            "debug_fail_20260101_131313_001.json",
+            "debug_fail_20260101_131313_002.txt",
+        ):
+            with open(os.path.join(self.tmp.name, name), "wb") as fh:
+                fh.write(b"0123456789")
+        os.makedirs(os.path.join(self.tmp.name, "snapshot_20260101_141414_000"))
+
+        self.tab.refresh_files()
+
+        rows = [lbl.text() for lbl in self.tab._file_rows]
+        self.assertEqual(rows[:2], ["10 B", "10 B"])
+        self.assertEqual(rows[2:], ["2", "1", "2", "1"])
+        self.assertIn("nav_dbg_20260101_111111.jsonl", self.tab._file_rows[2].toolTip())
+        for btn in self.tab._file_buttons:
+            self.assertTrue(btn.isEnabled())
+            self.assertTrue(str(btn.property("path")).endswith(".log"))
+
+    def test_inventory_marks_missing_files(self):
+        self.tab.refresh_files()
+
+        self.assertEqual(self.tab._file_rows[0].text(), "missing")
+        self.assertFalse(self.tab._file_buttons[0].isEnabled())
+        self.assertEqual([lbl.text() for lbl in self.tab._file_rows[2:]], ["0", "0", "0", "0"])
+
+    def test_last_reject_is_shown_and_copied(self):
+        self.tab.set_last_reject("no_match_global: index miss")
+
+        self.assertEqual(self.tab.dbg_text.text(), "no_match_global: index miss")
+        self.tab.copy_debug()
+        self.assertEqual(QApplication.clipboard().text(), "no_match_global: index miss")
+
+    def test_snapshot_without_a_locator_reports_the_reason(self):
+        self.tab.get_loc = lambda: None
+
+        self.tab.save_debug_frame()
+
+        self.assertIn("Locator not active", self.tab.save_status_lbl.text())
+        self.assertTrue(self.tab.save_snap_btn.isEnabled())
+
+    def test_snapshot_without_a_frame_reports_the_failure(self):
+        self.tab.save_debug_frame()
+
+        self.assertTrue(
+            self._pump(lambda: "Save failed" in self.tab.save_status_lbl.text()),
+            self.tab.save_status_lbl.text(),
+        )
+        self.assertTrue(self.tab.save_snap_btn.isEnabled())
+        self.assertEqual(self.tab.save_snap_btn.text(), "Save frame")
+
+    def _pump(self, predicate: Any, timeout: float = 3.0) -> bool:
+        """Spin the Qt loop until a worker-thread signal lands (or timeout)."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            QApplication.processEvents()
+            if predicate():
+                return True
+            time.sleep(0.02)
+        return bool(predicate())
+
+    def test_manual_recording_starts_and_stops_from_the_logs_section(self):
+        with patch.object(logs_tab_mod, "ManualDriveRecorder", _FakeRecorder):
+            self.tab.manual_ck.setChecked(True)
+            self.tab.refresh_files()
+            self.assertEqual(len(_FakeRecorder.instances), 1)
+            self.assertEqual(_FakeRecorder.instances[0].starts, 1)
+            self.assertIn("recording your driving", self.tab.files_status.text())
+
+            self.tab.stop_manual_record()
+
+        self.assertEqual(_FakeRecorder.instances[0].stops, 1)
+        self.assertFalse(self.tab.manual_ck.isChecked())
+        self.assertNotIn("recording your driving", self.tab.files_status.text())
+
+    def test_manual_recording_is_refused_without_a_locator(self):
+        self.tab.get_loc = lambda: None
+
+        self.tab.manual_ck.setChecked(True)
+
+        self.assertFalse(self.tab.manual_ck.isChecked())
+
+
+def _settle(rounds: int = 4) -> None:
+    """Run the Qt layout passes so a hidden or new widget gets its geometry."""
+    for _ in range(rounds):
+        QApplication.sendPostedEvents(None, QEvent.Type.LayoutRequest)
+        QApplication.processEvents()
+
+
+def _item(flow: FlowLayout, index: int) -> QLayoutItem:
+    item = flow.itemAt(index)
+    assert item is not None
+    return item
+
+
+class TestFlowLayout(unittest.TestCase):
+    """The wrapping layout: rows break instead of overflowing the column."""
+
+    def _host(
+        self, widths: list[int], heights: list[int] | None = None
+    ) -> tuple[QWidget, FlowLayout]:
+        host = QWidget()
+        flow = FlowLayout(h_spacing=6, v_spacing=6)
+        flow.setContentsMargins(0, 0, 0, 0)
+        host.setLayout(flow)
+        for i, width in enumerate(widths):
+            btn = QPushButton(f"b{i}", host)
+            btn.setFixedSize(width, (heights[i] if heights else 20))
+            flow.addWidget(btn)
+        # A hidden widget gets no layout pass, so the probe window must be shown.
+        host.show()
+        self.addCleanup(host.close)
+        return host, flow
+
+    def test_items_wrap_onto_the_next_row(self):
+        host, flow = self._host([100, 100, 100])
+
+        host.resize(220, 200)
+        _settle()
+
+        rows = sorted({_item(flow, i).geometry().top() for i in range(flow.count())})
+        self.assertEqual(len(rows), 2)
+        for i in range(flow.count()):
+            self.assertLessEqual(_item(flow, i).geometry().right(), flow.geometry().right())
+        del flow
+
+    def test_single_item_never_exceeds_the_available_width(self):
+        host, flow = self._host([400])
+
+        host.resize(120, 200)
+        _settle()
+
+        item = _item(flow, 0)
+        self.assertEqual(item.sizeHint().width(), 400)
+        self.assertLessEqual(item.geometry().width(), flow.geometry().width())
+        del flow
+
+    def test_minimum_height_covers_the_stacked_layout(self):
+        _, flow = self._host([100, 100], [20, 30])
+
+        # Narrowest width: every item gets its own row, and the reported minimum
+        # height must be the sum of those rows, otherwise a scroll area clips it.
+        expected = 20 + flow.v_spacing + 30
+        self.assertEqual(flow.minimumSize().height(), expected)
+        self.assertEqual(flow.heightForWidth(flow.minimumSize().width()), expected)
+        del flow
+
+    def test_size_hint_does_not_pin_the_column_to_one_row(self):
+        _, flow = self._host([100, 100])
+
+        self.assertLessEqual(flow.sizeHint().width(), flow.minimumSize().width())
+        del flow
+
+    def test_one_row_hint_hugs_the_content(self):
+        host = QWidget()
+        flow = FlowLayout(h_spacing=6, v_spacing=0, one_row_hint=True)
+        flow.setContentsMargins(0, 0, 0, 0)
+        host.setLayout(flow)
+        for i in range(2):
+            btn = QPushButton(f"b{i}", host)
+            btn.setFixedSize(100, 20)
+            flow.addWidget(btn)
+        host.show()
+        self.addCleanup(host.close)
+
+        # A floating toolbar wants the one-row width; it only wraps when it has
+        # to, and the narrowest width stays reachable through minimumSize().
+        self.assertEqual(flow.sizeHint().width(), 206)
+        self.assertEqual(flow.minimumSize().width(), 100)
+        del flow
+
+    def test_expanding_items_share_the_row(self):
+        host, flow = self._host([40, 40], [20, 20])
+        for i in range(flow.count()):
+            widget = _item(flow, i).widget()
+            assert widget is not None
+            widget.setSizePolicy(
+                QSizePolicy.Policy.Expanding,
+                QSizePolicy.Policy.Preferred,
+            )
+
+        host.resize(400, 60)
+        _settle()
+
+        first = _item(flow, 0).geometry()
+        second = _item(flow, 1).geometry()
+        self.assertEqual(first.top(), second.top())
+        self.assertLessEqual(second.right(), flow.geometry().right())
+        del flow
+
+
+class TestSidebarAdaptiveLayout(unittest.TestCase):
+    """The Capture section must fit the 330..470 px sidebar column."""
+
+    def _app(self):
+        from autopilot.ui.app import App
+        from autopilot.vision.tracker import LiveLocator
+
+        with (
+            patch.object(LiveLocator, "start", lambda _self: None),
+            patch.object(App, "_load_map_worker", lambda _self, _name: None),
+            patch.object(App, "_save_cfg", lambda _self: None),
+        ):
+            app = App(AppConfig())
+        app.show()
+        app.side_stack.setCurrentIndex(0)
+        app.resize(1100, 760)
+        return app
+
+    def _resize_sidebar(self, app, width: int) -> None:
+        app.splitter.setSizes([width, max(200, app.width() - width)])
+        _settle()
+        app.side_stack.setCurrentIndex(0)
+        _settle()
+
+    def test_capture_column_reaches_its_minimum_width(self):
+        app = self._app()
+        try:
+            self._resize_sidebar(app, 330)
+
+            self.assertLessEqual(app.roi_tab.width(), 330)
+            self.assertLessEqual(app.roi_tab.diagnostics_card.width(), app.roi_tab.width())
+        finally:
+            app.close()
+
+    def test_previews_wrap_and_never_overflow_the_card(self):
+        app = self._app()
+        try:
+            roi = app.roi_tab
+            for width in (330, 400, 470):
+                self._resize_sidebar(app, width)
+                card = roi.diagnostics_card
+                rects = [roi.capture_panel.geometry(), roi.speed_panel.geometry()]
+                for rect in rects:
+                    self.assertLessEqual(rect.right(), card.width())
+                    self.assertLessEqual(rect.bottom(), card.height())
+                    self.assertGreaterEqual(rect.width(), 100)
+                stacked = rects[0].top() != rects[1].top()
+                self.assertEqual(stacked, rects[0].right() + 6 > rects[1].right())
+        finally:
+            app.close()
+
+    def test_sidebar_cards_never_exceed_the_page_width(self):
+        app = self._app()
+        try:
+            for tab in range(app.side_stack.count()):
+                app.side_stack.setCurrentIndex(tab)
+                for width in (330, 470):
+                    self._resize_sidebar(app, width)
+                    app.side_stack.setCurrentIndex(tab)
+                    _settle()
+                    page = app.side_stack.currentWidget()
+                    for card in page.findChildren(QGroupBox):
+                        if card.parentWidget() is page:
+                            self.assertLessEqual(card.width(), page.width(), card.title())
         finally:
             app.close()
 

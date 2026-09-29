@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 
 from ... import PROJECT_ROOT, crashlog
 from ...vision import asset_sync, locator
+from ..flow_layout import FlowLayout
 from ..icons import icon
 from ..theme import BLUE, GREEN, RED, TEXT_DIM, YELLOW
 from .common import RoiTabBase, compact_label
@@ -113,9 +114,8 @@ class RoiCacheMixin(RoiTabBase):
         row_map.addWidget(self._cache_map_sel, stretch=1)
         cache_layout.addLayout(row_map)
 
-        # Buttons on their own row: the sidebar column is narrow.
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(8)
+        # Buttons on their own wrapping row: the sidebar column is narrow.
+        btn_row = FlowLayout(h_spacing=8, v_spacing=6)
         self._cache_download_btn = QPushButton("Download", card_cache)
         self._cache_download_btn.setIcon(icon("download"))
         self._cache_download_btn.setToolTip(
@@ -131,7 +131,6 @@ class RoiCacheMixin(RoiTabBase):
         )
         self._cache_rebuild_btn.clicked.connect(self._cache_rebuild_click)
         btn_row.addWidget(self._cache_rebuild_btn)
-        btn_row.addStretch()
         cache_layout.addLayout(btn_row)
 
         self._cache_status_lbl = QLabel("", card_cache)

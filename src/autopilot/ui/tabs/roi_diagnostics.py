@@ -1,35 +1,96 @@
-"""Live capture diagnostics card for the Capture tab: previews and snapshots."""
+"""Live capture preview card of the Capture section (frame + mask + keypoints)."""
 
 from __future__ import annotations
 
-import os
-import threading
-
 import cv2
 import numpy as np
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QGroupBox,
-    QHBoxLayout,
     QLabel,
-    QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
-from ... import PROJECT_ROOT, crashlog
-from ..debug_collage import save_debug_snapshot
-from ..icons import icon
+from ..flow_layout import FlowLayout
 from ..imaging import to_qpixmap
 from ..theme import BLUE, BORDER, GREEN, PANEL_BG, RED, TEXT_DIM, YELLOW
 from .common import RoiTabBase
 
 MAX_KP_DRAW = 300
 
+_PREVIEW_STYLE = f"background-color: {PANEL_BG}; border-radius: 4px; border: 1px solid {BORDER};"
+_TITLE_STYLE = "font-weight: bold; font-size: 9pt;"
+SPEED_OK = "#7ce06a"
+
+
+class PreviewPanel(QWidget):
+    """Titled image panel that follows the width it is given and never clips.
+
+    The panel asks for a comfortable height for whatever width the wrapping
+    layout hands it (`heightForWidth`), so a wide stacked panel is taller than a
+    narrow side-by-side one, and the frame inside is scaled to fit.
+    """
+
+    PREFERRED_WIDTH = 184
+    MIN_WIDTH = 110
+
+    def __init__(
+        self,
+        title: str,
+        aspect: float,
+        min_height: int,
+        max_height: int,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.aspect = aspect
+        self.min_height = min_height
+        self.max_height = max_height
+        # A vertically `Fixed` widget would be capped at its own hint height by
+        # Qt (QWidgetItem::maximumSize), so the panel must be allowed to grow.
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        box = QVBoxLayout(self)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(3)
+
+        self.title_lbl = QLabel(title, self)
+        self.title_lbl.setStyleSheet(f"color: {BLUE}; {_TITLE_STYLE}")
+        box.addWidget(self.title_lbl)
+
+        self.preview_lbl = QLabel(self)
+        self.preview_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview_lbl.setStyleSheet(_PREVIEW_STYLE)
+        # The image label must never demand width of its own.
+        self.preview_lbl.setMinimumSize(0, 0)
+        self.preview_lbl.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
+        box.addWidget(self.preview_lbl, stretch=1)
+
+    def flow_height_for_width(self, width: int) -> int:
+        """Height the wrapping layout must give this panel at `width`."""
+        return max(self.min_height, min(self.max_height, int(max(0, width) * self.aspect)))
+
+    def heightForWidth(self, width: int) -> int:  # noqa: N802 - Qt naming
+        return self.flow_height_for_width(width)
+
+    def hasHeightForWidth(self) -> bool:  # noqa: N802 - Qt naming
+        return True
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt naming
+        return QSize(self.PREFERRED_WIDTH, self.flow_height_for_width(self.PREFERRED_WIDTH))
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt naming
+        return QSize(self.MIN_WIDTH, self.min_height)
+
+    def set_title(self, text: str, color: str) -> None:
+        self.title_lbl.setText(text)
+        self.title_lbl.setStyleSheet(f"color: {color}; {_TITLE_STYLE}")
+
 
 class RoiDiagnosticsMixin(RoiTabBase):
-    """Live preview (frame + mask + keypoints merged) and diagnostic snapshots."""
+    """Live preview (frame + mask + keypoints merged) for the Capture section."""
 
     def _build_diagnostics_card(self, layout: QVBoxLayout) -> None:
         # Live capture diagnostic card
@@ -39,69 +100,24 @@ class RoiDiagnosticsMixin(RoiTabBase):
         prev_layout.setContentsMargins(10, 12, 10, 10)
         prev_layout.setSpacing(6)
 
-        hdr_row = QHBoxLayout()
-        hdr_row.setSpacing(8)
-        self.save_status_lbl = QLabel("", card_prev)
-        self.save_status_lbl.setStyleSheet(f"color: {GREEN}; font-size: 8pt; font-weight: 500;")
-        hdr_row.addWidget(self.save_status_lbl, stretch=1)
-
-        self.open_snap_btn = QPushButton("Open snapshot", card_prev)
-        self.open_snap_btn.setIcon(icon("folder"))
-        self.open_snap_btn.setToolTip("Open last saved diagnostic snapshot folder")
-        self.open_snap_btn.setVisible(False)
-        self.open_snap_btn.clicked.connect(self._open_last_snapshot)
-        hdr_row.addWidget(self.open_snap_btn)
-
-        self.save_snap_btn = QPushButton("Save frame", card_prev)
-        self.save_snap_btn.setIcon(icon("camera"))
-        self.save_snap_btn.setToolTip(
-            "Save diagnostic snapshot: 3 preview frames, map crop, and state log to output/"
-        )
-        self.save_snap_btn.clicked.connect(self.save_debug_frame)
-        hdr_row.addWidget(self.save_snap_btn)
-        prev_layout.addLayout(hdr_row)
-
-        panels_row = QHBoxLayout()
-        panels_row.setSpacing(8)
+        # The previews share one row while they fit the sidebar width and wrap
+        # onto separate rows when the column gets too narrow.
+        panels_row = FlowLayout(h_spacing=8, v_spacing=8)
+        panels_row.setContentsMargins(0, 0, 0, 0)
 
         # Merged capture panel: frame + mask overlay + keypoints/inliers
-        p1_box = QVBoxLayout()
-        p1_box.setSpacing(4)
-        self.capture_title_lbl = QLabel("Capture", card_prev)
-        self.capture_title_lbl.setStyleSheet(f"color: {BLUE}; font-weight: bold; font-size: 9pt;")
-        self.preview_lbl = QLabel(card_prev)
-        self.preview_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.preview_lbl.setStyleSheet(
-            f"background-color: {PANEL_BG}; border-radius: 4px; border: 1px solid {BORDER};"
-        )
-        self.preview_lbl.setMinimumSize(200, 120)
-        p1_box.addWidget(self.capture_title_lbl)
-        p1_box.addWidget(self.preview_lbl, stretch=1)
-        panels_row.addLayout(p1_box, stretch=3)
+        self.capture_panel = PreviewPanel("Capture", aspect=0.50, min_height=104, max_height=175)
+        self.capture_title_lbl = self.capture_panel.title_lbl
+        self.preview_lbl = self.capture_panel.preview_lbl
+        panels_row.addWidget(self.capture_panel)
 
-        p4_box = QVBoxLayout()
-        p4_box.setSpacing(4)
-        self.speed_title_lbl = QLabel("Speed OCR", card_prev)
-        self.speed_title_lbl.setStyleSheet(f"color: {BLUE}; font-weight: bold; font-size: 9pt;")
-        self.speed_preview_lbl = QLabel(card_prev)
-        self.speed_preview_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.speed_preview_lbl.setStyleSheet(
-            f"background-color: {PANEL_BG}; border-radius: 4px; border: 1px solid {BORDER};"
-        )
-        self.speed_preview_lbl.setMinimumSize(140, 120)
-        p4_box.addWidget(self.speed_title_lbl)
-        p4_box.addWidget(self.speed_preview_lbl, stretch=1)
-        panels_row.addLayout(p4_box, stretch=1)
+        self.speed_panel = PreviewPanel("Speed OCR", aspect=0.32, min_height=76, max_height=125)
+        self.speed_title_lbl = self.speed_panel.title_lbl
+        self.speed_preview_lbl = self.speed_panel.preview_lbl
+        panels_row.addWidget(self.speed_panel)
 
-        prev_layout.addLayout(panels_row, stretch=1)
-        layout.addWidget(card_prev, stretch=1)
-
-    def detach_diagnostics(self) -> QWidget:
-        """Release the live preview card for the always-visible right pane."""
-        layout = self.layout()
-        if layout is not None:
-            layout.removeWidget(self.diagnostics_card)
-        return self.diagnostics_card
+        prev_layout.addLayout(panels_row)
+        layout.addWidget(card_prev)
 
     def _panel_placeholder(self, lbl: QLabel, text: str) -> None:
         """Muted text instead of an empty black rectangle."""
@@ -190,9 +206,8 @@ class RoiDiagnosticsMixin(RoiTabBase):
         n_inl = len(inlier_pts)
         col_hex = GREEN if n_inl >= 4 else (f"{BLUE}" if n_kp > 0 else f"{RED}")
         mask_txt = f" | mask {mask_pct:.1f}%" if mask_pct is not None else ""
-        self.capture_title_lbl.setText(f"Capture ({w}×{h}) | {n_kp} pts, {n_inl} inl{mask_txt}")
-        self.capture_title_lbl.setStyleSheet(
-            f"color: {col_hex}; font-weight: bold; font-size: 9pt;"
+        self.capture_panel.set_title(
+            f"Capture ({w}×{h}) | {n_kp} pts, {n_inl} inl{mask_txt}", col_hex
         )
         set_panel(self.preview_lbl, p1)
 
@@ -216,93 +231,17 @@ class RoiDiagnosticsMixin(RoiTabBase):
                 bx, by, bw, bh = box
                 cv2.rectangle(p4, (bx, by), (bx + bw, by + bh), (0, 255, 255), 1)
             if speed_ok and speed_kmh is not None:
-                self.speed_title_lbl.setText(f"Speed OCR: {speed_kmh} km/h")
-                self.speed_title_lbl.setStyleSheet(
-                    "color: #7ce06a; font-weight: bold; font-size: 9pt;"
-                )
+                self.speed_panel.set_title(f"Speed OCR: {speed_kmh} km/h", SPEED_OK)
             else:
-                self.speed_title_lbl.setText("Speed OCR: —")
-                self.speed_title_lbl.setStyleSheet(
-                    f"color: {YELLOW}; font-weight: bold; font-size: 9pt;"
-                )
+                self.speed_panel.set_title("Speed OCR: —", YELLOW)
         else:
             if self.cfg.get("capture", {}).get("speed_roi"):
-                self.speed_title_lbl.setText("Speed OCR: waiting")
+                self.speed_panel.set_title("Speed OCR: waiting", TEXT_DIM)
                 self._panel_placeholder(self.speed_preview_lbl, "waiting for the speed ROI…")
             else:
-                self.speed_title_lbl.setText("Speed OCR: disabled")
+                self.speed_panel.set_title("Speed OCR: disabled", TEXT_DIM)
                 self._panel_placeholder(
                     self.speed_preview_lbl, "disabled\n(pick a speed zone to enable)"
                 )
-            self.speed_title_lbl.setStyleSheet(
-                f"color: {TEXT_DIM}; font-weight: bold; font-size: 9pt;"
-            )
             return
         set_panel(self.speed_preview_lbl, p4)
-
-    def save_debug_frame(self) -> None:
-        """Capture live diagnostic snapshot asynchronously."""
-        if getattr(self, "_snap_busy", False):
-            return
-        loc = self.get_loc()
-        if loc is None:
-            self.save_status_lbl.setText("Locator not active")
-            self.save_status_lbl.setStyleSheet(f"color: {YELLOW}; font-size: 8pt;")
-            return
-        self._snap_busy = True
-        self.save_snap_btn.setEnabled(False)
-        self.save_snap_btn.setText("Saving...")
-
-        def worker() -> None:
-            try:
-                mm_gray, mm_bgr, mask, latest = loc.snapshot_debug()
-                if mm_gray is None:
-                    self.sig_save_failed.emit("No frame captured yet")
-                    return
-                pose = latest.get("pose") if isinstance(latest, dict) else None
-                raw_diag = latest.get("diag") if isinstance(latest, dict) else None
-                diag = dict(raw_diag) if isinstance(raw_diag, dict) else {}
-                roi = self.cfg.get("capture", {}).get("mmap_roi")
-                map_name = self.cfg.get("map", {}).get("name", "zestafona")
-                out_dir = os.path.join(PROJECT_ROOT, "output")
-                _, snap_dir, _ = save_debug_snapshot(
-                    out_dir,
-                    mm_gray,
-                    mm_bgr,
-                    mask,
-                    pose,
-                    diag,
-                    latest,
-                    map_name=map_name,
-                    roi=roi,
-                )
-                self.sig_save_done.emit(snap_dir)
-            except Exception as exc:
-                crashlog.log("save debug snapshot", exc)
-                self.sig_save_failed.emit(str(exc))
-            finally:
-                self._snap_busy = False
-
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _on_save_done(self, snap_dir: str) -> None:
-        self._last_snapshot_dir = snap_dir
-        folder_name = os.path.basename(snap_dir)
-        self.save_status_lbl.setText(f"✓ Saved to {folder_name}")
-        self.save_status_lbl.setStyleSheet(f"color: {GREEN}; font-size: 8pt; font-weight: 500;")
-        self.open_snap_btn.setVisible(True)
-        self.save_snap_btn.setEnabled(True)
-        self.save_snap_btn.setText("Save frame")
-
-    def _on_save_failed(self, err_msg: str) -> None:
-        self.save_status_lbl.setText(f"Save failed: {err_msg}")
-        self.save_status_lbl.setStyleSheet(f"color: {RED}; font-size: 9pt;")
-        self.save_snap_btn.setEnabled(True)
-        self.save_snap_btn.setText("Save frame")
-
-    def _open_last_snapshot(self) -> None:
-        if self._last_snapshot_dir and os.path.isdir(self._last_snapshot_dir):
-            try:
-                os.startfile(self._last_snapshot_dir)
-            except Exception as exc:
-                crashlog.log("open snapshot directory", exc)
