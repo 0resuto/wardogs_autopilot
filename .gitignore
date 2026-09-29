@@ -74,3 +74,7 @@ data/maps/*
 
 # Release staging produced by tools/build_map_assets.py --export
 dist-assets/
+
+# Machine state (window geometry, tuned gains): AppConfig.load seeds it from the
+# tracked config.default.json on first run, so every checkout has the defaults.
+config.json

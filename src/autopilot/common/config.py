@@ -15,6 +15,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from .. import PROJECT_ROOT
 
+#: Tracked template that a fresh checkout is seeded from; the working config.json
+#: itself is machine state (window geometry, tuned gains) and is git-ignored.
+CONFIG_TEMPLATE_NAME = "config.default.json"
+
 
 def resolve_config_path(path: str | Path) -> Path:
     """Absolute config path: relative paths are rooted at the project root."""
@@ -22,6 +26,11 @@ def resolve_config_path(path: str | Path) -> Path:
     if not candidate.is_absolute():
         candidate = Path(PROJECT_ROOT) / candidate
     return candidate
+
+
+def config_template_path() -> Path:
+    """Absolute path of the tracked config template used to seed a fresh setup."""
+    return Path(PROJECT_ROOT) / CONFIG_TEMPLATE_NAME
 
 
 class CaptureConfig(BaseModel):
@@ -318,9 +327,11 @@ class AppConfig(BaseModel):
 
         Relative paths are resolved against the project root (where
         config.json lives), so the app behaves the same regardless of the
-        working directory.
+        working directory. A missing file is created first (see
+        `ensure_config_file`), so a fresh checkout starts with the maintained
+        defaults instead of failing on an absent config.json.
         """
-        cfg_path = resolve_config_path(path)
+        cfg_path = ensure_config_file(path)
         with open(cfg_path, encoding="utf-8") as f:
             data = json.load(f)
         cfg = cls.model_validate(data)
@@ -358,3 +369,37 @@ def atomic_write_json(path: str | Path, payload: Any) -> None:
         except OSError:
             pass
         raise
+
+
+def ensure_config_file(path: str | Path) -> Path:
+    """Create the working config at `path` from the template when it is absent.
+
+    The working config.json is machine state and is not tracked; a fresh
+    checkout would otherwise start without one. The file is seeded from the
+    tracked `config.default.json` so the maintained defaults (capture ROI,
+    active map, serial port, window size) stay in one reviewable place. A
+    missing or invalid template falls back to the schema defaults: starting the
+    app must never depend on a repository asset.
+
+    An existing file is returned untouched, so a config.json that lives on this
+    machine keeps its tuned values across updates.
+    """
+    target = resolve_config_path(path)
+    if target.exists():
+        return target
+
+    payload: dict[str, Any] | None = None
+    template = config_template_path()
+    if template.exists():
+        try:
+            with open(template, encoding="utf-8") as f:
+                data = json.load(f)
+            payload = AppConfig.model_validate(data).model_dump(by_alias=True, exclude={"cfg_path"})
+        except Exception:
+            payload = None
+    if payload is None:
+        payload = AppConfig().model_dump(by_alias=True, exclude={"cfg_path"})
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(target, payload)
+    return target

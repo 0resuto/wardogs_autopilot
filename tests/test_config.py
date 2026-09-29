@@ -1,14 +1,18 @@
 """Unit tests for Pydantic configuration schema and logging setup."""
 
+import json
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
+from autopilot.common import config as config_mod
 from autopilot.common.config import (
     AppConfig,
     CaptureConfig,
     LocatorConfig,
+    config_template_path,
+    ensure_config_file,
     resolve_config_path,
 )
 from autopilot.common.log import get_logger, setup_logging
@@ -35,6 +39,58 @@ def test_config_roundtrip_to_custom_path(tmp_path):
     cfg.capture.fps = 33
     cfg.save()
     assert AppConfig.load(target).capture.fps == 33
+
+
+def test_missing_config_is_seeded_from_the_template(tmp_path):
+    """A fresh checkout gets the maintained defaults instead of FileNotFoundError."""
+    target = tmp_path / "nested" / "config.json"
+    assert not target.exists()
+
+    cfg = AppConfig.load(target)
+
+    assert target.exists(), "load() must create the working config file"
+    assert cfg.cfg_path == str(target)
+    # The template carries curated values the bare schema defaults do not, so
+    # this proves the file came from config.default.json rather than AppConfig().
+    assert AppConfig().ui.window_w == 0
+    assert cfg.ui.window_w == 1100
+    assert cfg.navigator.port == "COM6"
+
+
+def test_existing_config_is_never_reseeded(tmp_path):
+    """A config.json that already lives on this machine keeps its tuned values."""
+    target = tmp_path / "config.json"
+    original = '{"capture": {"fps": 9}}'
+    target.write_text(original, encoding="utf-8")
+
+    cfg = AppConfig.load(target)
+
+    assert cfg.capture.fps == 9
+    assert target.read_text(encoding="utf-8") == original
+
+
+def test_default_template_is_valid_and_has_no_unknown_fields():
+    """A typo in the template would otherwise be seeded as an extra key."""
+    template = config_template_path()
+    assert template.exists(), f"missing tracked template {template.name}"
+    raw = json.loads(template.read_text(encoding="utf-8"))
+
+    seeded = AppConfig.model_validate(raw).model_dump(by_alias=True, exclude={"cfg_path"})
+    expected = AppConfig().model_dump(by_alias=True, exclude={"cfg_path"})
+
+    for section, fields in expected.items():
+        assert set(seeded[section]) == set(fields), f"unexpected keys in {section}"
+
+
+def test_seeding_falls_back_to_schema_defaults_without_a_template(tmp_path, monkeypatch):
+    """Starting the app must not depend on a repository asset being present."""
+    monkeypatch.setattr(config_mod, "CONFIG_TEMPLATE_NAME", "no_such_template.json")
+    target = tmp_path / "config.json"
+
+    ensure_config_file(target)
+
+    seeded = json.loads(target.read_text(encoding="utf-8"))
+    assert seeded == AppConfig().model_dump(by_alias=True, exclude={"cfg_path"})
 
 
 def test_saved_config_does_not_store_the_local_path(tmp_path):
