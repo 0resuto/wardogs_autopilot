@@ -42,6 +42,7 @@ class MapGraphicsView(QGraphicsView):
 
     def set_route_mode(self, enabled: bool) -> None:
         self._route_edit_mode = enabled
+        self.map_scene.set_edit_mode(enabled)
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)

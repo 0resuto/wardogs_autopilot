@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import sys
 import threading
+import time
 from typing import Any
 
 import numpy as np
@@ -22,6 +23,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from serial.tools import list_ports
 
 from ..common.config import (
     AppConfig,
@@ -187,7 +189,11 @@ class App(QMainWindow):
 
         tb_layout.addStretch()
 
-        # Right: Live status indicators & Hotkeys
+        # Right: hardware, live status indicators & hotkeys
+        self._status_hw = QLabel("", toolbar)
+        self._status_hw.setStyleSheet("color: #808080; font-size: 9pt;")
+        tb_layout.addWidget(self._status_hw)
+
         self._status_loc = QLabel("○ SEARCHING", toolbar)
         self._status_loc.setStyleSheet("color: #ffaa00; font-weight: bold; font-size: 9pt;")
         tb_layout.addWidget(self._status_loc)
@@ -205,6 +211,8 @@ class App(QMainWindow):
         tb_layout.addWidget(self._hotkey_lbl)
         self._hotkeys.registration_changed.connect(self._on_hotkey_state)
         self._on_hotkey_state(self._hotkeys.is_ready())
+        self._hw_check_at = 0.0
+        self._update_hw_status()
 
         root_layout.addWidget(toolbar)
 
@@ -225,6 +233,7 @@ class App(QMainWindow):
 
         self.map_tab = MapTab(
             self.nb,
+            on_open_capture=lambda: self.nb.setCurrentIndex(0),
             cfg=self.cfg,
             save_cfg_fn=self._save_cfg,
             loc_thread_supplier=lambda: self._loc_thread,
@@ -259,6 +268,7 @@ class App(QMainWindow):
         self._map_size_lbl.setText(f"{self._map_size}x{self._map_size}")
         self.map_tab.map_name = name
         self.map_tab.preset_reload()
+        self.map_tab.map_loading()
         threading.Thread(target=self._load_map_worker, args=(name,), daemon=True).start()
 
     def _on_map_rebuilt(self, name: str) -> None:
@@ -274,6 +284,7 @@ class App(QMainWindow):
             self.sig_map_loaded.emit(name, pyr, map_size)
         except Exception as exc:
             logger.error("Failed to load map '%s': %s", name, exc)
+            self.sig_map_loaded.emit(name, None, 32768)
 
     def _on_map_loaded_ui(self, name: str, pyr: Any, map_size: int) -> None:
         if name != self._map_name:
@@ -284,10 +295,30 @@ class App(QMainWindow):
         self.map_tab.map_widget.scene.set_map(None, pyr, map_size=map_size, thumb=self._thumb)
         self.map_tab.map_widget.view.fit_view()
         self._map_size_lbl.setText(f"{map_size}x{map_size}")
+        self.map_tab.map_loaded()
 
     def _on_tab_changed(self, index: int) -> None:
         if index == 1:
             QTimer.singleShot(50, self.map_tab.map_widget.view.fit_view)
+
+    def _update_hw_status(self) -> None:
+        """Top-bar indicator: is the configured Arduino serial port present?"""
+        port = str(getattr(self.app_cfg.navigator, "port", "") or "")
+        present = False
+        try:
+            present = any(p.device.upper() == port.upper() for p in list_ports.comports())
+        except Exception:
+            present = False
+        if present:
+            self._status_hw.setText(f"● Arduino {port}")
+            self._status_hw.setStyleSheet("color: #8ae234; font-size: 9pt;")
+            self._status_hw.setToolTip(f"Arduino detected on {port}")
+        else:
+            self._status_hw.setText(f"○ Arduino {port}")
+            self._status_hw.setStyleSheet("color: #808080; font-size: 9pt;")
+            self._status_hw.setToolTip(
+                f"{port} not found — the autopilot reports an error when you start Follow"
+            )
 
     def _poll(self) -> None:
         """Periodic UI update loop at 20 Hz (50 ms)."""
@@ -297,6 +328,12 @@ class App(QMainWindow):
             self._last_loc = latest
             self.map_tab.update_loc(latest)
             self.routes_tab.sync_driver_state()
+
+            # Hardware presence is polled slowly (COM port enumeration)
+            now = time.time()
+            if now - self._hw_check_at >= 5.0:
+                self._hw_check_at = now
+                self._update_hw_status()
 
             # Update latency display next to status badge
             elapsed = latest.get("elapsed") if latest else None

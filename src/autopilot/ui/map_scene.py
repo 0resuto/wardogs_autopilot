@@ -27,6 +27,36 @@ from .map_renderer import crop_map_viewport
 from .theme import RGB_CANVAS
 
 
+class RouteEndpointItem(QGraphicsItem):
+    """Start/end marker of the route: fixed screen size, no interaction.
+
+    The normal (non-edit) map shows only these two markers plus the route line:
+    a numbered circle on every recorded point (hundreds for a manual route)
+    merged into an unreadable "caterpillar" at map zoom.
+    """
+
+    RADIUS = 7.0  # Screen pixels
+
+    def __init__(self, label: str, color: str) -> None:
+        super().__init__()
+        self._label = label
+        self._color = QColor(color)
+        self.setZValue(9)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
+
+    def boundingRect(self) -> QRectF:
+        return QRectF(-10, -10, 20, 20)
+
+    def paint(self, painter: QPainter, option: Any, widget: Any = None) -> None:
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(self._color.darker(140), 1.5))
+        painter.setBrush(QBrush(self._color))
+        painter.drawEllipse(QPointF(0, 0), self.RADIUS, self.RADIUS)
+        painter.setFont(QFont("Segoe UI", 7, QFont.Weight.Bold))
+        painter.setPen(QColor("#101010"))
+        painter.drawText(QRectF(-8, -8, 16, 16), Qt.AlignmentFlag.AlignCenter, self._label)
+
+
 class WaypointItem(QGraphicsItem):
     """Interactive route waypoint with fixed screen-space size and drag-and-drop support."""
 
@@ -161,7 +191,9 @@ class MapGraphicsScene(QGraphicsScene):
 
         # Waypoint items
         self.waypoint_items: list[WaypointItem] = []
+        self._endpoint_items: list[RouteEndpointItem] = []
         self.route_pts: list[list[float]] = []
+        self._edit_mode = True  # bare scenes keep numbered waypoints (tests/tools)
 
         # Vehicle marker
         self.vehicle_marker = VehicleMarkerItem()
@@ -215,15 +247,39 @@ class MapGraphicsScene(QGraphicsScene):
         self.route_pts = pts
         self.refresh_waypoints()
 
+    def set_edit_mode(self, enabled: bool) -> None:
+        """Switch between the decluttered view (line + endpoints) and numbered
+        waypoints (the route editor needs per-point handles)."""
+        enabled = bool(enabled)
+        if enabled == self._edit_mode:
+            return
+        self._edit_mode = enabled
+        self.refresh_waypoints()
+
     def refresh_waypoints(self) -> None:
         for wp in self.waypoint_items:
             self.removeItem(wp)
         self.waypoint_items.clear()
+        for ep in self._endpoint_items:
+            self.removeItem(ep)
+        self._endpoint_items.clear()
 
-        for i, (x, y) in enumerate(self.route_pts):
-            item = WaypointItem(i, x, y, self._on_waypoint_moved, self._on_waypoint_deleted)
-            self.addItem(item)
-            self.waypoint_items.append(item)
+        if self._edit_mode:
+            for i, (x, y) in enumerate(self.route_pts):
+                item = WaypointItem(i, x, y, self._on_waypoint_moved, self._on_waypoint_deleted)
+                self.addItem(item)
+                self.waypoint_items.append(item)
+        else:
+            if self.route_pts:
+                start = RouteEndpointItem("S", "#7ce06a")
+                start.setPos(self.route_pts[0][0], self.route_pts[0][1])
+                self.addItem(start)
+                self._endpoint_items.append(start)
+            if len(self.route_pts) > 1:
+                end = RouteEndpointItem("E", "#ff9f43")
+                end.setPos(self.route_pts[-1][0], self.route_pts[-1][1])
+                self.addItem(end)
+                self._endpoint_items.append(end)
 
         self._update_route_line()
 

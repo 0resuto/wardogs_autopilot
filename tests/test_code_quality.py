@@ -10,6 +10,7 @@ import os
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
@@ -453,6 +454,43 @@ class TestMapScaleDisplay(unittest.TestCase):
         tab.route_pts = [[0.0, 0.0], [200.0, 0.0]]
         self.assertIn("100 m", tab.routes_status.text())
 
+    def test_route_eta_uses_the_corner_planner(self):
+        class _Store:
+            def px_per_m(self, name: str) -> float:
+                return 2.0
+
+        tab = self._tab(_Store())
+        tab.route_pts = [[0.0, 0.0], [400.0, 0.0], [400.0, 400.0]]
+
+        self.assertIn("planned", tab.routes_status.text())
+
+
+class TestMapEmptyState(unittest.TestCase):
+    def test_notice_reports_missing_assets_and_hides_when_ready(self):
+        with tempfile.TemporaryDirectory() as tmp:
+
+            class _Store:
+                data_maps_dir = tmp
+
+            tab = MapTab(
+                None,
+                AppConfig(),
+                save_cfg_fn=lambda: None,
+                loc_thread_supplier=lambda: None,
+                map_store_supplier=lambda: _Store(),
+                map_name_supplier=lambda: "zestafona",
+            )
+
+            self.assertFalse(tab._map_notice.isHidden())
+            self.assertIn("not downloaded", tab._map_notice_lbl.text())
+
+            for suffix in ("mu.npy", "feat.npz", "preview_16384.npy"):
+                with open(os.path.join(tmp, f"zestafona_{suffix}"), "wb") as fh:
+                    fh.write(b"x")
+            tab.map_loaded()
+
+            self.assertTrue(tab._map_notice.isHidden())
+
 
 class TestPresetSanitization(unittest.TestCase):
     def test_traversal_is_neutralized(self):
@@ -586,6 +624,24 @@ class TestMapDownloadUi(unittest.TestCase):
             ):
                 app.roi_tab.cache_status_refresh()
                 self.assertFalse(app.roi_tab._cache_download_btn.isEnabled())
+        finally:
+            app.close()
+
+    def test_hardware_indicator_reflects_the_port(self):
+        from autopilot.ui import app as app_mod
+
+        app = self._app()
+        try:
+            with patch.object(
+                app_mod.list_ports, "comports", lambda: [SimpleNamespace(device="COM6")]
+            ):
+                app._update_hw_status()
+            self.assertIn("COM6", app._status_hw.text())
+            self.assertIn("●", app._status_hw.text())
+
+            with patch.object(app_mod.list_ports, "comports", lambda: []):
+                app._update_hw_status()
+            self.assertIn("○", app._status_hw.text())
         finally:
             app.close()
 

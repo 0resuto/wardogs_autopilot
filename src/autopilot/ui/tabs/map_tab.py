@@ -7,12 +7,15 @@ module: `MapTuningMixin` (locator/vehicle tuning panel), `MapPresetsMixin`
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from typing import Any
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -46,6 +49,7 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
         map_name_supplier: Callable[[], str] | None = None,
         map_store_supplier: Callable[[], Any] | None = None,
         on_pick_roi: Callable[[], None] | None = None,
+        on_open_capture: Callable[[], None] | None = None,
         app_cfg: AppConfig | None = None,
     ) -> None:
         super().__init__(parent)
@@ -63,6 +67,8 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
         )
         self.get_store = map_store_supplier or locator.get_store
         self.on_pick_roi = on_pick_roi
+        self.on_open_capture = on_open_capture
+        self._map_loaded = False
 
         self.map_name = self.get_map_name()
         self._disp_th: float | None = None
@@ -95,8 +101,89 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
         self._build_toolbar(root_layout)
         self._build_tuning_panel(root_layout)
         self._build_map_area(root_layout)
+        self._build_map_notice()
         self._build_bottom_bar(root_layout)
+        self._update_map_notice()
         self.preset_reload()
+
+    def resizeEvent(self, event: Any) -> None:
+        super().resizeEvent(event)
+        if getattr(self, "_map_notice", None) is not None:
+            self._place_map_notice()
+
+    def _build_map_notice(self) -> None:
+        """Empty-state card over the canvas (missing assets / loading)."""
+        self._map_notice = QFrame(self.map_widget)
+        self._map_notice.setObjectName("MapNotice")
+        self._map_notice.setStyleSheet(
+            "QFrame#MapNotice { background-color: rgba(22, 22, 22, 235); "
+            "border: 1px solid #3a3a3a; border-radius: 8px; }"
+            "QFrame#MapNotice QLabel { color: #d8d8d8; font-size: 10pt; border: none; }"
+        )
+        lay = QVBoxLayout(self._map_notice)
+        lay.setContentsMargins(18, 14, 18, 14)
+        lay.setSpacing(10)
+        self._map_notice_lbl = QLabel("", self._map_notice)
+        self._map_notice_lbl.setWordWrap(True)
+        self._map_notice_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._map_notice_lbl.setMaximumWidth(360)
+        lay.addWidget(self._map_notice_lbl)
+        self._map_notice_btn = QPushButton("Open Capture zone", self._map_notice)
+        self._map_notice_btn.setObjectName("AccentButton")
+        self._map_notice_btn.clicked.connect(self._open_capture_zone)
+        lay.addWidget(self._map_notice_btn, alignment=Qt.AlignmentFlag.AlignCenter)
+        self._map_notice.hide()
+
+    def _place_map_notice(self) -> None:
+        notice = self._map_notice
+        notice.adjustSize()
+        area = self.map_widget.rect()
+        notice.move(area.center() - notice.rect().center())
+
+    def _open_capture_zone(self) -> None:
+        if self.on_open_capture is not None:
+            self.on_open_capture()
+
+    def _show_map_notice(self, text: str, *, with_button: bool) -> None:
+        self._map_notice_lbl.setText(text)
+        self._map_notice_btn.setVisible(with_button and self.on_open_capture is not None)
+        self._place_map_notice()
+        self._map_notice.show()
+        self._map_notice.raise_()
+
+    def _update_map_notice(self) -> None:
+        """Reflect the map asset/load state on the canvas overlay."""
+        name = self.get_map_name()
+        data_dir = getattr(self.get_store(), "data_maps_dir", None)
+        if not data_dir:
+            self._map_notice.hide()
+            return
+
+        def exists(fname: str) -> bool:
+            return os.path.exists(os.path.join(str(data_dir), fname))
+
+        has_preview = any(exists(f"{name}_preview_{n}.npy") for n in locator.PREVIEW_SIZES)
+        has_base = all(exists(f"{name}_{s}") for s in ("mu.npy", "feat.npz"))
+        if not has_preview or not has_base:
+            self._show_map_notice(
+                f'Map assets for "{name}" are not downloaded.\n'
+                "Open Capture zone → Map Cache → Download.",
+                with_button=True,
+            )
+        elif not self._map_loaded:
+            self._show_map_notice("Loading map…", with_button=False)
+        else:
+            self._map_notice.hide()
+
+    def map_loading(self) -> None:
+        """Called by the app when a map (re)load starts."""
+        self._map_loaded = False
+        self._update_map_notice()
+
+    def map_loaded(self) -> None:
+        """Called by the app once the map scene has been populated."""
+        self._map_loaded = True
+        self._update_map_notice()
 
     def _build_toolbar(self, root_layout: QVBoxLayout) -> None:
         # --- Top toolbar: Route presets & Tuning toggle ---

@@ -51,6 +51,21 @@ class TestMapScene(unittest.TestCase):
         scene.add_waypoint(-10.0, 5000.0)
         self.assertEqual(scene.route_pts, [[0.0, 1000.0]])
 
+    def test_route_mode_switches_between_endpoints_and_waypoints(self):
+        scene = MapGraphicsScene(map_size=1000, thumb=8)
+        scene.set_route([[0.0, 0.0], [100.0, 100.0], [200.0, 0.0]])
+        # bare scenes default to the editor view with numbered waypoints
+        self.assertEqual(len(scene.waypoint_items), 3)
+        self.assertEqual(len(scene._endpoint_items), 0)
+
+        scene.set_edit_mode(False)
+        self.assertEqual(len(scene.waypoint_items), 0)
+        self.assertEqual(len(scene._endpoint_items), 2)
+
+        scene.set_edit_mode(True)
+        self.assertEqual(len(scene.waypoint_items), 3)
+        self.assertEqual(len(scene._endpoint_items), 0)
+
     def test_route_line_follows_waypoints(self):
         scene = MapGraphicsScene(map_size=1000, thumb=8)
         scene.set_route([[0.0, 0.0], [100.0, 100.0], [200.0, 0.0]])

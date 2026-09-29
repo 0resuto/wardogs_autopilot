@@ -6,6 +6,7 @@ import math
 
 from PySide6.QtWidgets import QMessageBox
 
+from ...navigation.speed_profile import G, RouteSpeedPlanner
 from .common import MapTabBase
 
 # Only used when the map catalog has no m_per_px entry for the active map.
@@ -85,14 +86,55 @@ class MapRouteEditMixin(MapTabBase):
             p0, p1 = self.route_pts[i - 1], self.route_pts[i]
             d_px = math.hypot(p1[0] - p0[0], p1[1] - p0[1])
             length_m += d_px / px_per_m
-        speed_cap = getattr(self.app_cfg.navigator, "speed_cap_kmh", 36.0) or 36.0
-        speed_mps = max(2.0, speed_cap / 3.6)
-        est_sec = int(length_m / speed_mps)
+        est_sec, planned = self._estimate_route_seconds(length_m)
         mins, secs = divmod(est_sec, 60)
         time_txt = f"{mins}m {secs:02d}s" if mins else f"{secs}s"
+        speed_cap = int(getattr(self.app_cfg.navigator, "speed_cap_kmh", 36.0) or 36.0)
+        how = "planned" if planned else f"at max {speed_cap} km/h"
         self.routes_status.setText(
-            f"Route: {len(self.route_pts)} pts | ~{int(length_m)} m ({time_txt} at {int(speed_cap)} km/h)"
+            f"Route: {len(self.route_pts)} pts | ~{int(length_m)} m ({time_txt}, {how})"
         )
+
+    def _estimate_route_seconds(self, length_m: float) -> tuple[int, bool]:
+        """(seconds, planned): planned=True when the corner planner timed it.
+
+        A cap-only estimate assumes the whole route at top speed, which is
+        optimistic whenever corners force braking; with the planner enabled the
+        per-vertex speed limits are integrated instead. Falls back to the cap
+        estimate when the planner is disabled or the map scale is unknown.
+        """
+        nav = self.app_cfg.navigator
+        px_per_m = self._map_px_per_m()
+        pts = self.route_pts
+        speed_cap = float(getattr(nav, "speed_cap_kmh", 36.0) or 36.0)
+        if getattr(nav, "speed_profile", False) and px_per_m > 0 and len(pts) >= 2:
+            try:
+                planner = RouteSpeedPlanner(
+                    lat_accel_mps2=float(nav.corner_lat_g) * G,
+                    brake_decel_mps2=float(nav.brake_g) * G,
+                    min_speed_kmh=float(nav.corner_min_kmh),
+                    lookahead_m=float(nav.plan_ahead_m),
+                    cut_m=float(nav.corner_cut_m),
+                )
+                pts_t = [(float(p[0]), float(p[1])) for p in pts]
+                total_s = 0.0
+                for i in range(1, len(pts_t)):
+                    p0, p1 = pts_t[i - 1], pts_t[i]
+                    seg_m = math.hypot(p1[0] - p0[0], p1[1] - p0[1]) / px_per_m
+                    if seg_m <= 0.0:
+                        continue
+                    v0 = planner.target_speed_kmh(p0, pts_t, i - 1, px_per_m)
+                    v1 = planner.target_speed_kmh(p1, pts_t, i, px_per_m)
+                    v_kmh = min(
+                        v0 if v0 is not None else speed_cap,
+                        v1 if v1 is not None else speed_cap,
+                    )
+                    total_s += seg_m / (max(v_kmh, 1.0) / 3.6)
+                if total_s > 0.0:
+                    return int(total_s), True
+            except Exception:
+                pass
+        return int(length_m / max(2.0, speed_cap / 3.6)), False
 
     def _set_route_controls_enabled(self) -> None:
         """Route controls are locked while editing or while the autopilot drives."""
