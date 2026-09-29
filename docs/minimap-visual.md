@@ -59,9 +59,19 @@ shifts and localization jitter) and plausible bounds (0.3..10 px/m); outside
 those gates it is ignored with a warning. Validate in game with
 `python tools/calibrate_vehicle.py output/nav_dbg_*.jsonl`.
 
-The catalog's png sizes/sha256 now describe the current asset extracts (the
-previous ones were stale); GitHub release assets must be re-uploaded before
-`tools/download_map.py` can verify them again.
+## Distributed artifacts and the cache signature
+
+`data/maps/catalog.json` lists the derived artifact set of every map
+(`<map>_feat.npz`, `<map>_mu.npy`, `<map>_preview_*.npy`, `<map>_gray.txt`)
+with sizes and sha256, plus `source` - the identity of the source PNG the
+caches were built from. The original map PNG is not distributed; only a
+maintainer machine holding it can rebuild the caches
+(`tools/build_map_assets.py --rebuild`). The runtime signature is
+`<palette>|<mini_scale>|<source>`; it is compared against `gray.txt` and the
+signature embedded in the feature index, so a different palette, mini scale or
+source invalidates the caches. `tools/download_map.py` fetches the artifact set
+and verifies the checksums (`--verify`); the GitHub release assets must be
+re-uploaded to match the catalog before downloads verify cleanly again.
 
 ## What the app does
 

@@ -100,12 +100,23 @@ flowchart LR
 ```bash
 uv sync                     # runtime + dev dependencies
 uv run python tools/download_map.py --list
-uv run python tools/download_map.py zestafona --rebuild   # mipmaps + SIFT index
+uv run python tools/download_map.py zestafona   # derived artifacts (index + caches)
+uv run python tools/download_map.py --all --verify
 uv run python main.py ui    # or autopilot.bat (windowless pythonw)
 ```
 
-If the feature index is missing, the locator reports `no_index`; build it with
-`uv run python -m autopilot.vision.featureindex --build zestafona`.
+Map assets are distributed as derived artifacts only (`<map>_feat.npz`,
+`<map>_mu.npy`, the `<map>_preview_*.npy` pyramid and `<map>_gray.txt`), listed
+with sizes and sha256 in `data/maps/catalog.json`; the original map PNG is not
+distributed. Rebuilding the caches from the source PNG is a maintainer flow:
+
+```bash
+uv run python tools/build_map_assets.py --all --rebuild --export dist-assets
+```
+
+If the feature index is missing, the locator reports `no_index`; download it
+with `tools/download_map.py <map>` (maintainers can rebuild it with
+`uv run python -m autopilot.vision.featureindex --build zestafona`).
 
 ### Arduino firmware
 
@@ -169,7 +180,8 @@ The firmware has a 200 ms watchdog.
 
 | Tool | Purpose |
 | --- | --- |
-| `tools/download_map.py` | fetch map assets from GitHub Releases |
+| `tools/download_map.py` | fetch the derived map artifacts from GitHub Releases (`--verify` checks sha256) |
+| `tools/build_map_assets.py` | refresh `catalog.json` from the artifacts; `--rebuild` regenerates caches from the source PNG (maintainer) |
 | `python -m autopilot.vision.featureindex` | build the SIFT index (`--build <map>`) |
 | `tools/selfcheck_features.py` | offline localization regression |
 | `tools/nav_dbg.py` | navigation trace inspector (`--tail`, `--bursts`) |
@@ -189,7 +201,7 @@ wardogs-autopilot/
 ├── arduino/
 │   └── keyboard_emulator/      # ATmega32U4 firmware (byte mask → HID WASD/Space)
 ├── data/
-│   ├── maps/                   # map images, mipmaps, SIFT indices (*_feat.npz)
+│   ├── maps/                   # derived artifacts: SIFT index, mu, preview pyramid, catalog
 │   ├── masks/                  # minimap static mask (mm_mask.png)
 │   ├── hud/                    # digit atlas + font for the speed OCR
 │   ├── presets/<map>/          # waypoint route presets
