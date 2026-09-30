@@ -202,6 +202,20 @@ class RoiDiagnosticsMixin(RoiTabBase):
         for pt in inlier_pts:
             cv2.circle(p1, (int(round(pt[0])), int(round(pt[1]))), 4, (0, 255, 0), -1)
             cv2.circle(p1, (int(round(pt[0])), int(round(pt[1]))), 6, (0, 200, 0), 1)
+
+        # Calibrated player center (locator center_dx/dy): the crosshair marks
+        # the point whose map position is reported, so it can be aligned with
+        # the in-game player arrow to remove the circular drift when turning.
+        try:
+            center_cfg = self.cfg.get("locator", {}) if isinstance(self.cfg, dict) else {}
+            cdx = float(center_cfg.get("center_dx", 0.0) or 0.0)
+            cdy = float(center_cfg.get("center_dy", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            cdx = cdy = 0.0
+        ccx = int(round(w / 2.0 + cdx))
+        ccy = int(round(h / 2.0 + cdy))
+        cv2.drawMarker(p1, (ccx, ccy), (255, 0, 255), cv2.MARKER_CROSS, markerSize=15, thickness=1)
+
         n_kp = len(kp_pts)
         n_inl = len(inlier_pts)
         col_hex = GREEN if n_inl >= 4 else (f"{BLUE}" if n_kp > 0 else f"{RED}")

@@ -49,10 +49,13 @@ class RoiTabBase(_BaseQt):
     on_map_rebuilt: Callable[[str], None] | None
     roi_vars: dict[str, StringVarCompat]
     speed_vars: dict[str, StringVarCompat]
+    center_vars: dict[str, StringVarCompat]
     coord_inputs: dict[str, QLineEdit]
     speed_inputs: dict[str, QLineEdit]
+    center_inputs: dict[str, QLineEdit]
     status_lbl: Any
     speed_status_lbl: Any
+    center_status_lbl: Any
     preview_lbl: Any
     _cache_map_sel: Any
     _cache_status_lbl: Any

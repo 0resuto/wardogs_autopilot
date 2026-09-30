@@ -156,7 +156,10 @@ class MapStore:
 
         try:
             cfg = AppConfig.load(path).locator.model_dump()
-        except Exception:
+        except Exception as exc:
+            # Never fail silently here: a silent fallback to defaults looks
+            # exactly like "the saved config was ignored" from the UI.
+            logger.warning("[map_store] locator config unreadable (%s): using defaults", exc)
             cfg = LocatorConfig().model_dump()
         self._loc_cfg_cache = (path, mtime, cfg)
         return cfg
@@ -175,7 +178,8 @@ class MapStore:
 
         try:
             cfg = AppConfig.load(path).map.model_dump()
-        except Exception:
+        except Exception as exc:
+            logger.warning("[map_store] map config unreadable (%s): using defaults", exc)
             cfg = MapConfig().model_dump()
         self._map_cfg_cache = (path, mtime, cfg)
         return cfg

@@ -306,6 +306,28 @@ class TestPresetStartup(unittest.TestCase):
         self.assertEqual(tab.p_sel.currentText(), name)
         self.assertEqual(tab.route_pts, tab.preset_mgr.load_preset(name))
 
+    def test_preset_selection_updates_both_config_views(self):
+        cfg = AppConfig()
+        tab = MapTab(
+            None,
+            cfg,
+            save_cfg_fn=lambda: None,
+            loc_thread_supplier=lambda: None,
+            app_cfg=cfg,
+        )
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        tab.preset_mgr = PresetManager(tmp.name, subdir="presets")
+        tab.preset_mgr.save_preset("p1", [[1.0, 2.0]])
+        tab.p_sel.clear()
+        tab.p_sel.addItem("p1")
+        tab.p_sel.setCurrentText("p1")
+
+        tab.preset_load_sel()
+
+        self.assertEqual(tab.cfg["navigator"]["last_preset"], "p1")
+        self.assertEqual(tab.app_cfg.navigator.last_preset, "p1")
+
     def test_save_as_writes_the_route_under_the_asked_name(self):
         cfg = AppConfig()
         tab = MapTab(
@@ -377,6 +399,27 @@ class TestRoiValidation(unittest.TestCase):
         self.assertIn("OK:", self.tab.status_lbl.text())
         self.assertEqual(self.cfg["capture"]["mmap_roi"], [45, 1009, 336, 277])
         self.assertEqual(self.tab.roi_vars["w"].get(), "336")
+        self.assertEqual(self.saved, 1)
+
+    def test_center_calibration_is_validated_and_applied(self):
+        self.tab.center_inputs["center_dx"].setText("12.5")
+        self.tab.center_inputs["center_dy"].setText("-8")
+        self.tab.apply_center()
+
+        self.assertIn("applied", self.tab.center_status_lbl.text())
+        self.assertEqual(self.cfg["locator"]["center_dx"], 12.5)
+        self.assertEqual(self.cfg["locator"]["center_dy"], -8.0)
+        self.assertEqual(self.saved, 1)
+
+        self.tab.center_inputs["center_dx"].setText("abc")
+        self.tab.apply_center()
+        self.assertIn("Error:", self.tab.center_status_lbl.text())
+        self.assertEqual(self.saved, 1)
+
+        self.tab.center_inputs["center_dx"].setText("500")
+        self.tab.apply_center()
+        self.assertIn("Error:", self.tab.center_status_lbl.text())
+        self.assertEqual(self.cfg["locator"]["center_dx"], 12.5)
         self.assertEqual(self.saved, 1)
 
 
@@ -640,6 +683,72 @@ class TestAppSmoke(unittest.TestCase):
                     locator.get_store().set_config_path(None)
 
             self.assertEqual(AppConfig.load(target).capture.fps, 17)
+
+    def test_save_keeps_foreign_config_changes(self):
+        """A stale studio snapshot must not revert values written to disk.
+
+        This is the two-instance / hand-edit case: the studio that did not make
+        the change used to overwrite the whole file on Apply/close, so the
+        change disappeared and the next start loaded the old defaults.
+        """
+        from autopilot.ui.app import App
+        from autopilot.vision import locator
+        from autopilot.vision.tracker import LiveLocator
+
+        with tempfile.TemporaryDirectory() as tmp:
+            target = os.path.join(tmp, "cfg.json")
+            AppConfig().save(target)
+            cfg = AppConfig.load(target).to_dict()
+
+            with (
+                patch.object(LiveLocator, "start", lambda _self: None),
+                patch.object(App, "_load_map_worker", lambda _self, _name: None),
+            ):
+                app = App(cfg)
+                try:
+                    foreign = AppConfig.load(target)
+                    foreign.locator.center_dy = 9.0
+                    foreign.save(target)
+
+                    app.cfg["navigator"]["yaw_gain"] = 0.7
+                    app._save_cfg()
+                finally:
+                    app.close()
+                    locator.get_store().set_config_path(None)
+
+            saved = AppConfig.load(target)
+            self.assertEqual(saved.locator.center_dy, 9.0)
+            self.assertEqual(saved.navigator.yaw_gain, 0.7)
+
+    def test_save_persists_app_cfg_only_changes(self):
+        """Settings set on the validated model must reach the file too.
+
+        `navigator.last_preset` is written only on app_cfg by the preset
+        handlers; the save used to rebuild that block from the cfg dict, so the
+        selection was silently lost on the next start.
+        """
+        from autopilot.ui.app import App
+        from autopilot.vision import locator
+        from autopilot.vision.tracker import LiveLocator
+
+        with tempfile.TemporaryDirectory() as tmp:
+            target = os.path.join(tmp, "cfg.json")
+            AppConfig().save(target)
+            cfg = AppConfig.load(target).to_dict()
+
+            with (
+                patch.object(LiveLocator, "start", lambda _self: None),
+                patch.object(App, "_load_map_worker", lambda _self, _name: None),
+            ):
+                app = App(cfg)
+                try:
+                    app.app_cfg.navigator.last_preset = "route42"
+                    app._save_cfg()
+                finally:
+                    app.close()
+                    locator.get_store().set_config_path(None)
+
+            self.assertEqual(AppConfig.load(target).navigator.last_preset, "route42")
 
 
 class TestMapDownloadUi(unittest.TestCase):

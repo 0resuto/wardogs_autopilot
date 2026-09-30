@@ -7,6 +7,8 @@ in the right pane.
 
 from __future__ import annotations
 
+import copy
+import json
 import sys
 import threading
 import time
@@ -32,12 +34,6 @@ from serial.tools import list_ports
 
 from ..common.config import (
     AppConfig,
-    CaptureConfig,
-    DebugConfig,
-    LocatorConfig,
-    MapConfig,
-    NavigatorConfig,
-    UiConfig,
     atomic_write_json,
 )
 from ..common.log import get_logger
@@ -110,6 +106,14 @@ class App(QMainWindow):
                 self.app_cfg = AppConfig(**cfg)
             except Exception:
                 self.app_cfg = AppConfig()
+
+        # Startup snapshot for the save diff: only values that change during the
+        # session are written back, so edits made on disk while the studio runs
+        # (a second instance, a hand-edited config.json) are not reverted.
+        self._cfg_start: dict[str, Any] = (
+            copy.deepcopy(self.cfg) if isinstance(self.cfg, dict) else {}
+        )
+        self._app_cfg_start: AppConfig = copy.deepcopy(self.app_cfg)
 
         self.setWindowTitle("WARDOGS minimap studio")
         self._restore_window_geometry()
@@ -460,22 +464,58 @@ class App(QMainWindow):
             self.routes_tab.routes_invert(silent=True)
 
     def _save_cfg(self) -> None:
+        """Persist the configuration, merging only values changed this session.
+
+        Writing the whole in-memory snapshot used to revert values edited on
+        disk while the studio was running — a second studio instance closing
+        later, or a manual config.json edit: the stale snapshot won on the next
+        Apply/close, and the next start looked like the defaults were loaded.
+        Diffing against the startup snapshot keeps such foreign changes intact;
+        every handler already calls this method right after its own change.
+        """
         target = self.app_cfg.cfg_path
         try:
-            app_cfg = AppConfig.load(target)
-            if "capture" in self.cfg and isinstance(self.cfg["capture"], dict):
-                app_cfg.capture = CaptureConfig(**self.cfg["capture"])
-            if "locator" in self.cfg and isinstance(self.cfg["locator"], dict):
-                app_cfg.locator = LocatorConfig(**self.cfg["locator"])
-            if "map" in self.cfg and isinstance(self.cfg["map"], dict):
-                app_cfg.map = MapConfig(**self.cfg["map"])
-            if "navigator" in self.cfg and isinstance(self.cfg["navigator"], dict):
-                app_cfg.navigator = NavigatorConfig(**self.cfg["navigator"])
-            if "debug" in self.cfg and isinstance(self.cfg["debug"], dict):
-                app_cfg.debug = DebugConfig(**self.cfg["debug"])
-            app_cfg.ui = UiConfig(**self.app_cfg.ui.model_dump())
-            app_cfg.save(target)
+            with open(target, encoding="utf-8") as f:
+                data: dict[str, Any] = json.load(f)
+            if not isinstance(data, dict):
+                data = {}
         except Exception:
+            # The file is gone/unreadable: rebuild it from the session state.
+            data = copy.deepcopy(self._cfg_start)
+
+        # Window geometry is runtime state owned by this window: always fresh.
+        data["ui"] = self.app_cfg.ui.model_dump()
+        for section in ("capture", "locator", "map", "navigator", "debug"):
+            stored = data.get(section)
+            stored = dict(stored) if isinstance(stored, dict) else {}
+
+            # Tabs mostly update the cfg dict; a few settings (navigator
+            # last_preset) live only on app_cfg. Diff both so neither kind of
+            # change is silently dropped or overwritten by a stale value.
+            current = self.cfg.get(section)
+            current = current if isinstance(current, dict) else {}
+            base = self._cfg_start.get(section)
+            base = base if isinstance(base, dict) else {}
+            for key, value in current.items():
+                if base.get(key) != value:
+                    stored[key] = value
+
+            model_now = getattr(self.app_cfg, section).model_dump()
+            model_start = getattr(self._app_cfg_start, section).model_dump()
+            for key, value in model_now.items():
+                if model_start.get(key) != value:
+                    stored[key] = value
+
+            data[section] = stored
+
+        try:
+            AppConfig.model_validate(data)
+            atomic_write_json(target, data)
+        except Exception as exc:
+            logger.warning(
+                "[studio] config save: merged document invalid (%s); writing the session snapshot",
+                exc,
+            )
             atomic_write_json(target, self.cfg)
 
     def closeEvent(self, event: Any) -> None:

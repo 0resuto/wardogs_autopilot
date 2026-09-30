@@ -33,7 +33,9 @@
     "heading_gate_deg": 0.0,
     "vote_inl_skip": 40,
     "early_inl": 40,
-    "hold_frames": 5
+    "hold_frames": 5,
+    "center_dx": 0.0,
+    "center_dy": 0.0
   },
   "map": {
     "name": "zestafona",

@@ -115,6 +115,23 @@ class LocatorConfig(BaseModel):
         "reaches this inlier count (0 = exhaustive scan)",
     )
     hold_frames: int = Field(default=5, ge=0)
+    center_dx: float = Field(
+        default=0.0,
+        ge=-1000.0,
+        le=1000.0,
+        description="Player-center calibration: horizontal offset (minimap px) of the "
+        "in-game player marker from the capture ROI midpoint (+ = right in the captured "
+        "frame). The pose reported on the map is the marker's location; a wrong center "
+        "shows up as the position circling the true point while the minimap rotates",
+    )
+    center_dy: float = Field(
+        default=0.0,
+        ge=-1000.0,
+        le=1000.0,
+        description="Player-center calibration: vertical offset (minimap px) of the "
+        "in-game player marker from the capture ROI midpoint (+ = down in the captured "
+        "frame)",
+    )
 
 
 class MapConfig(BaseModel):

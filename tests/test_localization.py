@@ -14,6 +14,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from autopilot.vision import locator
+from autopilot.vision.locator import MapLocator
 
 
 class TestLocalization(unittest.TestCase):
@@ -77,6 +78,34 @@ class TestLocalization(unittest.TestCase):
         self.assertIsNotNone(pose, f"Synthetic localization failed: {diag.get('reject')}")
         assert pose is not None
         self.assertGreaterEqual(pose.get("inl", 0), 15)
+
+    def test_player_center_calibration_follows_the_pose_rotation(self):
+        """The calibration offset must be applied before the pose rotation.
+
+        A player marker that sits off the ROI midpoint maps to a world offset
+        that turns with the heading; applying it in frame coordinates is what
+        cancels the circular drift of the reported position while turning.
+        """
+
+        class _Store:
+            def __init__(self, dx: float, dy: float) -> None:
+                self._cfg = {"center_dx": dx, "center_dy": dy}
+
+            def loc_cfg(self) -> dict:
+                return self._cfg
+
+        engine = MapLocator.__new__(MapLocator)
+        mm = np.zeros((100, 200), np.uint8)
+
+        engine.store = _Store(0.0, 0.0)
+        x0, y0 = engine._mm_center_to_map(dict(s=1.0, th=0.0, t=(0.0, 0.0)), mm)
+        self.assertAlmostEqual(x0, 100.0)
+        self.assertAlmostEqual(y0, 50.0)
+
+        engine.store = _Store(10.0, 0.0)
+        x90, y90 = engine._mm_center_to_map(dict(s=1.0, th=90.0, t=(0.0, 0.0)), mm)
+        self.assertAlmostEqual(x90, -50.0)
+        self.assertAlmostEqual(y90, 110.0)
 
 
 if __name__ == "__main__":

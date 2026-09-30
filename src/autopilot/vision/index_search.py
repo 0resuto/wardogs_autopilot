@@ -92,8 +92,18 @@ class IndexSearchMixin:
         return [kp[int(i)] for i in order], desc[order]
 
     def _mm_center_to_map(self, r: dict[str, Any], mm: np.ndarray) -> tuple[float, float]:
-        """Minimap center in map (mu) coords from a pose with map-space translation."""
-        px, py = mm.shape[1] / 2.0, mm.shape[0] / 2.0
+        """Player center in map (mu) coords from a pose with map-space translation.
+
+        The player marker is assumed at the ROI midpoint shifted by the
+        calibrated `center_dx`/`center_dy` offset (minimap px). The offset is
+        applied in the frame's own coordinates, before the pose rotation, so the
+        calibration holds at any heading: an uncalibrated off-center marker
+        would otherwise make the reported map position circle the true one as
+        the minimap rotates.
+        """
+        cfg = self.store.loc_cfg()
+        px = mm.shape[1] / 2.0 + float(cfg.get("center_dx", 0.0) or 0.0)
+        py = mm.shape[0] / 2.0 + float(cfg.get("center_dy", 0.0) or 0.0)
         th_r = np.radians(r["th"])
         a, b = r["s"] * np.cos(th_r), r["s"] * np.sin(th_r)
         return (r["t"][0] + a * px - b * py, r["t"][1] + b * px + a * py)

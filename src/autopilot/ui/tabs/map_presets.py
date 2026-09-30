@@ -58,6 +58,7 @@ class MapPresetsMixin(MapTabBase):
             QMessageBox.critical(self, "Presets", f"Failed to save preset: {exc}")
             return False
         self.app_cfg.navigator.last_preset = name
+        self.cfg.setdefault("navigator", {})["last_preset"] = name
         self.save_cfg()
         self.preset_reload()
         self.p_sel.setCurrentText(name)
@@ -89,6 +90,7 @@ class MapPresetsMixin(MapTabBase):
             return
         self.route_pts = pts
         self.app_cfg.navigator.last_preset = name
+        self.cfg.setdefault("navigator", {})["last_preset"] = name
         if persist:
             self.save_cfg()
         self.routes_refresh()

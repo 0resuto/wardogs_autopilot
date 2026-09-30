@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 
 from .. import PROJECT_ROOT
+from ..common.config import atomic_write_json
 
 
 class PresetManager:
@@ -50,15 +51,18 @@ class PresetManager:
         return [list(p) for p in data.get("points", [])]
 
     def save_preset(self, name: str, points: list[list[float]]) -> str:
-        """Save waypoints to preset file with timestamp and return target path."""
+        """Save waypoints to preset file with timestamp and return target path.
+
+        Written atomically (temp file + replace): a crash mid-save must not
+        leave a truncated preset that the next start cannot load.
+        """
         path = self.preset_path(name)
         data = {
             "name": name,
             "points": points,
             "saved": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
-        with open(path, "w", encoding="utf-8") as fh:
-            json.dump(data, fh, ensure_ascii=False, indent=2)
+        atomic_write_json(path, data)
         return path
 
     def delete_preset(self, name: str) -> bool:

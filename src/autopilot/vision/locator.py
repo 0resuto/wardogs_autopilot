@@ -343,10 +343,7 @@ class MapLocator(IndexSearchMixin):
             (wy0 + win.shape[0]) * ms,  # type: ignore[union-attr]
         ]
 
-        pc = (mm.shape[1] / 2.0, mm.shape[0] / 2.0)
-        th_r = np.radians(r["th"])
-        wx = r["t"][0] + r["s"] * (np.cos(th_r) * pc[0] - np.sin(th_r) * pc[1])
-        wy = r["t"][1] + r["s"] * (np.sin(th_r) * pc[0] + np.cos(th_r) * pc[1])
+        wx, wy = self._mm_center_to_map(r, mm)
         return dict(
             s=r["s"],
             th=r["th"],

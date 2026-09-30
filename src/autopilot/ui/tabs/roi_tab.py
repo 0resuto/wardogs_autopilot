@@ -39,6 +39,9 @@ from .roi_diagnostics import RoiDiagnosticsMixin
 
 __all__ = ["RoiTab", "map_cache_status"]
 
+#: Maximum absolute player-center calibration offset accepted by the Capture tab.
+CENTER_LIMIT_PX = 200.0
+
 
 class RoiTab(RoiCacheMixin, RoiDiagnosticsMixin, QWidget):
     """Tab widget for selecting minimap capture zone, managing SIFT cache, and previewing frames."""
@@ -95,6 +98,7 @@ class RoiTab(RoiCacheMixin, RoiDiagnosticsMixin, QWidget):
         # goes first; configuration cards follow below it.
         self._build_diagnostics_card(layout)
         self._build_roi_card(layout)
+        self._build_center_card(layout)
         self._build_speed_card(layout)
         self._build_cache_card(layout)
         layout.addStretch()  # keep the sidebar content top-aligned
@@ -189,6 +193,102 @@ class RoiTab(RoiCacheMixin, RoiDiagnosticsMixin, QWidget):
         apply_row.addWidget(self.status_lbl, stretch=1)
         roi_layout.addLayout(apply_row)
         layout.addWidget(card_roi)
+
+    def _build_center_card(self, layout: QVBoxLayout) -> None:
+        # The map position is read at the ROI midpoint; if the in-game player
+        # arrow is not exactly there, the reported point circles the true one
+        # while the minimap rotates. The fields shift the assumed center.
+        card_center = QGroupBox("Player Center Calibration", self)
+        center_layout = QVBoxLayout(card_center)
+        center_layout.setContentsMargins(12, 14, 12, 12)
+        center_layout.setSpacing(8)
+
+        guide_lbl = QLabel(
+            "If the map marker drifts in a circle while turning, the player arrow\n"
+            "is off the ROI midpoint. Align the magenta crosshair in the preview\n"
+            "with the arrow using DX/DY (minimap px).",
+            card_center,
+        )
+        guide_lbl.setStyleSheet(f"color: {TEXT_MUTED};")
+        guide_lbl.setWordWrap(True)
+        compact_label(guide_lbl)
+        center_layout.addWidget(guide_lbl)
+
+        loc_cfg = self.cfg.setdefault("locator", {})
+        center_row = QHBoxLayout()
+        center_row.setSpacing(6)
+        self.center_inputs: dict[str, QLineEdit] = {}
+        self.center_vars: dict[str, StringVarCompat] = {}
+        for name, key in (("DX", "center_dx"), ("DY", "center_dy")):
+            lbl = QLabel(name, card_center)
+            lbl.setStyleSheet(f"color: {TEXT_MUTED};")
+            center_row.addWidget(lbl)
+
+            val = str(loc_cfg.get(key, 0.0) or 0.0)
+            inp = QLineEdit(val, card_center)
+            inp.setFixedWidth(48)
+            inp.setToolTip(
+                "Offset of the player marker from the ROI midpoint in minimap px:\n"
+                "+DX = right, +DY = down in the captured frame"
+            )
+            center_row.addWidget(inp)
+            self.center_inputs[key] = inp
+            self.center_vars[key] = StringVarCompat(val)
+        center_row.addStretch()
+        center_layout.addLayout(center_row)
+
+        center_apply_row = QHBoxLayout()
+        center_apply_row.setSpacing(6)
+        center_apply_btn = QPushButton("Apply", card_center)
+        center_apply_btn.setFixedWidth(64)
+        center_apply_btn.clicked.connect(self.apply_center)
+        center_apply_row.addWidget(center_apply_btn)
+
+        self.center_status_lbl = QLabel("", card_center)
+        self.center_status_lbl.setStyleSheet(f"color: {GREEN}; font-weight: 500;")
+        self.center_status_lbl.setWordWrap(True)
+        compact_label(self.center_status_lbl)
+        center_apply_row.addWidget(self.center_status_lbl, stretch=1)
+        center_layout.addLayout(center_apply_row)
+        layout.addWidget(card_center)
+
+    def apply_center(self) -> None:
+        """Parse and validate the player-center calibration fields."""
+        values: dict[str, float] = {}
+        for key, name in (("center_dx", "DX"), ("center_dy", "DY")):
+            s = self.center_inputs[key].text().strip() or self.center_vars[key].get().strip()
+            try:
+                v = float(s)
+            except ValueError:
+                self.center_status_lbl.setText(f"Error: {name} must be a number")
+                self.center_status_lbl.setStyleSheet(f"color: {RED};")
+                return
+            if not -CENTER_LIMIT_PX <= v <= CENTER_LIMIT_PX:
+                self.center_status_lbl.setText(
+                    f"Error: {name} in [-{CENTER_LIMIT_PX:.0f} .. +{CENTER_LIMIT_PX:.0f}] px"
+                )
+                self.center_status_lbl.setStyleSheet(f"color: {RED};")
+                return
+            values[key] = v
+
+        for key, v in values.items():
+            self.center_inputs[key].setText(str(v))
+            self.center_vars[key].set(str(v))
+
+        self.cfg.setdefault("locator", {}).update(values)
+        self.save_cfg()
+
+        loc = self.get_loc()
+        if loc is not None:
+            if hasattr(loc, "cfg") and isinstance(loc.cfg, dict):
+                loc.cfg.setdefault("locator", {}).update(values)
+            if hasattr(loc, "app_cfg") and hasattr(loc.app_cfg, "locator"):
+                for key, v in values.items():
+                    setattr(loc.app_cfg.locator, key, v)
+
+        self.center_status_lbl.setText("applied")
+        self.center_status_lbl.setStyleSheet(f"color: {GREEN};")
+        self.update_preview()
 
     def _build_speed_card(self, layout: QVBoxLayout) -> None:
         card_speed = QGroupBox("Speedometer (OCR)", self)
