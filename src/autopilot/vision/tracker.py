@@ -29,6 +29,7 @@ from .fail_dump import (
     prune_fail_files,
     save_fail_frame,
 )
+from .pose_filter import PoseSmoother
 
 logger = get_logger("tracker")
 
@@ -70,6 +71,10 @@ class LiveLocator(threading.Thread):
     motion or a stopped state from them.
     latest['speed_kmh']/latest['speed_ok'] carry the optional speedometer OCR
     (capture.speed_roi): speed_ok=False means the value is stale or unread.
+    latest['map_px'] is the measured position low-passed by the alpha-beta
+    smoother (locator.smooth_alpha; 0 disables) so matcher jitter does not
+    reach the navigator; latest['map_px_disp'] additionally medians the last
+    frames for the UI.
     """
 
     def __init__(self, cfg: AppConfig | dict, mask, frame_source=None) -> None:
@@ -112,6 +117,10 @@ class LiveLocator(threading.Thread):
             maxlen=self._loc_vote_frames()
         )
         self._last_accepted: tuple[float, float] | None = None
+        self._smoother = PoseSmoother(
+            alpha=self.loc_cfg.smooth_alpha,
+            reset_px=self.loc_cfg.smooth_reset_px,
+        )
         self._disp_hist: collections.deque[tuple[float, float]] = collections.deque(maxlen=5)
         self._good_pose: dict[str, Any] | None = (
             None  # last accepted pose dict (for black-frame hold)
@@ -120,6 +129,7 @@ class LiveLocator(threading.Thread):
         self._last_fail_save: float = 0.0  # time of the last fail-frame dump (throttle)
         self._counts: collections.Counter[str] = collections.Counter()  # reject reason tally
         self._last_frame_error: str | None = None  # dedup for per-frame error logging
+        self._engine = locator.engine()  # synced to locator.engine config on first frame
         self.search_now: tuple[Any, ...] | str | None = (
             None  # sector being searched right now ('disc'/'global')
         )
@@ -165,6 +175,20 @@ class LiveLocator(threading.Thread):
         if hasattr(self, "_prod") and self._prod is not None:
             self._prod.set_roi(roi_list)
 
+    def set_fps(self, fps: int | float) -> None:
+        """Update the live capture cadence (the producer re-reads it every loop)."""
+        fps_i = max(1, min(60, int(fps)))
+        if isinstance(self.cfg, dict):
+            self.cfg.setdefault("capture", {})["fps"] = fps_i
+        if hasattr(self, "app_cfg") and hasattr(self.app_cfg, "capture"):
+            self.app_cfg.capture.fps = fps_i
+        if hasattr(self, "cap_cfg") and hasattr(self.cap_cfg, "fps"):
+            self.cap_cfg.fps = fps_i
+        if hasattr(self, "_prod") and self._prod is not None:
+            self._prod.capture_cfg.fps = fps_i
+            if isinstance(self._prod.cfg, dict):
+                self._prod.cfg.setdefault("capture", {})["fps"] = fps_i
+
     def set_speed_roi(self, roi: list[int] | tuple[int, ...] | None) -> None:
         """Update (or disable with None) the speedometer OCR ROI on the fly."""
         roi_list = None if roi is None else [int(v) for v in roi]
@@ -184,6 +208,19 @@ class LiveLocator(threading.Thread):
         if isinstance(self.cfg, dict):
             self.cfg.setdefault("debug", {})["collect_fail_logs"] = enabled
         logger.info("[tracker] fail-frame collection %s", "enabled" if enabled else "disabled")
+
+    def _reset_engine_state(self) -> None:
+        """Drop the track/vote/smoothing state after an engine switch."""
+        self._prev_xy = None
+        self._prev_th = 0.0
+        self._prev_s = None
+        self._good_xy = None
+        self._good_pose = None
+        self._hold_left = None
+        self._last_accepted = None
+        self._vote_buf.clear()
+        self._disp_hist.clear()
+        self._smoother.reset()
 
     def _frame_pose(
         self, mm: np.ndarray, ui_mask: np.ndarray | None
@@ -294,6 +331,18 @@ class LiveLocator(threading.Thread):
                 roi = item["roi"]
                 t0 = item["ts"]
                 self.error = None
+                # engine switch (Map -> Tracking combo): reconfigure the
+                # locator facade and drop every prior-track state so the new
+                # engine cold-starts instead of inheriting a stale pose
+                try:
+                    eng = str(self.locator_cfg.engine or "sift")
+                except Exception:
+                    eng = "sift"
+                if eng != self._engine:
+                    locator.set_engine(eng)
+                    self._engine = eng
+                    self._reset_engine_state()
+                    self.phase = "engine: %s..." % eng
                 # frame budget: coarse map search can stall for tens of
                 # seconds (low-texture areas); with a budget the
                 # localization returns within max 3 s and the thread does
@@ -388,14 +437,22 @@ class LiveLocator(threading.Thread):
                     else:
                         self._vote_buf.clear()
                     # approved: commit the state that _prev_xy feeds the next
-                    # global_pose call with, and the position to publish
-                    if good:
-                        self._prev_xy = (cand[0], cand[1])
+                    # global_pose call with, and the position to publish. The
+                    # search center keeps the RAW match; only the published
+                    # position is low-passed so matcher jitter does not reach
+                    # the marker or the steering.
+                    if pose is not None:
+                        meas = (cand[0], cand[1])
+                        lc = self.locator_cfg
+                        self._smoother.configure(float(lc.smooth_alpha), float(lc.smooth_reset_px))
+                        mx, my = self._smoother.update(meas[0], meas[1], t0)
+                        self._prev_xy = meas
                         self._prev_th = cand[2]
-                        self._good_xy = (cand[0], cand[1])
+                        self._good_xy = (mx, my)
+                        pose = dict(pose, map_x=mx, map_y=my)
                         self._good_pose = pose
-                        self._prev_s = float((pose or {}).get("s") or self._prev_s or 1.0)
-                        mp = (cand[0], cand[1])
+                        self._prev_s = float(pose.get("s") or self._prev_s or 1.0)
+                        mp = (mx, my)
                     else:
                         self._prev_xy = (cand[0], cand[1])  # bridge only
                         mp = (cand[0], cand[1])

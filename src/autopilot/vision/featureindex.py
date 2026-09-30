@@ -1,12 +1,13 @@
-"""Offline SIFT feature index of a map for radius-based localization.
+"""Offline feature index of a map for radius-based localization.
 
-Builds once per map (CLI: python -m autopilot.vision.featureindex --build zestafona)
-and stores descriptors of the downscaled map pyramid in data/maps/<name>_feat.npz.
-SIFT descriptors are integer 0..255, so they are stored as uint8 inside a
-compressed npz (5x smaller than the old float32 npz; the live query is cast to
-uint8 in MapLocator._detect because BFMatcher requires both sides to share the
-type). The minimap is then matched via BF.knnMatch against the descriptors of
-the tiles around the last known position (radius search), avoiding per-frame
+Builds once per map (CLI: python -m autopilot.vision.featureindex --build
+zestafona [--kind orb]) and stores descriptors of the downscaled map pyramid
+in data/maps/<name>_feat.npz (SIFT) or <name>_feat_orb.npz (ORB). Descriptors
+are integer 0..255, so they are stored as uint8 inside a compressed npz (5x
+smaller than the old float32 npz; the live query is cast to uint8 in
+MapLocator._detect because BFMatcher requires both sides to share the type).
+The minimap is then matched via BF.knnMatch against the descriptors of the
+tiles around the last known position (radius search), avoiding per-frame
 SIFT detection over a big window.
 
 The index is a cache only: load_index() returns None when the npz is absent and
@@ -36,6 +37,14 @@ TILE = 512
 MAX_PER_TILE = 3000
 LEVELS = (1.0, 0.8, 0.6)
 
+# Supported descriptor kinds. 'sift' is the robust default; 'orb' builds a
+# 32-byte binary index matched with the Hamming distance (several times faster
+# to load and match, a bit less scale/illumination tolerant); 'xfeat' stores
+# the learned 64-D XFeat descriptors (float16) extracted with the GPU ONNX
+# backbone and matched by cosine similarity.
+INDEX_KINDS = ("sift", "orb", "xfeat")
+_INDEX_KIND = "sift"
+
 # Descriptor build must match the query's preprocessing space. In practice the
 # game minimap aligns with the RAW map pixels: descriptors from raw tiles match
 # real captured frames far stronger than percentile-normalized ones (measured:
@@ -53,8 +62,67 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.a
 _MAPS_DIR = os.path.join(ROOT, "data", "maps")
 
 
-def _feat_path(name):
-    return os.path.join(_MAPS_DIR, "%s_feat.npz" % name)
+def _feat_path(name, kind=_INDEX_KIND):
+    """Cache path of a map's feature index; SIFT keeps the legacy file name."""
+    suffix = "_feat.npz" if kind == "sift" else "_feat_%s.npz" % kind
+    return os.path.join(_MAPS_DIR, "%s%s" % (name, suffix))
+
+
+def _make_detector(kind: str, max_per_tile: int, contrast: float):
+    """Detector for an index build; `contrast` tunes SIFT only."""
+    if kind == "orb":
+        return cv2.ORB.create(
+            nfeatures=int(max_per_tile), scaleFactor=1.2, nlevels=8, fastThreshold=20
+        )
+    if abs(float(contrast) - 0.05) > 1e-6:
+        return cv2.SIFT.create(nfeatures=6000, contrastThreshold=float(contrast), edgeThreshold=12)
+    from . import locator  # lazy: locator imports this module at load time
+
+    return locator.SIFT
+
+
+def _tile_features(
+    kind: str,
+    detector: Any,
+    crop: np.ndarray,
+    edge_w: int,
+    edge_h: int,
+    max_per_tile: int,
+    norm_fn,
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """(points, descriptors) for one build tile, or None when empty.
+
+    SIFT/ORB keep the response-ranked KeyPoint pipeline; XFeat runs its own
+    detector + descriptor network and returns points directly.
+    """
+    if norm_fn is not None:
+        crop = norm_fn(crop)
+    if kind == "xfeat":
+        from . import xfeat
+
+        pts, desc = xfeat.extract_tile(crop, top_k=max_per_tile)
+        if len(pts) == 0:
+            return None
+        keep = (pts[:, 0] < edge_w) & (pts[:, 1] < edge_h)
+        if not keep.any():
+            return None
+        return pts[keep].astype(np.float32), np.asarray(desc[keep], np.float16)
+
+    kp, desc = detector.detectAndCompute(crop, None)
+    if desc is None or len(desc) == 0:
+        return None
+    # drop points reflected by border padding (outside the real tile)
+    keep_idx = [i for i, p in enumerate(kp) if p.pt[0] < edge_w and p.pt[1] < edge_h]
+    if not keep_idx:
+        return None
+    resp = [kp[i].response for i in keep_idx]
+    order = [
+        i for _, i in sorted(zip(resp, keep_idx, strict=True), key=lambda x: x[0], reverse=True)
+    ]
+    if len(order) > max_per_tile:
+        order = order[:max_per_tile]
+    pts = np.asarray([[kp[i].pt[0], kp[i].pt[1]] for i in order], np.float32)
+    return pts, np.asarray(desc[order], np.uint8)
 
 
 def _grid_dims(img_w, img_h, tile):
@@ -80,17 +148,21 @@ def build_index(
     max_per_tile=MAX_PER_TILE,
     contrast=0.05,
     norm=_INDEX_NORM,
+    kind=_INDEX_KIND,
     progress=False,
 ):
     """Build the feature index cache for one map; returns the npz path.
 
     Reads the already-cached *mu.npy (never the full PNG) and extracts SIFT
-    descriptors per pyramid level on a tile grid with reflected borders. With
-    norm='raw' (default) the tiles feed SIFT exactly as the map pixels are;
-    'perc298' percentile-normalizes each tile (kept for experiments). Level
-    coordinates are divided by the level scale into map (mu) pixels. Returns
-    None when the map cache is missing or the build failed.
+    (or ORB, `kind='orb'`) descriptors per pyramid level on a tile grid with
+    reflected borders. With norm='raw' (default) the tiles feed the detector
+    exactly as the map pixels are; 'perc298' percentile-normalizes each tile
+    (kept for experiments). Level coordinates are divided by the level scale
+    into map (mu) pixels. Returns None when the map cache is missing or the
+    build failed.
     """
+    if kind not in INDEX_KINDS:
+        raise ValueError("unknown index kind %r (expected %s)" % (kind, " or ".join(INDEX_KINDS)))
     from . import locator  # lazy: locator imports this module at load time
 
     locator.set_map(name)
@@ -109,10 +181,11 @@ def build_index(
         levels=np.asarray(levels, dtype=np.float32),
         norm=np.asarray([norm], dtype="U32"),
         fmt=np.asarray([_INDEX_FMT], dtype="U16"),
+        kind=np.asarray([kind], dtype="U8"),
     )
-    sift = locator.SIFT
-    if abs(contrast - 0.05) > 1e-6:
-        sift = cv2.SIFT.create(nfeatures=6000, contrastThreshold=contrast, edgeThreshold=12)
+    detector = None if kind == "xfeat" else _make_detector(kind, max_per_tile, contrast)
+    norm_fn = (lambda c: locator._shadow_fill_norm(c, None)) if norm == "perc298" else None
+    desc_dim, desc_dtype = (64, np.float16) if kind == "xfeat" else (128, np.uint8)
 
     for k, f in enumerate(levels):
         Wimg = max(1, int(round(mu_w * f)))
@@ -130,31 +203,7 @@ def build_index(
                 crop = img[y0 : y0 + tile, x0 : x0 + tile]
                 if crop.shape[0] < tile or crop.shape[1] < tile:
                     crop = _pad_to(crop, tile, tile)
-                if norm == "perc298":
-                    # experimental: same contrast space as the live frame
-                    crop = locator._shadow_fill_norm(crop, None)
-                kp, desc = sift.detectAndCompute(crop, None)
-                if desc is None or len(desc) == 0:
-                    n_done += 1
-                    continue
-                # drop points reflected by border padding (outside the real tile)
-                keep = [i for i, p in enumerate(kp) if p.pt[0] < edge_w and p.pt[1] < edge_h]
-                if not keep:
-                    n_done += 1
-                    continue
-                resp = [kp[i].response for i in keep]
-                order = [
-                    i
-                    for _, i in sorted(
-                        zip(resp, keep, strict=True), key=lambda x: x[0], reverse=True
-                    )
-                ]
-                if len(order) > max_per_tile:
-                    order = order[:max_per_tile]
-                pts = np.asarray([[kp[i].pt[0], kp[i].pt[1]] for i in order], np.float32)
-                pts_all.append((pts + np.array([x0, y0], dtype=np.float32)) / f)
-                desc_all.append(np.asarray(desc[order], np.uint8))
-                tile_all.append(np.full(len(order), ty * gw_k + tx, dtype=np.int32))
+                feats = _tile_features(kind, detector, crop, edge_w, edge_h, max_per_tile, norm_fn)
                 n_done += 1
                 if progress and n_done % 64 == 0:
                     logger.info(
@@ -164,13 +213,19 @@ def build_index(
                         gw_k * gh_k,
                         time.time() - t_proc,
                     )
+                if feats is None:
+                    continue
+                pts, desc = feats
+                pts_all.append((pts + np.array([x0, y0], dtype=np.float32)) / f)
+                desc_all.append(desc)
+                tile_all.append(np.full(len(pts), ty * gw_k + tx, dtype=np.int32))
         if pts_all:
             out["pts_lv%d" % k] = np.concatenate(pts_all, axis=0)
             out["desc_lv%d" % k] = np.concatenate(desc_all, axis=0)
             out["tile_lv%d" % k] = np.concatenate(tile_all, axis=0)
         else:
             out["pts_lv%d" % k] = np.empty((0, 2), np.float32)
-            out["desc_lv%d" % k] = np.empty((0, 128), np.uint8)
+            out["desc_lv%d" % k] = np.empty((0, desc_dim), desc_dtype)
             out["tile_lv%d" % k] = np.empty((0,), np.int32)
         if progress:
             logger.info(
@@ -182,14 +237,18 @@ def build_index(
                 time.time() - t_proc,
             )
 
-    path = _feat_path(name)
-    np.savez_compressed(path, **out)
+    path = _feat_path(name, kind)
+    if kind == "xfeat":
+        # learned float16 descriptors are incompressible; skip zlib entirely
+        np.savez(path, **out)
+    else:
+        np.savez_compressed(path, **out)
     return path
 
 
-def load_index(name):
-    """Load a built feature index, or None if the cache does not exist."""
-    path = _feat_path(name)
+def load_index(name, kind=_INDEX_KIND):
+    """Load a built feature index of `kind`, or None if the cache does not exist."""
+    path = _feat_path(name, kind)
     if not os.path.exists(path):
         return None
     try:
@@ -223,6 +282,11 @@ class FeatureIndex:
         self.fmt = None
         if "fmt" in data.files and data["fmt"].size:
             self.fmt = str(data["fmt"][0])
+        # pre-kind caches are SIFT by definition
+        self.kind = _INDEX_KIND
+        if "kind" in data.files and data["kind"].size:
+            self.kind = str(data["kind"][0])
+        desc_dtype = np.float16 if self.kind == "xfeat" else np.uint8
         self.levels = np.asarray(data["levels"], np.float32)
         self._levels = []
         for k, f in enumerate(self.levels):
@@ -234,7 +298,7 @@ class FeatureIndex:
                 dict(
                     level=float(f),
                     pts=np.asarray(data["pts_lv%d" % k], np.float32),
-                    desc=np.asarray(data["desc_lv%d" % k], np.uint8),
+                    desc=np.asarray(data["desc_lv%d" % k], desc_dtype),
                     tile=tile,
                     _tile_cache=None,  # (key, pts, desc) of the last tile gather
                     img_w=Wimg,
@@ -323,12 +387,19 @@ class FeatureIndex:
 def main():
     ap = argparse.ArgumentParser(
         prog="featureindex",
-        description="Build/cache the SIFT feature index for maps (data/maps/<name>_feat.npz).",
+        description="Build/cache the feature index for maps "
+        "(SIFT: data/maps/<name>_feat.npz, ORB: <name>_feat_orb.npz).",
     )
     ap.add_argument(
         "--build", nargs="+", metavar="NAME", help="map names to index (zestafona bakurani ozeti)"
     )
     ap.add_argument("--rebuild", action="store_true", help="overwrite an existing cache")
+    ap.add_argument(
+        "--kind",
+        choices=INDEX_KINDS,
+        default=_INDEX_KIND,
+        help="descriptor kind to build (default: %s)" % _INDEX_KIND,
+    )
     ap.add_argument(
         "--levels",
         default=None,
@@ -363,11 +434,11 @@ def main():
     max_per_tile = args.max_per_tile if args.max_per_tile is not None else MAX_PER_TILE
     contrast = args.contrast if args.contrast is not None else 0.05
     for name in args.build:
-        path = _feat_path(name)
+        path = _feat_path(name, args.kind)
         if os.path.exists(path) and not args.rebuild:
-            logger.info("%s: cache exists (use --rebuild to overwrite)", name)
+            logger.info("%s: %s cache exists (use --rebuild to overwrite)", name, args.kind)
             continue
-        logger.info("building index for %s (norm=%s)...", name, args.norm)
+        logger.info("building %s index for %s (norm=%s)...", args.kind, name, args.norm)
         t0 = time.time()
         out = build_index(
             name,
@@ -375,6 +446,7 @@ def main():
             max_per_tile=max_per_tile,
             contrast=contrast,
             norm=args.norm,
+            kind=args.kind,
             progress=args.progress,
         )
         if out:

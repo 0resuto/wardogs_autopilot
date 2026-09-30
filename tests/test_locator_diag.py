@@ -291,6 +291,66 @@ class TestSearchOptimizations(unittest.TestCase):
         self.assertEqual(spy.calls, 1)
 
 
+class TestRansacThreshold(unittest.TestCase):
+    """The reprojection threshold is config-driven and gates lazy matches.
+
+    A tight threshold keeps the refined affine free of correspondences that
+    are a few px off; the fallback threshold is the second chance for frames
+    where the tight one leaves too few inliers.
+    """
+
+    def setUp(self):
+        self.engine = locator.MapLocator()
+        self.thr = dict(ratio=0.8, min_inl=2, min_inl_rate=0.0)
+
+    def _run(self, idx, thr=None):
+        kp = [cv2.KeyPoint(float(i * 5), float(i * 5), 5.0) for i in range(8)]
+        d1 = np.tile(np.arange(1, 9, dtype=np.float32)[:, None], (1, 128))
+        return self.engine._pose_via_index(
+            np.zeros((32, 32), np.uint8),
+            None,
+            idx,
+            0.0,
+            0.0,
+            450.0,
+            thr=thr or self.thr,
+            feats=(kp, d1),
+        )
+
+    def test_tight_threshold_rejects_lazy_matches(self):
+        pts, desc = _matchable_set()
+        lazy = pts.copy()
+        lazy[5, 0] += 5.0
+        idx = _MultiIndex([(1.0, lazy, desc)])
+
+        self.engine.store = _CfgStore({"ransac_px": 2.0, "ransac_fallback_px": 0.0})
+        tight, _ = self._run(idx)
+        self.engine.store = _CfgStore({"ransac_px": 6.0, "ransac_fallback_px": 0.0})
+        loose, _ = self._run(idx)
+
+        assert tight is not None and loose is not None
+        self.assertEqual(tight["inl"], 7)
+        self.assertEqual(loose["inl"], 8)
+
+    def test_fallback_recovers_frames_the_tight_threshold_drops(self):
+        pts, desc = _matchable_set()
+        lazy = pts.copy()
+        offsets = {3: (5.0, 0.0), 4: (-5.0, 2.0), 5: (0.0, 5.0), 6: (4.0, -4.0), 7: (-4.0, -4.0)}
+        for i, (dx, dy) in offsets.items():
+            lazy[i, 0] += dx
+            lazy[i, 1] += dy
+        idx = _MultiIndex([(1.0, lazy, desc)])
+        thr = dict(ratio=0.8, min_inl=6, min_inl_rate=0.0)
+
+        self.engine.store = _CfgStore({"ransac_px": 2.0, "ransac_fallback_px": 0.0})
+        pose, _ = self._run(idx, thr=thr)
+        self.assertIsNone(pose)
+
+        self.engine.store = _CfgStore({"ransac_px": 2.0, "ransac_fallback_px": 6.0})
+        pose, _ = self._run(idx, thr=thr)
+        self.assertIsNotNone(pose)
+
+
 class TestTileGatherCache(unittest.TestCase):
     def _index(self):
         from autopilot.vision.featureindex import FeatureIndex
@@ -360,6 +420,61 @@ class TestTrackerFrameError(unittest.TestCase):
         self.assertIsNone(pose)
         self.assertEqual(diag["reject"], "locator_error")
         self.assertIn("boom", diag["detail"])
+
+
+class TestXfeatRingDiagnostics(unittest.TestCase):
+    """A rotation ring that found nothing must report why, not reject=None."""
+
+    def _call(self, engine, **overrides):
+        kwargs = dict(
+            mm=np.zeros((32, 32), np.uint8),
+            ui_mask=None,
+            idx=object(),
+            cx=None,
+            cy=None,
+            min_inl=2,
+            budget=3.0,
+            t0=time.time(),
+            progress=None,
+            prev_s=None,
+            ms=1.0,
+            max_kp=1000,
+            diag={"reject": None, "detail": ""},
+            debug=True,
+        )
+        kwargs.update(overrides)
+        return engine._localize_xfeat(**kwargs)
+
+    def test_all_attempts_failed_reports_the_last_attempt_diag(self):
+        engine = locator.MapLocator()
+        engine._last_th = None
+        angles: list[float] = []
+
+        def _fail(_mm, _ui, _idx, _cx, _cy, **kw):
+            angles.append(kw["derotate_deg"])
+            kw["diag"]["reject"] = "index_no_match"
+            return None
+
+        with patch.object(engine, "_localize_index", side_effect=_fail):
+            pose, diag = self._call(engine)
+
+        self.assertIsNone(pose)
+        self.assertIsNone(engine._last_th)
+        self.assertEqual(len(angles), 8)
+        self.assertEqual(diag["reject"], "index_no_match")
+        self.assertEqual(diag["derot"], 315.0)
+
+    def test_expired_budget_reports_budget_timeout_and_skips_the_ring(self):
+        engine = locator.MapLocator()
+        engine._last_th = None
+
+        with patch.object(engine, "_localize_index") as localize:
+            pose, diag = self._call(engine, budget=0.5, t0=time.time() - 1.0)
+
+        self.assertIsNone(pose)
+        self.assertEqual(diag["reject"], "budget_timeout")
+        self.assertIn("budget", diag["detail"])
+        localize.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -83,9 +83,10 @@ class TestLocatorConcurrency(unittest.TestCase):
         store = locator.get_store()
         known_maps = {"zestafona", "bakurani"}
 
-        def fake_load_index(name):
+        def fake_load_index(name, kind="sift"):
             return SimpleNamespace(
                 name=name,
+                kind=kind,
                 gray_sig=store.gray_sig(),
                 norm=map_store_mod._INDEX_NORM,
                 fmt=map_store_mod._INDEX_FMT,

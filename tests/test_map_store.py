@@ -80,9 +80,10 @@ class TestIndexLifecycle(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def _fake_load_index(self, name):
+    def _fake_load_index(self, name, kind="sift"):
         idx = SimpleNamespace(
             name=name,
+            kind=kind,
             gray_sig=self.store.gray_sig(),
             norm=map_store_mod._INDEX_NORM,
             fmt=map_store_mod._INDEX_FMT,
@@ -162,7 +163,7 @@ class TestIndexLifecycle(unittest.TestCase):
             fmt=None,  # float32-era index without the storage-format marker
         )
 
-        with patch.object(map_store_mod, "load_index", lambda _name: legacy):
+        with patch.object(map_store_mod, "load_index", lambda _name, _kind="sift": legacy):
             self.assertIsNone(self.store.get_index())
 
     def test_set_config_path_reads_other_file(self):

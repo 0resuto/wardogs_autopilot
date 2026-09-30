@@ -79,6 +79,30 @@ class TestTuningValidation(unittest.TestCase):
         self.assertEqual(self.tab.tune_vars["track_radius"].get(), "900")
         self.assertEqual(self.saved, 1)
 
+    def test_fps_field_applies_and_validates(self):
+        self.tab.fps_input.setText("30")
+        self.tab.apply_tune()
+
+        self.assertIn("applied", self.tab.tune_status.text())
+        self.assertEqual(self.tab.cfg["capture"]["fps"], 30)
+        self.assertEqual(self.tab.app_cfg.capture.fps, 30)
+        self.assertEqual(self.tab.fps_var.get(), "30")
+
+        self.tab.fps_input.setText("999")
+        self.tab.apply_tune()
+        self.assertIn("Invalid fps", self.tab.tune_status.text())
+        self.assertEqual(self.tab.cfg["capture"]["fps"], 30)
+
+    def test_engine_choice_applies_live_and_saves(self):
+        self.assertEqual(self.tab.cfg["locator"].get("engine", "sift"), "sift")
+
+        self.tab.engine_combo.setCurrentText("hybrid")
+
+        self.assertEqual(self.tab.cfg["locator"]["engine"], "hybrid")
+        self.assertEqual(self.tab.app_cfg.locator.engine, "hybrid")
+        self.assertEqual(self.saved, 1)
+        self.assertIn("engine: hybrid", self.tab.tune_status.text())
+
     def test_reset_restores_schema_defaults(self):
         self.tab.tune_inputs["ratio_local"].setText("0.5")
         self.tab.tune_inputs["corner_lat_g"].setText("0.9")

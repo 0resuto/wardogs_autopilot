@@ -283,17 +283,26 @@ class MapStore:
         arts = entry.get("artifacts")
         return dict(arts) if isinstance(arts, dict) else {}
 
-    def get_index(self) -> Any:
-        """Load cached SIFT feature index for active map, checking signature matches."""
-        idx = self._g.get("idx")
+    def get_index(self, kind: str = "sift") -> Any:
+        """Load the cached feature index of `kind` for the active map.
+
+        Each kind is cached separately (SIFT and ORB indexes coexist); every
+        cache entry is checked against the palette signature, storage format
+        and kind tag before use.
+        """
+        cache = self._g.get("idx")
+        if not isinstance(cache, dict):
+            cache = {}
+            self._g["idx"] = cache
+        idx = cache.get(kind)
         if idx is not None and getattr(idx, "name", None) == self._cur_name:
             return idx
         with self._cache_lock:
-            idx = self._g.get("idx")
+            idx = cache.get(kind)
             if idx is not None and getattr(idx, "name", None) == self._cur_name:
                 return idx
             try:
-                idx = load_index(self._cur_name)
+                idx = load_index(self._cur_name, kind)
             except Exception:
                 idx = None
             if idx is not None:
@@ -323,8 +332,16 @@ class MapStore:
                     _INDEX_NORM,
                 )
                 idx = None
-            self._g["idx"] = idx
-        return self._g.get("idx")
+            if idx is not None and getattr(idx, "kind", "sift") != kind:
+                logger.warning(
+                    "[map_store] feature index kind mismatch (kind=%s, want=%s) "
+                    "— rebuild the index",
+                    getattr(idx, "kind", None),
+                    kind,
+                )
+                idx = None
+            cache[kind] = idx
+        return cache.get(kind)
 
     # ---------- Previews & Map caches ----------
 

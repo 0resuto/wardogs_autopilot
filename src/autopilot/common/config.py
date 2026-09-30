@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -81,6 +81,33 @@ class LocatorConfig(BaseModel):
     local_radius: int = Field(default=450, ge=50, description="Tracking search radius (px)")
     radius_growth: float = Field(default=1.6, ge=1.0, le=5.0)
     global_max_features: int = Field(default=100000, ge=1000)
+    engine: Literal["sift", "orb", "xfeat", "hybrid"] = Field(
+        default="sift",
+        description="Localization engine: 'sift' (robust feature index), 'orb' "
+        "(faster binary features; needs <map>_feat_orb.npz built from the source "
+        "PNG), 'xfeat' (learned features on the GPU via ONNX Runtime; needs "
+        "<map>_feat_xfeat.npz and the model from tools/download_models.py) or "
+        "'hybrid' (SIFT anchor + ECC frame-to-frame tracking; best with "
+        "capture.fps 20-30)",
+    )
+    xfeat_top_k: int = Field(
+        default=2000,
+        ge=100,
+        le=8000,
+        description="XFeat engine: keypoints kept per frame (response-ranked)",
+    )
+    xfeat_min_cos: float = Field(
+        default=0.82,
+        ge=0.5,
+        le=1.0,
+        description="XFeat engine: minimum cosine similarity for a mutual match",
+    )
+    xfeat_threshold: float = Field(
+        default=0.05,
+        ge=0.0,
+        le=1.0,
+        description="XFeat engine: keypoint heatmap detection threshold",
+    )
     max_kp_frame: int = Field(
         default=1200,
         ge=100,
@@ -95,6 +122,36 @@ class LocatorConfig(BaseModel):
     ratio: float = Field(default=0.8, ge=0.1, le=1.0)
     min_inl: int = Field(default=4, ge=1)
     min_inl_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+    ransac_px: float = Field(
+        default=3.0,
+        ge=0.5,
+        le=24.0,
+        description="RANSAC inlier reprojection threshold (map/mu px): a match farther "
+        "than this from the fitted affine does not count as an inlier. 1 mu px is "
+        "~1.3 m on a 32768 map; keep it tight so lazy matches cannot drag the pose",
+    )
+    ransac_fallback_px: float = Field(
+        default=6.0,
+        ge=0.0,
+        le=24.0,
+        description="Second chance for a candidate whose tight-threshold estimate "
+        "failed validation: the same matches are retried with this looser threshold "
+        "(0 disables the fallback)",
+    )
+    hybrid_reanchor_s: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=30.0,
+        description="Hybrid engine: seconds between SIFT anchors (0 = anchor only "
+        "when the ECC step fails; a larger period drifts more but costs less CPU)",
+    )
+    hybrid_min_cc: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Hybrid engine: minimum ECC correlation coefficient; below it "
+        "the frame is re-localized with a SIFT anchor",
+    )
     track_radius: float = Field(default=900.0, ge=50.0)
     ratio_local: float = Field(default=0.85, ge=0.1, le=1.0)
     min_inl_local: int = Field(default=4, ge=1)
@@ -115,6 +172,21 @@ class LocatorConfig(BaseModel):
         "reaches this inlier count (0 = exhaustive scan)",
     )
     hold_frames: int = Field(default=5, ge=0)
+    smooth_alpha: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Measured-pose smoothing (alpha-beta filter): the weight of each "
+        "fresh match per frame (0 disables smoothing and publishes the raw pose; "
+        "higher follows the raw match closer at the cost of more jitter)",
+    )
+    smooth_reset_px: float = Field(
+        default=100.0,
+        ge=0.0,
+        description="Residual (map px) above which the smoothed pose restarts at the "
+        "measured position instead of gliding to it (confirmed relocations and "
+        "route-length jumps must show up immediately)",
+    )
     center_dx: float = Field(
         default=0.0,
         ge=-1000.0,

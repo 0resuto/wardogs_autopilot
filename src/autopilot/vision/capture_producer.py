@@ -77,20 +77,25 @@ class _CaptureProducer(threading.Thread):
     def run(self) -> None:
         cap = None
         last_sign = None
-        fps = float(self.capture_cfg.fps)
-        period = 1.0 / max(1.0, fps)
+        period = 1.0 / max(1.0, float(self.capture_cfg.fps))  # safe default for except
         try:
             while not self._stop.is_set():
                 try:
+                    # re-read every loop so the UI's fps field applies live
                     cap_cfg = self.cfg.get("capture") if isinstance(self.cfg, dict) else None
                     if cap_cfg and isinstance(cap_cfg, dict):
                         roi = cap_cfg.get("mmap_roi")
                         speed_roi = cap_cfg.get("speed_roi")
                         mon = int(cap_cfg.get("monitor", 0) or 0)
+                        fps = float(
+                            cap_cfg.get("fps", self.capture_cfg.fps) or self.capture_cfg.fps
+                        )
                     else:
                         roi = self.capture_cfg.mmap_roi
                         speed_roi = self.capture_cfg.speed_roi
                         mon = self.capture_cfg.monitor
+                        fps = float(self.capture_cfg.fps)
+                    period = 1.0 / max(1.0, fps)
                     if not roi:
                         self._stop.wait(period)
                         continue

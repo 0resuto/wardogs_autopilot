@@ -6,6 +6,7 @@ Map sections stay about their own job:
 * the flight-recorder switches (nav JSONL, manual-drive recording, fail dumps),
 * the last localization reject with a copy button (what the fail dumps explain),
 * the diagnostic snapshot writer (preview frames + `state_log.txt`),
+* the localization benchmark window (`results.csv`, `report.md`, `per_frame/`),
 * the inventory of what is currently in `output/` with one-click opening.
 
 The log files themselves are opened with the system default application, so the
@@ -106,6 +107,13 @@ def _last_matching(names: list[str], pattern: str) -> str:
     return max(hits) if hits else ""
 
 
+def _default_bench_window(map_name: str) -> Any:
+    """Build the real benchmark window for the studio's active map."""
+    from ..bench_window import BenchWindow
+
+    return BenchWindow(map_name=map_name)
+
+
 class LogsTab(QWidget):
     """Sidebar section owning every `output/` writer and the log inventory."""
 
@@ -122,6 +130,7 @@ class LogsTab(QWidget):
         map_name_supplier: Callable[[], str] | None = None,
         route_supplier: Callable[[], list[list[float]]] | None = None,
         app_cfg: AppConfig | None = None,
+        bench_factory: Callable[[str], Any] | None = None,
     ) -> None:
         super().__init__(parent)
         if isinstance(cfg, AppConfig):
@@ -137,11 +146,13 @@ class LogsTab(QWidget):
             lambda: str(self.cfg.get("map", {}).get("name", "zestafona"))
         )
         self.get_route = route_supplier or (lambda: [])
+        self._bench_factory = bench_factory or _default_bench_window
 
         self.output_dir = os.path.join(PROJECT_ROOT, "output")
         self._manual_rec: ManualDriveRecorder | None = None
         self._snap_busy = False
         self._last_snapshot_dir: str | None = None
+        self._bench_window: QWidget | None = None
 
         self.sig_save_done.connect(self._on_save_done)
         self.sig_save_failed.connect(self._on_save_failed)
@@ -164,6 +175,7 @@ class LogsTab(QWidget):
 
         self._build_logging_card(layout)
         self._build_snapshot_card(layout)
+        self._build_bench_card(layout)
         self._build_files_card(layout)
         layout.addStretch()  # keep the sidebar content top-aligned
 
@@ -276,6 +288,54 @@ class LogsTab(QWidget):
         card_layout.addWidget(self.save_status_lbl)
 
         layout.addWidget(card)
+
+    def _build_bench_card(self, layout: QVBoxLayout) -> None:
+        card, card_layout = self._card("Localization Benchmark")
+        card_layout.addWidget(
+            self._hint(
+                "Score sift/orb/xfeat/hybrid on synthetic trajectories with a known "
+                "ground truth, sweep one parameter at a time, then export "
+                "results.csv + report.md into output/.",
+                card,
+            )
+        )
+
+        btn_row = FlowLayout(h_spacing=8, v_spacing=6)
+        self.bench_btn = QPushButton("Open benchmark", card)
+        self.bench_btn.setIcon(icon("play"))
+        self.bench_btn.setToolTip(
+            "Open the benchmark window (headless: python tools/bench_synthetic.py --quick)"
+        )
+        self.bench_btn.clicked.connect(self.open_bench_window)
+        btn_row.addWidget(self.bench_btn)
+
+        self.open_results_btn = QPushButton("Open output", card)
+        self.open_results_btn.setIcon(icon("folder"))
+        self.open_results_btn.setToolTip("Open output/ - the bench writes results.csv here")
+        self.open_results_btn.clicked.connect(self._open_output_dir)
+        btn_row.addWidget(self.open_results_btn)
+        card_layout.addLayout(btn_row)
+
+        layout.addWidget(card)
+
+    def open_bench_window(self) -> Any:
+        """Show (or raise) the benchmark window; created on first use.
+
+        The import is local because the window pulls in QtCharts and the whole
+        bench package, which the studio must not pay for at startup.
+        """
+        window = self._bench_window
+        if window is None:
+            window = self._bench_factory(self.get_map_name())
+            window.destroyed.connect(self._on_bench_destroyed)
+            self._bench_window = window
+        window.show()
+        window.raise_()
+        window.activateWindow()
+        return window
+
+    def _on_bench_destroyed(self, *_args: object) -> None:
+        self._bench_window = None
 
     def _build_files_card(self, layout: QVBoxLayout) -> None:
         card, card_layout = self._card("Log Files")

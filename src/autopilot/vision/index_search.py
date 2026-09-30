@@ -21,6 +21,8 @@ logger = get_logger("locator")
 
 DEFAULT_MAX_KP = 1200
 DEFAULT_EARLY_INL = 40
+#: XFeat cosine threshold for the mutual-nearest-neighbour match (kornia default).
+DEFAULT_XFEAT_MIN_COS = 0.82
 # OpenCV's BFMatcher packs every train row index into 18 bits (1 << 18), so
 # knnMatch aborts once a candidate set reaches 262144 descriptors. A growing
 # radius search on a dense map can collect that many: thin oversized sets
@@ -55,7 +57,8 @@ class IndexSearchMixin:
     """Index-based pose search (radius + global) on top of a MapStore."""
 
     store: Any
-    sift: Any
+    kind: str
+    detector: Any
     bf: Any
     clahe: Any
     ratio: float
@@ -72,16 +75,43 @@ class IndexSearchMixin:
             m[ui_mask] = int(np.median(m[~ui_mask]))
         return self.clahe.apply(m)
 
-    def _detect(self, mmf: np.ndarray, max_kp: int) -> tuple[list[cv2.KeyPoint], np.ndarray | None]:
-        """SIFT keypoints/descriptors of one frame, capped by descending response.
+    def _xfeat_preprocess(self, mm: np.ndarray, ui_mask: np.ndarray | None) -> np.ndarray:
+        """UI pixels filled with the background median (XFeat sees raw pixels)."""
+        if ui_mask is None or not ui_mask.size:
+            return mm
+        m = mm.copy()
+        m[ui_mask] = int(np.median(m[~ui_mask]))
+        return m
+
+    def _detect(
+        self, mmf: np.ndarray, max_kp: int, derotate_deg: float = 0.0
+    ) -> tuple[list[cv2.KeyPoint], np.ndarray | None]:
+        """Keypoints/descriptors of one frame (kind-aware), capped by response.
 
         Tree canopy and other repetitive texture can yield thousands of weak,
         non-distinctive keypoints (measured 1400+ on a forest frame) that inflate
         the BF.knnMatch cost and dilute RANSAC without adding real inliers.
         Ranking by response and keeping `max_kp` retains the structural points
-        while bounding the per-frame match cost.
+        while bounding the per-frame match cost. XFeat already returns its
+        response-ranked top-k from the ONNX extractor.
         """
-        kp, desc = self.sift.detectAndCompute(mmf, None)
+        if self.kind == "xfeat":
+            from . import xfeat
+
+            cfg = self.store.loc_cfg()
+            pts, desc, scores = xfeat.extract(
+                mmf,
+                top_k=int(max_kp) if max_kp > 0 else 2000,
+                threshold=float(cfg.get("xfeat_threshold", 0.05) or 0.05),
+                derotate_deg=derotate_deg,
+                margin=12 if abs(derotate_deg) > 1e-3 else 4,
+            )
+            kp = [
+                cv2.KeyPoint(float(x), float(y), 1.0, response=float(s))
+                for (x, y), s in zip(pts, scores, strict=True)
+            ]
+            return kp, (desc if len(desc) else None)
+        kp, desc = self.detector.detectAndCompute(mmf, None)
         if desc is not None:
             # SIFT descriptors are integer 0..255; the index stores uint8 and
             # BFMatcher requires both sides to share the descriptor type.
@@ -152,7 +182,7 @@ class IndexSearchMixin:
         )
         if d1 is None or len(d1) < 4:
             diag["reject"] = "no_features_frame"
-            diag["detail"] = "index path: frame without SIFT features"
+            diag["detail"] = "index path: frame without detector features"
             return None, diag
 
         if thr is None:
@@ -182,6 +212,21 @@ class IndexSearchMixin:
             if keep_close:
                 cands = keep_close
 
+        # RANSAC inlier threshold in mu px. The primary value is kept tight so
+        # "lazy" correspondences (a few px off, e.g. from a render mismatch,
+        # 1 mu px ~= 1.3 m on a 32768 map) cannot drag the refined affine; the
+        # fallback retries the SAME matches with a looser threshold when the
+        # tight one leaves too few inliers (low-texture frames).
+        loc = self.store.loc_cfg()
+        primary_px = float(loc.get("ransac_px", 3.0) or 0.0)
+        fallback_px = float(loc.get("ransac_fallback_px", 6.0) or 0.0)
+        thresholds: list[float] = [primary_px] if primary_px > 0.0 else []
+        if fallback_px > (thresholds[0] if thresholds else 0.0):
+            thresholds.append(fallback_px)
+        if not thresholds:
+            thresholds = [6.0]
+        min_cos = float(loc.get("xfeat_min_cos", DEFAULT_XFEAT_MIN_COS) or DEFAULT_XFEAT_MIN_COS)
+
         best: dict[str, Any] | None = None
         best_len: int | None = None
         tried = []
@@ -194,48 +239,66 @@ class IndexSearchMixin:
             n_tried += 1
             if d2 is None or len(d2) < 2:
                 continue
-            if len(d2) > BF_MAX_TRAIN_DESC:
-                pts, d2 = _subsample_train(pts, d2)
-            kn = self.bf.knnMatch(d1, d2, k=2)
-            good = [g for g, n in kn if g.distance < ratio * n.distance]
-            if len(good) < 4:
+            if self.kind == "xfeat":
+                from . import xfeat
+
+                pairs = xfeat.match_pairs(np.asarray(d1, np.float32), d2, min_cos)
+                n_good = int(len(pairs))
+                if n_good < 4:
+                    continue
+                src = np.asarray([kp1[i].pt for i in pairs[:, 0]], np.float32).reshape(-1, 1, 2)
+                dst = np.asarray(pts[pairs[:, 1]], np.float32).reshape(-1, 1, 2)
+            else:
+                if len(d2) > BF_MAX_TRAIN_DESC:
+                    pts, d2 = _subsample_train(pts, d2)
+                kn = self.bf.knnMatch(d1, d2, k=2)
+                good = [g for g, n in kn if g.distance < ratio * n.distance]
+                n_good = len(good)
+                if n_good < 4:
+                    continue
+                src = np.asarray([kp1[g.queryIdx].pt for g in good], np.float32).reshape(-1, 1, 2)
+                dst = np.asarray([pts[g.trainIdx] for g in good], np.float32).reshape(-1, 1, 2)
+            cand_pose: dict[str, Any] | None = None
+            for thr_px in thresholds:
+                m3, inl_mask = cv2.estimateAffinePartial2D(
+                    src,
+                    dst,
+                    method=cv2.RANSAC,
+                    ransacReprojThreshold=thr_px,
+                    maxIters=2000,
+                    confidence=0.999,
+                )
+                if m3 is None or inl_mask is None:
+                    continue
+                inl = int(inl_mask.sum())
+                if inl < min_inl:
+                    continue
+                if min_rate > 0.0 and inl < min_rate * n_good:
+                    tried.append((n_good, inl, f"inl_rate {inl / max(n_good, 1):.2f}"))
+                    continue
+                s = float(np.hypot(m3[0, 0], m3[0, 1]))
+                if not 0.7 <= s <= 2.6:
+                    tried.append((n_good, inl, f"scale {s:.2f}"))
+                    continue
+                flat = inl_mask.flatten()
+                inlier_pts = [
+                    (float(src[i, 0, 0]), float(src[i, 0, 1])) for i, v in enumerate(flat) if v
+                ]
+                cand_pose = dict(
+                    s=s,
+                    th=float(np.degrees(np.arctan2(m3[1, 0], m3[0, 0]))),
+                    t=(float(m3[0, 2]), float(m3[1, 2])),
+                    inl=inl,
+                    n_match=n_good,
+                    inlier_pts=inlier_pts,
+                )
+                break
+            if cand_pose is None:
                 continue
-            src = np.array([kp1[g.queryIdx].pt for g in good], dtype=np.float32).reshape(-1, 1, 2)
-            dst = np.array([pts[g.trainIdx] for g in good], dtype=np.float32).reshape(-1, 1, 2)
-            m3, inl_mask = cv2.estimateAffinePartial2D(
-                src,
-                dst,
-                method=cv2.RANSAC,
-                ransacReprojThreshold=6.0,
-                maxIters=2000,
-                confidence=0.999,
-            )
-            if m3 is None or inl_mask is None:
-                continue
-            inl = int(inl_mask.sum())
-            if inl < min_inl:
-                continue
-            if min_rate > 0.0 and inl < min_rate * len(good):
-                tried.append((len(good), inl, f"inl_rate {inl / max(len(good), 1):.2f}"))
-                continue
-            s = float(np.hypot(m3[0, 0], m3[0, 1]))
-            if not 0.7 <= s <= 2.6:
-                tried.append((len(good), inl, f"scale {s:.2f}"))
-                continue
-            inliers = [good[i] for i, v in enumerate(inl_mask.flatten()) if v]
-            inlier_pts = [kp1[g.queryIdx].pt for g in inliers]
-            cand_pose: dict[str, Any] = dict(
-                s=s,
-                th=float(np.degrees(np.arctan2(m3[1, 0], m3[0, 0]))),
-                t=(float(m3[0, 2]), float(m3[1, 2])),
-                inl=inl,
-                n_match=len(good),
-                inlier_pts=inlier_pts,
-            )
-            if best is None or inl > int(best["inl"]):
+            if best is None or cand_pose["inl"] > int(best["inl"]):
                 best = cand_pose
                 best_len = len(d2)
-            if early_inl > 0 and inl >= early_inl:
+            if early_inl > 0 and cand_pose["inl"] >= early_inl:
                 # A match this strong will not be beaten by the remaining
                 # scale levels: stop paying for their knnMatch.
                 break

@@ -97,6 +97,9 @@ class MapTabBase(_BaseQt):
     p_sel: Any
     tune_vars: dict[str, StringVarCompat]
     tune_inputs: dict[str, QLineEdit]
+    engine_combo: Any
+    fps_input: QLineEdit
+    fps_var: StringVarCompat
     tune_status: Any
     _tune_container: Any
     _edit_snapshot: list[list[float]] | None
