@@ -16,15 +16,17 @@ from autopilot.navigation.steering_controller import SteeringController, wrap180
 
 
 class TestSteeringImpulse(unittest.TestCase):
-    def test_impulse_uses_model_yaw_rate(self):
-        ctrl = SteeringController()
-        expected = 30.0 * ctrl.imp_k / 90.0
-        self.assertAlmostEqual(ctrl.calc_impulse(30.0, yaw_rate_max=90.0), expected, delta=1e-6)
+    def test_impulse_is_independent_of_the_yaw_model(self):
+        """The pulse length follows the reference law, not err / yaw_rate.
 
-    def test_impulse_falls_back_to_legacy_constant(self):
+        The physical full-lock rate stretched every correction to t_max; the
+        human re-taps short pulses and lets the next sample close the rest.
+        """
         ctrl = SteeringController()
-        expected = min(ctrl.t_max, max(ctrl.t_min, 30.0 * ctrl.imp_k / ctrl.w_est))
-        self.assertAlmostEqual(ctrl.calc_impulse(30.0), expected, delta=1e-6)
+
+        self.assertAlmostEqual(ctrl.calc_impulse(10.0, 100.0), 0.14, delta=0.01)
+        self.assertAlmostEqual(ctrl.calc_impulse(10.0, 5.0), 0.14, delta=0.01)
+        self.assertAlmostEqual(ctrl.calc_impulse(10.0), 0.14, delta=0.01)
 
     def test_impulse_is_clamped(self):
         ctrl = SteeringController()
@@ -34,6 +36,134 @@ class TestSteeringImpulse(unittest.TestCase):
     def test_wrap180(self):
         self.assertAlmostEqual(wrap180(190.0), -170.0, delta=1e-9)
         self.assertAlmostEqual(wrap180(-190.0), 170.0, delta=1e-9)
+
+    def test_impulse_matches_the_reference_manual_drive(self):
+        """Tap lengths follow the human reference at 79 km/h (Ural).
+
+        The reference manual drive (output/manual_dbg_20260928_222519.jsonl)
+        taps ~65 ms at 3 deg of error, ~125 ms at 10 deg and ~250 ms at
+        20 deg; the old 0.7 gain saturated every correction at the 0.5 s cap
+        and the duty was 2.4x the human's.
+        """
+        ctrl = SteeringController()
+        yaw = 10.2  # Ural grip-limited yaw rate at 79 km/h
+
+        self.assertAlmostEqual(ctrl.calc_impulse(3.0, yaw), 0.065, delta=0.02)
+        self.assertAlmostEqual(ctrl.calc_impulse(10.0, yaw), 0.125, delta=0.03)
+        self.assertAlmostEqual(ctrl.calc_impulse(20.0, yaw), 0.25, delta=0.05)
+        self.assertLessEqual(ctrl.calc_impulse(60.0, yaw), ctrl.t_max)
+
+    def test_hold_timeout_is_human_scale(self):
+        ctrl = SteeringController()
+
+        self.assertLessEqual(ctrl.hold_max, 2.0)
+
+
+class TestBrakingYawAuthority(unittest.TestCase):
+    """Weight transfer sharpens the game's yaw response while braking (SPACE).
+
+    Measured at 60-90 km/h: p90 yaw 7.4 deg/s coasting vs 28.1 deg/s braking;
+    the old clamp (1.4 * yaw_rate_max ~ 15-18 deg/s) rejected the real
+    rotation and the release anticipation lagged behind the truck.
+    """
+
+    @staticmethod
+    def _ang_after(braking: bool) -> float:
+        ctrl = SteeringController()
+        ctrl.step(
+            now=100.0,
+            err=10.0,
+            heading=0.0,
+            mh=0.0,
+            mh_t=1.0,
+            yaw_rate_max=10.0,
+            heading_meas=0.0,
+            braking=braking,
+        )
+        ctrl.step(
+            now=100.05,
+            err=10.0,
+            heading=1.5,
+            mh=0.0,
+            mh_t=1.0,
+            yaw_rate_max=10.0,
+            heading_meas=1.5,
+            braking=braking,
+        )
+        return ctrl.ang
+
+    def test_braking_raises_the_yaw_clamp(self):
+        self.assertGreater(self._ang_after(True), self._ang_after(False))
+
+    def test_braking_shortens_the_impulse(self):
+        with patch.object(steering_mod.random, "uniform", return_value=1.0):
+            coast = SteeringController()
+            coast.step(now=100.0, err=20.0, heading=0.0, mh=0.0, mh_t=1.0)
+            brake = SteeringController()
+            brake.step(now=100.0, err=20.0, heading=0.0, mh=0.0, mh_t=1.0, braking=True)
+
+        self.assertAlmostEqual(coast.imp_end - 100.0, 0.25, delta=0.01)
+        self.assertAlmostEqual(brake.imp_end - 100.0, 0.175, delta=0.01)
+
+
+class TestUrgencyModulation(unittest.TestCase):
+    """The off-centre urgency continuously scales amplitude and cadence."""
+
+    def test_off_center_extends_the_impulse(self):
+        with patch.object(steering_mod.random, "uniform", return_value=1.0):
+            centered = SteeringController()
+            centered.step(now=100.0, err=10.0, heading=0.0, mh=0.0, mh_t=1.0)
+            urgent = SteeringController()
+            urgent.step(now=100.0, err=10.0, heading=0.0, mh=0.0, mh_t=1.0, center_urgency=1.0)
+
+        self.assertAlmostEqual(centered.imp_end - 100.0, 0.14, delta=0.01)
+        self.assertAlmostEqual(urgent.imp_end - 100.0, 0.28, delta=0.02)
+
+    def test_off_center_adds_micro_ticks(self):
+        with patch.object(steering_mod.random, "choice", side_effect=lambda seq: max(seq)):
+            centered = SteeringController(pulse_on=4)
+            centered.step(now=100.0, err=4.0, heading=0.0, mh=0.0, mh_t=1.0)
+            urgent = SteeringController(pulse_on=4)
+            urgent.step(now=100.0, err=4.0, heading=0.0, mh=0.0, mh_t=1.0, center_urgency=1.0)
+
+        self.assertGreater(urgent.micro_ticks, centered.micro_ticks)
+
+    def test_recovery_pins_the_wheel_for_a_u_turn(self):
+        ctrl = SteeringController()
+        ctrl.step(now=100.0, err=150.0, heading=0.0, mh=0.0, mh_t=1.0, recovery=True)
+
+        self.assertTrue(ctrl.hold)
+        self.assertAlmostEqual(
+            ctrl.imp_end - 100.0,
+            ctrl.hold_max * steering_mod.RECOVERY_HOLD_SCALE,
+            delta=1e-6,
+        )
+
+
+class TestWrongWayRelease(unittest.TestCase):
+    """A truck sliding against the locked wheel must not keep the lock pinned."""
+
+    def test_wheel_releases_when_the_truck_rotates_against_the_command(self):
+        ctrl = SteeringController()
+        ctrl.step(now=100.0, err=40.0, heading=0.0, mh=0.0, mh_t=1.0)
+        ctrl.step(now=100.05, err=40.0, heading=-1.0, mh=0.0, mh_t=1.0)
+        self.assertEqual(ctrl.steer, 1)
+
+        out = ctrl.step(now=100.40, err=40.0, heading=-20.0, mh=0.0, mh_t=1.0)
+
+        self.assertEqual(out, 0)
+        self.assertEqual(ctrl.steer, 0)
+
+    def test_rotation_with_the_command_keeps_the_lock(self):
+        ctrl = SteeringController()
+        ctrl.step(now=100.0, err=40.0, heading=0.0, mh=0.0, mh_t=1.0)
+        ctrl.step(now=100.05, err=40.0, heading=1.0, mh=0.0, mh_t=1.0)
+        self.assertTrue(ctrl.hold)
+
+        # a few degrees of rotation in the commanded direction: not a slide
+        out = ctrl.step(now=100.40, err=40.0, heading=2.0, mh=0.0, mh_t=1.0)
+
+        self.assertEqual(out, 1)
 
 
 class TestOppositeTargetRelease(unittest.TestCase):

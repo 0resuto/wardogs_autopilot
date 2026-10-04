@@ -47,11 +47,28 @@ class VehicleModel:
         self.steer_speed_curve = [(float(v), float(m)) for v, m in data["steer_speed_mult"]]
         self.tire_peak_force = float(data.get("tire_peak_force", 0.0))
 
+        self.tire_slip_curve = [(float(s), float(f)) for s, f in data.get("tire_slip_curve", [])]
+        self.brake_engagement = [(float(t), float(v)) for t, v in data.get("brake_engagement", [])]
+        self.throttle_engagement = [
+            (float(t), float(v)) for t, v in data.get("throttle_engagement", [])
+        ]
+
         calibration = data.get("calibration", {})
         self.yaw_gain = float(calibration.get("yaw_gain", 1.0))
         self.wheelbase_m = float(calibration.get("wheelbase_m", 3.8))
         self.steer_angle_max_deg = float(calibration.get("steer_angle_max_deg", 35.0))
         self.drive_efficiency = float(calibration.get("drive_efficiency", 0.9))
+        self.drive_accel_scale = float(calibration.get("drive_accel_scale", 7.5e-05))
+        self.resist_a_mps2 = float(calibration.get("resist_a_mps2", 0.15))
+        self.resist_b = float(calibration.get("resist_b", 0.0003))
+        self.brake_decel_mps2 = float(calibration.get("brake_decel_mps2", 5.0))
+        self.brake_yaw_gain = float(calibration.get("brake_yaw_gain", 1.8))
+        self.drive_accel_curve = [
+            (float(v), float(a)) for v, a in calibration.get("drive_accel_curve", [])
+        ]
+        self.coast_decel_curve = [
+            (float(v), float(a)) for v, a in calibration.get("coast_decel_curve", [])
+        ]
 
     @classmethod
     def load(cls, name: str = "ural", path: str | None = None) -> VehicleModel:
@@ -114,6 +131,44 @@ class VehicleModel:
             / self.wheel_radius_m
         )
 
+    def drive_force_n_best(self, speed_kmh: float) -> float:
+        """Best wheel drive force across the forward gears (N, model units).
+
+        The game's automatic gearbox keeps the engine in its band; a
+        short-horizon predictor only needs the achievable envelope, not the
+        exact gear. Gears whose rpm exceeds the engine limit are skipped.
+        """
+        best = 0.0
+        for gear in self.gears_forward:
+            if speed_kmh > 1.0:
+                rpm = self.rpm_for_speed(speed_kmh, gear)
+                if rpm > self.max_rpm * 1.05:
+                    continue
+            else:
+                rpm = self.idle_rpm
+            rpm = min(max(rpm, self.idle_rpm), self.max_rpm)
+            force = (
+                self.torque_nm(rpm)
+                * gear
+                * self.final_drive
+                * self.drive_efficiency
+                / self.wheel_radius_m
+            )
+            best = max(best, force)
+        return best
+
+    def drive_accel_kmh(self, speed_kmh: float) -> float | None:
+        """Measured net acceleration under throttle at a speed (None if no table)."""
+        if not self.drive_accel_curve:
+            return None
+        return self._interp(self.drive_accel_curve, speed_kmh)
+
+    def coast_decel_kmh(self, speed_kmh: float) -> float | None:
+        """Measured coast deceleration magnitude (None if no table)."""
+        if not self.coast_decel_curve:
+            return None
+        return self._interp(self.coast_decel_curve, speed_kmh)
+
     def steer_limit(self, speed_kmh: float) -> float:
         """Share of the maximum steer angle available at a speed (0..1)."""
         return max(0.0, min(1.0, self._interp(self.steer_limit_curve, speed_kmh) / 100.0))
@@ -122,20 +177,29 @@ class VehicleModel:
         """Steering rate multiplier at a speed (>0)."""
         return max(1e-3, self._interp(self.steer_speed_curve, speed_kmh))
 
-    def yaw_rate_max_deg_s(self, speed_kmh: float, lat_accel_mps2: float | None = None) -> float:
+    def yaw_rate_max_deg_s(
+        self,
+        speed_kmh: float,
+        lat_accel_mps2: float | None = None,
+        include_gain: bool = True,
+    ) -> float:
         """Maximum yaw rate (deg/s) from the model at the given speed.
 
         The steering geometry (bicycle model) sets the kinematic ceiling, but
         the tires cannot hold more than the lateral grip budget: above it the
         real yaw rate is `a_lat / v`. Pass the budget to get the capped value.
+        `include_gain=False` returns the raw kinematic/grip ceiling without the
+        calibrated yaw gain (the predictor applies the gain itself, once).
         """
         v = max(0.0, speed_kmh) / 3.6
         angle_rad = math.radians(self.steer_angle_max_deg) * self.steer_limit(speed_kmh)
-        yaw = math.degrees(self.yaw_gain * v * math.tan(angle_rad) / self.wheelbase_m)
+        yaw = math.degrees(v * math.tan(angle_rad) / self.wheelbase_m)
         if lat_accel_mps2 is not None and lat_accel_mps2 > 0.0 and v > 1e-3:
             grip_limit = math.degrees(lat_accel_mps2 / v)
             yaw = min(yaw, grip_limit)
-        return yaw
+        # the calibrated gain scales the final authority (arcade handling and
+        # assist effects shrink both the kinematic and the grip ceiling)
+        return yaw * (self.yaw_gain if include_gain else 1.0)
 
     def corner_speed_kmh(self, radius_m: float, lat_accel_mps2: float) -> float:
         """Speed limit for a corner of the given radius (m/s^2 lateral budget)."""

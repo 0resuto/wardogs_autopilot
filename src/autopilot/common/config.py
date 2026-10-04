@@ -152,6 +152,30 @@ class LocatorConfig(BaseModel):
         description="Hybrid engine: minimum ECC correlation coefficient; below it "
         "the frame is re-localized with a SIFT anchor",
     )
+    anchor_rot_gate_deg: float = Field(
+        default=60.0,
+        ge=0.0,
+        le=180.0,
+        description="Reject an anchor match whose rotation contradicts the last "
+        "accepted heading by more than this (0 disables): a symmetric patch can "
+        "lock the same place 180 degrees rotated, and that wrong lock is "
+        "persistent. Only applied while the truck is known to move",
+    )
+    hybrid_map_ecc: bool = Field(
+        default=False,
+        description="Hybrid engine: align every frame directly against the map "
+        "patch rendered at the predicted pose instead of the previous frame. "
+        "Absolute per-frame measurement: no drift accumulation (the "
+        "frame-to-frame track wanders 3-10 m between anchors)",
+    )
+    hybrid_map_min_cc: float = Field(
+        default=0.35,
+        ge=0.0,
+        le=1.0,
+        description="Hybrid engine: minimum correlation for the map-aligned ECC "
+        "(used only when hybrid_map_ecc is on; the map patch is rendered from "
+        "the coarser working map, so the correlation is lower than frame-to-frame)",
+    )
     track_radius: float = Field(default=900.0, ge=50.0)
     ratio_local: float = Field(default=0.85, ge=0.1, le=1.0)
     min_inl_local: int = Field(default=4, ge=1)
@@ -250,9 +274,10 @@ class NavigatorConfig(BaseModel):
         description="Heading error threshold for continuous steering (deg)",
     )
     hold_max: float = Field(
-        default=8.0,
+        default=2.0,
         ge=0.5,
-        description="Safety timeout for continuous steering (s)",
+        description="Safety timeout for continuous steering (s); the reference "
+        "manual drive never held a correction longer than ~1.2 s",
     )
     speed_cap_kmh: float = Field(default=79.0, ge=1.0, description="Maximum driving speed in km/h")
     speed_profile: bool = Field(

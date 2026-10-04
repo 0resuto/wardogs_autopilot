@@ -8,6 +8,40 @@ from __future__ import annotations
 
 import random
 
+#: Impulse length from the reference manual drive
+#: (output/manual_dbg_20260928_222519.jsonl): 0.03 s + 0.011 s/deg, i.e.
+#: ~65 ms at 3 deg, ~125 ms at 10 deg, ~250 ms at 20 deg. The yaw model no
+#: longer sets the pulse length: a full-lock rotation needs err / yaw_rate
+#: seconds, which saturated every pulse at t_max, while the human re-taps
+#: short pulses and lets the next sample close the rest.
+IMP_BASE_S = 0.03
+IMP_PER_DEG_S = 0.011
+#: One control tick (~0.04 s at the ~24 Hz loop): micro taps are quantized by it.
+MICRO_TICK_S = 0.04
+#: Braking transfers weight to the front axle and sharpens the yaw response in
+#: the game: at 60-90 km/h the measured yaw rate is p50/p90 = 0.2/7.4 deg/s
+#: coasting vs 1.9/28.1 deg/s on SPACE (2026-10-01 23:06 run). While braking
+#: the yaw clamp is raised by this factor and the impulse shortened, so the
+#: release anticipation still matches the real rotation.
+BRAKE_YAW_GAIN = 1.8
+BRAKE_IMP_SCALE = 0.7
+#: Continuous modulation by the off-centre urgency (0 at the inner edge, 1 at
+#: the outer edge): the impulse grows to 2x and the settle shrinks to 0.6x at
+#: the wall, so a long bend is held by firmer and more frequent taps instead
+#: of the old two-variant (micro vs full) response.
+URGENCY_IMP_GAIN = 1.0
+URGENCY_TICKS = 2
+URGENCY_SETTLE_CUT = 0.4
+#: Spin recovery holds the wheel twice as long: the truck must come around,
+#: not re-pulse every 2 s while it circles.
+RECOVERY_HOLD_SCALE = 2.0
+#: Rotation AGAINST the commanded direction by more than this (deg) sustained
+#: for `WRONG_WAY_S` seconds means the truck is sliding/spinning on the locked
+#: wheel (2026-10-03 02:19 run: half a minute of pinned lock while the heading
+#: swung 180 deg the other way). The wheel is released instead of pinned.
+WRONG_WAY_DEG = 8.0
+WRONG_WAY_S = 0.3
+
 
 def wrap180(deg: float) -> float:
     """Normalize an angle to [-180, +180) degrees."""
@@ -23,13 +57,21 @@ class SteeringController:
         dead_off: float = 2.0,
         settle_t: float = 0.80,
         micro_settle_t: float = 0.30,
-        imp_k: float = 0.70,
+        # Impulse calibration from the reference manual drive
+        # (output/manual_dbg_20260928_222519.jsonl, 2026-09-28): at 79 km/h
+        # (Ural, ~10 deg/s grip-limited yaw) the human taps the wheel for
+        # ~65 ms at 3 deg of error, ~125 ms at 10 deg and ~250 ms at 20 deg,
+        # re-tapping every ~0.4 s, and never holds a full-lock correction for
+        # long. The old 0.7 gain targeted closing 70% of the error in one
+        # pulse: every correction saturated at t_max=0.5 s, the duty was 2.4x
+        # the human's and the truck ran p90 |err| 36 deg vs the human's 11.
+        imp_k: float = 0.12,
         w_est: float = 18.0,
-        t_min: float = 0.10,
-        t_max: float = 0.50,
+        t_min: float = 0.06,
+        t_max: float = 0.30,
         pulse_on: int = 3,
         turn_deg: float = 25.0,
-        hold_max: float = 8.0,
+        hold_max: float = 2.0,
         jitter: float = 0.1,
         ant_s: float = 0.25,
         pose_timeout: float = 0.6,
@@ -134,22 +176,42 @@ class SteeringController:
     def calc_impulse(self, err: float, yaw_rate_max: float | None = None) -> float:
         """Steering impulse duration (seconds) for a heading error.
 
-        With a model-provided yaw rate the duration follows the physically
-        available turn rate; without it the legacy constant is used.
+        Follows the reference manual drive (`IMP_BASE_S` + `IMP_PER_DEG_S` per
+        degree), so the pulse length modulates with the error instead of
+        clamping every small correction to one tick. `yaw_rate_max` stays in
+        the signature for the callers and future shaping but does not stretch
+        the pulse: the physical full-lock rate is what made corrections long.
         """
-        rate = self.w_est
-        if yaw_rate_max is not None and yaw_rate_max > 1e-3:
-            rate = float(yaw_rate_max)
-        return max(
-            self.t_min,
-            min(self.t_max, abs(err) * self.imp_k / rate),
-        )
+        return max(self.t_min, min(self.t_max, IMP_BASE_S + IMP_PER_DEG_S * abs(err)))
 
-    def _impulse_end(self, now: float, err: float, yaw_rate_max: float | None) -> float:
-        """Jittered impulse end time (hold mode keeps its fixed safety timeout)."""
+    def _micro_ticks_for(self, err: float, urgency: float = 0.0) -> int:
+        """Micro-tap length in ticks, scaled with the error and the off-centre drift.
+
+        The fixed 3-4 tick tap gave 2 deg and 6 deg the same correction; the
+        reference drive modulates ~1 tick at 2 deg up to ~2-3 ticks at 6 deg,
+        and a drifting car gets up to two extra ticks instead of the same tap.
+        """
+        base = int(round((IMP_BASE_S + IMP_PER_DEG_S * abs(err)) / MICRO_TICK_S))
+        base += int(round(URGENCY_TICKS * max(0.0, min(1.0, urgency))))
+        base = max(1, min(self.pulse_on + 1, base))
+        return random.choice((base, min(base + 1, self.pulse_on + 1)))
+
+    def _impulse_end(
+        self,
+        now: float,
+        err: float,
+        yaw_rate_max: float | None,
+        scale: float = 1.0,
+    ) -> float:
+        """Jittered impulse end time (hold mode keeps its fixed safety timeout).
+
+        `scale` combines the live modifiers: shorter while SPACE is held (the
+        game yaws faster under braking) and longer with the off-centre urgency
+        or a spin recovery.
+        """
         if self.hold:
-            return now + self.hold_max
-        base = min(self.calc_impulse(abs(err), yaw_rate_max), self.t_max)
+            return now + self.hold_max * scale
+        base = min(self.calc_impulse(abs(err), yaw_rate_max), self.t_max) * scale
         return now + base * random.uniform(1.0 - self.jitter, 1.0 + self.jitter)
 
     def step(
@@ -164,6 +226,9 @@ class SteeringController:
         pose_age: float | None = None,
         mv_mps: float | None = None,
         heading_meas: float | None = None,
+        braking: bool = False,
+        center_urgency: float = 0.0,
+        recovery: bool = False,
     ) -> int:
         """Evaluate steering state machine and return active key command (-1=A, 0=None, +1=D).
 
@@ -177,11 +242,22 @@ class SteeringController:
         ticks: with a ~23 Hz loop and ~8 Hz poses a single glitch used to
         engage a full-lock hold. A stale pose (frozen localization) releases
         the wheel.
+
+        `center_urgency` (0..1, off-centre in the corridor) continuously
+        stretches the impulse, adds micro ticks and shortens the settle.
+        `recovery` (spun/backwards car) pins the wheel with a doubled hold
+        timeout so the truck comes around instead of re-pulsing.
         """
+        urgency = max(0.0, min(1.0, center_urgency))
         rate_src = heading if heading_meas is None else heading_meas
-        self.update_angular_velocity(
-            now, rate_src, max_rate=max(15.0, 1.4 * (yaw_rate_max or 45.0))
-        )
+        max_rate = max(15.0, 1.4 * (yaw_rate_max or 45.0))
+        if braking:
+            max_rate *= BRAKE_YAW_GAIN
+        self.update_angular_velocity(now, rate_src, max_rate=max_rate)
+        impulse_scale = (BRAKE_IMP_SCALE if braking else 1.0) * (1.0 + URGENCY_IMP_GAIN * urgency)
+        if recovery:
+            impulse_scale *= RECOVERY_HOLD_SCALE
+        settle_scale = 1.0 - URGENCY_SETTLE_CUT * urgency
 
         pose_stale = pose_age is not None and pose_age > self.pose_timeout
         if pose_stale:
@@ -205,27 +281,27 @@ class SteeringController:
                 if err > self.dead:
                     self.steer = 1
                     self.micro = False
-                    self.hold = self.big_n >= 2
+                    self.hold = self.big_n >= 2 or recovery
                     self.hold_err0 = abs(err)
-                    self.imp_end = self._impulse_end(now, err, yaw_rate_max)
+                    self.imp_end = self._impulse_end(now, err, yaw_rate_max, impulse_scale)
                     self.press_t0 = now
                     self.press_h0 = heading
                     self.hold_t0 = now
                 elif err < -self.dead:
                     self.steer = -1
                     self.micro = False
-                    self.hold = self.big_n >= 2
+                    self.hold = self.big_n >= 2 or recovery
                     self.hold_err0 = abs(err)
-                    self.imp_end = self._impulse_end(now, err, yaw_rate_max)
+                    self.imp_end = self._impulse_end(now, err, yaw_rate_max, impulse_scale)
                     self.press_t0 = now
                     self.press_h0 = heading
                     self.hold_t0 = now
         else:
             # Upgrade an in-progress impulse to continuous steering once a
             # big error persists across the debounce window (~2 poses).
-            if not self.hold and self.big_n >= 2:
+            if not self.hold and (self.big_n >= 2 or recovery):
                 self.hold = True
-                self.imp_end = now + self.hold_max
+                self.imp_end = now + self.hold_max * impulse_scale
 
             rotated = abs(wrap180(heading - self.press_h0))
             # Rotation already underway in the commanded direction counts as
@@ -236,36 +312,45 @@ class SteeringController:
             # The target flipped to the other side (waypoint switch, bearing
             # glitch): holding the lock would keep driving away from it.
             opposite = (self.steer > 0 and err < -self.dead) or (self.steer < 0 and err > self.dead)
+            # The truck rotates opposite to the command for long enough: it is
+            # sliding on the locked wheel, not turning. Pinning the lock only
+            # feeds the spin.
+            wrong_way = (
+                press_age > WRONG_WAY_S
+                and wrap180(heading - self.press_h0) * self.steer < -WRONG_WAY_DEG
+            )
             if self.micro:
                 # A micro tap is a fixed-length pulse: its tick counter is
                 # handled by the press block below. Without this the stale
                 # imp_end (never set on micro engagement) released the pulse
                 # after a single tick, making every micro tap 4x too short.
-                released = opposite
+                released = opposite or wrong_way
             elif self.hold:
                 # Continuous steering: keep turning until the heading really
                 # aligns with the bearing (not an impulse timeout).
                 aligned = abs(pred_err) < self.dead
                 turned = rotated_eff >= min(abs(pred_err), self.hold_err0) * 0.8 + self.dead_off
-                released = aligned or turned or opposite or now >= self.imp_end
+                released = aligned or turned or opposite or wrong_way or now >= self.imp_end
             else:
                 released = (
                     rotated_eff >= abs(pred_err) * 0.85 + self.dead_off
                     or (press_age > 0.45 and rotated < 3.0)
                     or small
                     or opposite
+                    or wrong_way
                     or now >= self.imp_end
                 )
 
             if released:
-                if opposite:
-                    # A target flip is not a finished correction: re-engage fast.
-                    self.force_release(now, mh_t, self.micro_settle_t)
+                if opposite or wrong_way:
+                    # A target flip or a slide is not a finished correction:
+                    # re-engage fast once the truck settles.
+                    self.force_release(now, mh_t, self.micro_settle_t * settle_scale)
                 elif mv_mps is not None and mv_mps > 0.5:
                     settle = min(self.settle_t, self.settle_dist_m / mv_mps)
-                    self.force_release(now, mh_t, settle)
+                    self.force_release(now, mh_t, settle * settle_scale)
                 else:
-                    self.force_release(now, mh_t)
+                    self.force_release(now, mh_t, self.settle_t * settle_scale)
 
         # Micro-corrections after settle
         if self.steer == 0 and now > self.settle_until and fresh:
@@ -273,14 +358,14 @@ class SteeringController:
                 self.steer = 1
                 self.steer_ph = 0
                 self.micro = True
-                self.micro_ticks = random.choice((self.pulse_on, self.pulse_on + 1))
+                self.micro_ticks = self._micro_ticks_for(err, urgency)
                 self.hold_t0 = now
                 self.settle_mh = mh_t
             elif err < -self.dead_off:
                 self.steer = -1
                 self.steer_ph = 0
                 self.micro = True
-                self.micro_ticks = random.choice((self.pulse_on, self.pulse_on + 1))
+                self.micro_ticks = self._micro_ticks_for(err, urgency)
                 self.hold_t0 = now
                 self.settle_mh = mh_t
 

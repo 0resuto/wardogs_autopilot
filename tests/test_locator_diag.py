@@ -415,7 +415,7 @@ class TestTrackerFrameError(unittest.TestCase):
         mm = np.zeros((32, 32), np.uint8)
 
         with patch.object(tracker_mod.locator, "global_pose", side_effect=RuntimeError("boom")):
-            pose, diag = loc._frame_pose(mm, None)
+            pose, diag = loc._frame_pose(mm, None, time.time())
 
         self.assertIsNone(pose)
         self.assertEqual(diag["reject"], "locator_error")

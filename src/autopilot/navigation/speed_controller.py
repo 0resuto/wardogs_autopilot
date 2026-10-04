@@ -17,6 +17,12 @@ from ..common.log import get_logger
 
 logger = get_logger("speed_controller")
 
+#: Heading error (deg) above which the corner rule may cut the gas while the
+#: wheel is held. The human reference drive keeps W ~95% of the time; cutting
+#: it for normal corner tracking (10-20 deg) made the truck sluggish on exits
+#: (wheel held, gas cut: 3-8% of ticks, 2026-10-03 runs).
+GAS_CUT_ERR_DEG = 25.0
+
 
 class SpeedController:
     """Manages driving speed, deceleration profiles, and braking decisions."""
@@ -207,6 +213,7 @@ class SpeedController:
         xte: float,
         xte_lim: float,
         hold_window: bool = True,
+        err: float | None = None,
     ) -> tuple[bool, bool]:
         """Decide gas (W) and brake (SPACE) from the target speed.
 
@@ -222,10 +229,9 @@ class SpeedController:
         around the single threshold.
         Returns (gas_w, brake_space).
         """
-        # The window is disabled when the driver is recovering from outside the
-        # outer corridor (hold_window=False): then the low rejoin target must
-        # actively brake, not coast. corner_min_kmh = 0 also disables it (no
-        # lower edge -> the band would never ask for gas).
+        # The window is disabled during a recovery (hold_window=False): the
+        # rejoin cap must actively brake, not coast. corner_min_kmh = 0 also
+        # disables it (no lower edge -> the band would never ask for gas).
         if hold_window and self.corner_min_kmh > 0.0 and self.corner_max_kmh > self.corner_min_kmh:
             hi_px = self.from_kmh(self.corner_max_kmh)
             lo_px = self.from_kmh(self.corner_min_kmh)
@@ -250,8 +256,15 @@ class SpeedController:
 
         gas_w = True
         if steer != 0 and not micro:
-            # Cut gas in sharp corners while holding the wheel inside the corridor
-            if road_turn >= turn_min and abs(xte) <= xte_lim:
+            # Cut gas in sharp corners while holding the wheel inside the
+            # corridor. Below the steady-corner floor the cut dead-locks the
+            # truck: no speed -> no yaw -> the wheel stays held and the error
+            # never closes (the low-speed crawl in the 2026-10-01 runs). The
+            # cut also needs a real misalignment (`err`): normal corner
+            # tracking keeps the throttle like the human reference.
+            slow_floor = self.from_kmh(self.corner_min_kmh) if self.corner_min_kmh > 0.0 else 0.0
+            misaligned = err is None or abs(err) >= GAS_CUT_ERR_DEG
+            if road_turn >= turn_min and abs(xte) <= xte_lim and mv > slow_floor and misaligned:
                 gas_w = False
         elif overspd:
             gas_w = False

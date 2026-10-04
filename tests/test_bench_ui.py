@@ -41,6 +41,7 @@ from autopilot.ui.bench_window import (  # noqa: E402
     BenchPlan,
     BenchWindow,
     BenchWorker,
+    param_hint,
     record_key,
 )
 from autopilot.ui.tabs.logs_tab import LogsTab  # noqa: E402
@@ -655,6 +656,12 @@ class TestScenarioInputs(unittest.TestCase):
     def test_engines_and_registry_stay_in_one_place(self) -> None:
         self.assertEqual(set(ENGINES), {"sift", "orb", "xfeat", "hybrid"})
         self.assertIn("ratio_local", param_registry("sift"))
+
+    def test_param_hint_lists_the_keys_and_what_changing_them_does(self) -> None:
+        hint = param_hint("sift")
+        self.assertIn("ratio_local", hint)
+        self.assertIn("lower", hint)
+        self.assertIn("higher", hint)
 
 
 class TestNoProductionSideEffects(unittest.TestCase):

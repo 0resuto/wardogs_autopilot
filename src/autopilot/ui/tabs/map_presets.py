@@ -18,21 +18,32 @@ class MapPresetsMixin(MapTabBase):
 
         The preset used in the last session is selected again, and its route is
         loaded when no route is set (fresh start), so the studio opens ready to
-        drive.
+        drive. Rebuilding the combo emits currentTextChanged for every step;
+        the reload guard keeps the handler from loading half-built selections.
         """
         map_name = self.get_map_name()
         self.preset_mgr = PresetManager(subdir=f"data/presets/{map_name}")
         names = self.preset_mgr.list_presets()
-        self.p_sel.clear()
-        self.p_sel.addItems(names)
-        if names:
-            last = self.app_cfg.navigator.last_preset
-            if last in names:
-                self.p_sel.setCurrentText(last)
-            else:
-                self.p_sel.setCurrentIndex(0)
-            if not self.route_pts:
-                self.preset_load_sel(persist=False)
+        self._preset_reloading = True
+        try:
+            self.p_sel.clear()
+            self.p_sel.addItems(names)
+            if names:
+                last = self.app_cfg.navigator.last_preset
+                if last in names:
+                    self.p_sel.setCurrentText(last)
+                else:
+                    self.p_sel.setCurrentIndex(0)
+        finally:
+            self._preset_reloading = False
+        if names and not self.route_pts:
+            self.preset_load_sel(persist=False)
+
+    def _on_preset_selected(self, name: str) -> None:
+        """Load the preset chosen in the combo and remember it for the next start."""
+        if self._preset_reloading or not name.strip():
+            return
+        self.preset_load_sel()
 
     def _ask_preset_name(self, title: str, ok_text: str, initial: str = "") -> str | None:
         """Ask for a preset name (field + OK/Cancel), or None when cancelled."""

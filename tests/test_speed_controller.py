@@ -230,6 +230,56 @@ class TestThrottleBrake(unittest.TestCase):
         self.assertFalse(gas)
         self.assertFalse(brake)
 
+    def test_corner_gas_cut_keeps_a_speed_floor(self):
+        """Below the steady-corner floor the cut would stall the truck.
+
+        With no speed there is no yaw, so the held wheel cannot close the
+        error and the driver never releases: gas must stay on at a crawl.
+        """
+        ctrl = SpeedController(corner_min_kmh=12.0, corner_max_kmh=22.0, px_per_m=2.0)
+        floor = ctrl.from_kmh(12.0)
+        tgt = ctrl.from_kmh(30.0)
+
+        gas, brake = self._decide(ctrl, floor * 0.5, tgt, steer=1, road_turn=30.0)
+        self.assertTrue(gas)
+        self.assertFalse(brake)
+
+        gas, brake = self._decide(ctrl, floor * 2.0, tgt, steer=1, road_turn=30.0)
+        self.assertFalse(gas)
+        self.assertFalse(brake)
+
+    def test_corner_gas_cut_needs_a_real_misalignment(self):
+        """Normal corner tracking keeps the throttle (the human never lifts)."""
+        ctrl = SpeedController(corner_min_kmh=12.0, corner_max_kmh=22.0, px_per_m=2.0)
+        tgt = ctrl.from_kmh(30.0)
+        mv = ctrl.from_kmh(28.0)
+
+        gas, _brake = ctrl.decide_throttle_and_brake(
+            mv=mv,
+            tgt_spd=tgt,
+            steer=1,
+            micro=False,
+            road_turn=30.0,
+            turn_min=10.0,
+            xte=0.0,
+            xte_lim=8.0,
+            err=10.0,
+        )
+        self.assertTrue(gas)
+
+        gas, _brake = ctrl.decide_throttle_and_brake(
+            mv=mv,
+            tgt_spd=tgt,
+            steer=1,
+            micro=False,
+            road_turn=30.0,
+            turn_min=10.0,
+            xte=0.0,
+            xte_lim=8.0,
+            err=30.0,
+        )
+        self.assertFalse(gas)
+
     def test_braking_is_independent_of_steering(self):
         ctrl = SpeedController()
         gas, brake = self._decide(ctrl, 40.0, 20.0, steer=1, road_turn=30.0)

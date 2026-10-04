@@ -36,11 +36,15 @@ class TestCatalogScale(unittest.TestCase):
 
     def test_catalog_artifact_sizes_match_disk(self):
         store = MapStore()
+        checked = 0
         for _name, entry in store._catalog().get("maps", {}).items():
             for fname, meta in (entry.get("artifacts") or {}).items():
                 path = os.path.join(store.data_maps_dir, fname)
                 if os.path.exists(path):
+                    checked += 1
                     self.assertEqual(os.path.getsize(path), meta["size"], fname)
+        if checked == 0:
+            self.skipTest("no map artifacts on this machine")
 
     def test_distributed_artifacts_are_consistent(self):
         """Catalog source, gray.txt and the index-embedded signature must agree."""

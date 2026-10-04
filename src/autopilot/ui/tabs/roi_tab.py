@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 from ... import PROJECT_ROOT
 from ..flow_layout import FlowLayout
 from ..icons import icon
+from ..param_tips import tip_for
 from ..roi_selector import RoiSelector
 from ..theme import BLUE, GREEN, RED, TEXT_DIM, TEXT_MUTED
 from .common import StringVarCompat, compact_label
@@ -130,6 +131,7 @@ class RoiTab(RoiCacheMixin, RoiDiagnosticsMixin, QWidget):
 
             self._mon_sel = QComboBox(card_roi)
             self._mon_sel.setFixedWidth(104)
+            self._mon_sel.setToolTip(tip_for("monitor"))
             for i in range(1, len(cap.monitors)):
                 m = cap.monitors[i]
                 self._mon_sel.addItem(f"{i}: {m['width']}x{m['height']}")
@@ -172,6 +174,7 @@ class RoiTab(RoiCacheMixin, RoiDiagnosticsMixin, QWidget):
                 val = str(current_roi[i]) if i < len(current_roi) else "0"
                 inp = QLineEdit(val, card_roi)
                 inp.setFixedWidth(48)
+                inp.setToolTip(tip_for(f"mmap_roi.{name}"))
                 coord_row.addWidget(inp)
                 self.coord_inputs[name] = inp
                 compat_var = StringVarCompat(val)
@@ -227,10 +230,7 @@ class RoiTab(RoiCacheMixin, RoiDiagnosticsMixin, QWidget):
             val = str(loc_cfg.get(key, 0.0) or 0.0)
             inp = QLineEdit(val, card_center)
             inp.setFixedWidth(48)
-            inp.setToolTip(
-                "Offset of the player marker from the ROI midpoint in minimap px:\n"
-                "+DX = right, +DY = down in the captured frame"
-            )
+            inp.setToolTip(tip_for(key))
             center_row.addWidget(inp)
             self.center_inputs[key] = inp
             self.center_vars[key] = StringVarCompat(val)
@@ -335,6 +335,7 @@ class RoiTab(RoiCacheMixin, RoiDiagnosticsMixin, QWidget):
                 val = str(saved_speed[i]) if saved_speed and i < len(saved_speed) else "0"
                 inp = QLineEdit(val, card_speed)
                 inp.setFixedWidth(48)
+                inp.setToolTip(tip_for(f"speed_roi.{name}"))
                 speed_row.addWidget(inp)
                 self.speed_inputs[name] = inp
                 self.speed_vars[name] = StringVarCompat(val)

@@ -115,7 +115,7 @@ class MapLocator(IndexSearchMixin):
         ui_mask: np.ndarray | None,
         prev_xy: tuple[float, float] | None = ...,
         min_inl: int = ...,
-        prev_th: float = ...,
+        prev_th: float | None = ...,
         debug: Literal[True] = ...,
         budget: float | None = ...,
         progress: Callable[[tuple[Any, ...]], None] | None = ...,
@@ -129,7 +129,7 @@ class MapLocator(IndexSearchMixin):
         ui_mask: np.ndarray | None,
         prev_xy: tuple[float, float] | None = ...,
         min_inl: int = ...,
-        prev_th: float = ...,
+        prev_th: float | None = ...,
         debug: Literal[False] = ...,
         budget: float | None = ...,
         progress: Callable[[tuple[Any, ...]], None] | None = ...,
@@ -143,7 +143,7 @@ class MapLocator(IndexSearchMixin):
         ui_mask: np.ndarray | None,
         prev_xy: tuple[float, float] | None = ...,
         min_inl: int = ...,
-        prev_th: float = ...,
+        prev_th: float | None = ...,
         debug: bool = ...,
         budget: float | None = ...,
         progress: Callable[[tuple[Any, ...]], None] | None = ...,
@@ -156,7 +156,7 @@ class MapLocator(IndexSearchMixin):
         ui_mask: np.ndarray | None,
         prev_xy: tuple[float, float] | None = None,
         min_inl: int = 4,
-        prev_th: float = 0.0,
+        prev_th: float | None = None,
         debug: bool = False,
         budget: float | None = None,
         progress: Callable[[tuple[Any, ...]], None] | None = None,
@@ -230,6 +230,7 @@ class MapLocator(IndexSearchMixin):
             max_kp=max_kp,
             passes=passes,
             diag=diag,
+            prev_th=prev_th,
         )
         return (pose, diag) if debug else pose
 
@@ -362,6 +363,7 @@ class MapLocator(IndexSearchMixin):
         passes: list[Callable[[np.ndarray, np.ndarray | None], np.ndarray]],
         diag: dict[str, Any],
         derotate_deg: float = 0.0,
+        prev_th: float | None = None,
     ) -> dict[str, Any] | None:
         """Run the prep passes and the index search; fills diag, returns the pose."""
         _kf: list[cv2.KeyPoint] = []
@@ -390,6 +392,7 @@ class MapLocator(IndexSearchMixin):
                 progress=progress,
                 feats=(_kf, _df),
                 prev_s=prev_s,
+                prev_th=prev_th,
             )
             if fp is not None and len(fp) == 5 and fp[0] is not None:
                 break
@@ -546,6 +549,18 @@ def _active_engine() -> Any:
     return _DEFAULT_LOCATOR
 
 
+def reset_track() -> None:
+    """Drop the engine's inter-frame track; the next frame re-anchors.
+
+    The hybrid track absorbs a wrong anchor into its frame->map transform
+    before any consumer can reject the pose, so a rejected motion-flip must
+    reset it or the next frame keeps tracking from the flipped transform.
+    """
+    reset = getattr(_active_engine(), "reset", None)
+    if callable(reset):
+        reset()
+
+
 def get_store() -> MapStore:
     return _DEFAULT_STORE
 
@@ -592,7 +607,7 @@ def global_pose(
     ui_mask: np.ndarray | None,
     prev_xy: tuple[float, float] | None = ...,
     min_inl: int = ...,
-    prev_th: float = ...,
+    prev_th: float | None = ...,
     debug: Literal[True] = ...,
     budget: float | None = ...,
     progress: Callable[[tuple[Any, ...]], None] | None = ...,
@@ -606,7 +621,7 @@ def global_pose(
     ui_mask: np.ndarray | None,
     prev_xy: tuple[float, float] | None = ...,
     min_inl: int = ...,
-    prev_th: float = ...,
+    prev_th: float | None = ...,
     debug: Literal[False] = ...,
     budget: float | None = ...,
     progress: Callable[[tuple[Any, ...]], None] | None = ...,
@@ -620,7 +635,7 @@ def global_pose(
     ui_mask: np.ndarray | None,
     prev_xy: tuple[float, float] | None = ...,
     min_inl: int = ...,
-    prev_th: float = ...,
+    prev_th: float | None = ...,
     debug: bool = ...,
     budget: float | None = ...,
     progress: Callable[[tuple[Any, ...]], None] | None = ...,
@@ -633,7 +648,7 @@ def global_pose(
     ui_mask: np.ndarray | None,
     prev_xy: tuple[float, float] | None = None,
     min_inl: int = 4,
-    prev_th: float = 0.0,
+    prev_th: float | None = None,
     debug: bool = False,
     budget: float | None = None,
     progress: Callable[[tuple[Any, ...]], None] | None = None,
@@ -666,10 +681,6 @@ def _loc_cfg() -> dict[str, Any]:
     return _DEFAULT_STORE.loc_cfg()
 
 
-def _map_cfg() -> dict[str, Any]:
-    return _DEFAULT_STORE.map_cfg()
-
-
 def _gray_sig() -> str:
     return _DEFAULT_STORE.gray_sig()
 
@@ -680,18 +691,6 @@ def _gray_sig_on_disk(name: str | None = None) -> str | None:
 
 def _get_index() -> Any:
     return _DEFAULT_STORE.get_index()
-
-
-def _full_path(name: str | None = None) -> str:
-    return _DEFAULT_STORE.full_path(name)
-
-
-def _cache_path(name: str, suffix: str) -> str:
-    return _DEFAULT_STORE.cache_path(name, suffix)
-
-
-def _preview_path(name: str, n: int) -> str:
-    return _DEFAULT_STORE.preview_path(name, n)
 
 
 def _norm8(g: np.ndarray) -> np.ndarray:

@@ -25,7 +25,6 @@ from .fail_dump import (
     FAIL_KEEP_FILES,
     FAIL_REASONS,
     FAIL_SAVE_PERIOD_S,
-    fail_payload,
     prune_fail_files,
     save_fail_frame,
 )
@@ -39,23 +38,77 @@ def _ang_diff(a, b):
     return abs((a - b + 540.0) % 360.0 - 180.0)
 
 
-def _vote_decide(buf, need, radius, pos):
-    """Append pos to the vote buffer; return the agreeing cluster if at least
-    `need` buffered jump candidates lie pairwise within `radius`, else None.
+#: A pose gap (s) after which the next candidate must pass the vote gate even
+#: when it looks strong: right after a void the matcher can re-acquire a
+#: coherent but wrong place (2026-10-03 runs), and the strong-inlier bypass
+#: would publish it immediately.
+REACQUIRE_GAP_S = 0.4
+#: Heading agreement the vote frames must show: a position-only vote passes a
+#: 180-degree flip at the same place (the known wrong-lock shape).
+VOTE_HEADING_TOL_DEG = 10.0
+#: Motion-course heading gate: a pose whose heading contradicts the direction
+#: of travel is a wrong lock (the 180-degree flip at the same place), not a
+#: spin. This is the physical check the vote cannot make: a persistent flipped
+#: track passes a 3-frame vote, the hybrid ECC keeps it alive and `prev_th`
+#: feeds it back (2026-10-04 02:52 run: flip at 80 km/h, then 90 s of recovery
+#: loops). The course comes from the accepted positions and is latched while
+#: the truck is known to move, so the guard survives the blind spell that a
+#: rejection itself causes.
+MOTION_WINDOW_S = 0.6
+MOTION_MIN_PX = 16.0
+MOTION_TOL_DEG = 75.0
+MOTION_MIN_KMH = 30.0  # OCR speed above which the truck is definitely moving
+MOTION_HOLD_S = 2.0  # stale course lifetime without OCR speed evidence
 
-    Used by the relocation vote gate: a single lone candidate (a wrong
-    re-acquisition) is kept for `need` frames and only published when enough
-    consensus frames agree on the same place. The buffer is a maxlen deque, so
-    stale candidates expire by themselves.
+
+def _course_from_hist(hist, now: float) -> float | None:
+    """Direction of travel (deg, 0=north clockwise) or None when not moving."""
+    if len(hist) < 2:
+        return None
+    base = next((s for s in hist if now - s[0] <= MOTION_WINDOW_S), None)
+    tip = next((s for s in reversed(hist) if now - s[0] <= MOTION_WINDOW_S), None)
+    if base is None or tip is None or tip is base:
+        return None
+    d = math.hypot(tip[1] - base[1], tip[2] - base[2])
+    if d < MOTION_MIN_PX:
+        return None
+    return math.degrees(math.atan2(tip[1] - base[1], -(tip[2] - base[2]))) % 360.0
+
+
+def _needs_vote(why: str | None, after_gap: bool, inl: int, inl_skip: int) -> bool:
+    """Vote requirement for a relocation candidate.
+
+    A jumped or flipped candidate is vote-gated unless it is very strong
+    (`inl >= inl_skip`); after a pose gap the bypass is disabled, so the first
+    candidates must be confirmed by agreeing frames.
     """
-    buf.append((float(pos[0]), float(pos[1])))
+    if why is None and not after_gap:
+        return False
+    return after_gap or inl < inl_skip
+
+
+def _vote_decide(buf, need, radius, pos, th=None, th_tol=0.0):
+    """Append pos/heading to the vote buffer; return the agreeing cluster.
+
+    At least `need` buffered candidates must lie pairwise within `radius` and,
+    when headings are supplied with `th_tol > 0`, within `th_tol` degrees of
+    each other: a position-only vote used to pass a 180-degree flip at the same
+    place. The buffer is a maxlen deque, so stale candidates expire themselves.
+    """
+    buf.append((float(pos[0]), float(pos[1]), None if th is None else float(th)))
     pts = list(buf)
+
+    def agrees(p, q) -> bool:
+        if math.hypot(p[0] - q[0], p[1] - q[1]) > radius:
+            return False
+        if th_tol > 0.0 and p[2] is not None and q[2] is not None:
+            return _ang_diff(p[2], q[2]) <= th_tol
+        return True
+
     for anchor in pts:
-        cluster = [p for p in pts if math.hypot(p[0] - anchor[0], p[1] - anchor[1]) <= radius]
+        cluster = [p for p in pts if agrees(p, anchor)]
         if len(cluster) >= need and all(
-            math.hypot(p[0] - q[0], p[1] - q[1]) <= radius
-            for i, p in enumerate(cluster)
-            for q in cluster[i + 1 :]
+            agrees(p, q) for i, p in enumerate(cluster) for q in cluster[i + 1 :]
         ):
             return cluster
     return None
@@ -73,8 +126,8 @@ class LiveLocator(threading.Thread):
     (capture.speed_roi): speed_ok=False means the value is stale or unread.
     latest['map_px'] is the measured position low-passed by the alpha-beta
     smoother (locator.smooth_alpha; 0 disables) so matcher jitter does not
-    reach the navigator; latest['map_px_disp'] additionally medians the last
-    frames for the UI.
+    reach the navigator. It is the single source of truth: the UI marker
+    draws this exact pose, with no extra filtering.
     """
 
     def __init__(self, cfg: AppConfig | dict, mask, frame_source=None) -> None:
@@ -117,16 +170,24 @@ class LiveLocator(threading.Thread):
             maxlen=self._loc_vote_frames()
         )
         self._last_accepted: tuple[float, float] | None = None
+        self._last_accept_t: float = 0.0
         self._smoother = PoseSmoother(
             alpha=self.loc_cfg.smooth_alpha,
             reset_px=self.loc_cfg.smooth_reset_px,
         )
-        self._disp_hist: collections.deque[tuple[float, float]] = collections.deque(maxlen=5)
+        self._motion_hist: collections.deque[tuple[float, float, float]] = collections.deque(
+            maxlen=64
+        )
+        self._course: float | None = None  # latched direction of travel (deg)
+        self._course_t: float = 0.0
+        self._speed_kmh: float | None = None  # last fresh speedometer OCR
+        self._speed_t: float = 0.0
         self._good_pose: dict[str, Any] | None = (
             None  # last accepted pose dict (for black-frame hold)
         )
         self._hold_left: int | None = None  # frames of black-frame hold still left
         self._last_fail_save: float = 0.0  # time of the last fail-frame dump (throttle)
+        self._local_timeouts = 0  # consecutive local-search budget timeouts
         self._counts: collections.Counter[str] = collections.Counter()  # reject reason tally
         self._last_frame_error: str | None = None  # dedup for per-frame error logging
         self._engine = locator.engine()  # synced to locator.engine config on first frame
@@ -219,11 +280,63 @@ class LiveLocator(threading.Thread):
         self._hold_left = None
         self._last_accepted = None
         self._vote_buf.clear()
-        self._disp_hist.clear()
+        self._motion_hist.clear()
+        self._course = None
+        self._course_t = 0.0
         self._smoother.reset()
 
+    def _motion_course(self, now: float) -> float | None:
+        """Direction of travel from the accepted positions (None = not moving)."""
+        return _course_from_hist(self._motion_hist, now)
+
+    def _anchor_prev_th(self, now: float) -> float | None:
+        """Last accepted heading for the anchor's rotation prior (None = off).
+
+        The prior is only valid while the truck is known to move: at low speed
+        a real spin changes the heading arbitrarily fast, and a gate would
+        blind the tracker exactly when the driver's spin recovery needs the
+        pose.
+        """
+        if self._last_accepted is None or (now - self._last_accept_t) > 2.0:
+            return None
+        if self._motion_course(now) is not None:
+            return self._prev_th
+        if (
+            self._speed_kmh is not None
+            and (now - self._speed_t) <= 1.0
+            and self._speed_kmh > MOTION_MIN_KMH
+        ):
+            return self._prev_th
+        return None
+
+    def _motion_flip(self, t0: float, th: float, item: dict) -> bool:
+        """True when a candidate heading contradicts the direction of travel.
+
+        The course is refreshed from the accepted positions; while the OCR
+        speed says the truck is moving fast the last course is latched, so the
+        guard covers the blind spell a rejection causes (no new positions).
+        A known stop clears the latch: a direction of travel only constrains
+        the heading while there is travel.
+        """
+        course = self._motion_course(t0)
+        if course is not None:
+            self._course = course
+            self._course_t = t0
+        speed_kmh = None
+        if bool(item.get("speed_ok", False)) and item.get("speed_kmh") is not None:
+            speed_kmh = float(item["speed_kmh"])
+        if speed_kmh is not None and speed_kmh <= MOTION_MIN_KMH:
+            self._course = None
+            return False
+        if self._course is None:
+            return False
+        if course is None and speed_kmh is None and t0 - self._course_t > MOTION_HOLD_S:
+            self._course = None
+            return False
+        return _ang_diff(th, self._course) > MOTION_TOL_DEG
+
     def _frame_pose(
-        self, mm: np.ndarray, ui_mask: np.ndarray | None
+        self, mm: np.ndarray, ui_mask: np.ndarray | None, t0: float
     ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
         """One localization pass; a locator/cv2 failure degrades to a bad frame.
 
@@ -236,7 +349,7 @@ class LiveLocator(threading.Thread):
                 mm,
                 ui_mask,
                 prev_xy=self._prev_xy,
-                prev_th=self._prev_th,
+                prev_th=self._anchor_prev_th(t0),
                 debug=True,
                 budget=3.0,
                 progress=self._search_progress,
@@ -330,6 +443,9 @@ class LiveLocator(threading.Thread):
                     self.mask = item["mask"]
                 roi = item["roi"]
                 t0 = item["ts"]
+                if bool(item.get("speed_ok", False)) and item.get("speed_kmh") is not None:
+                    self._speed_kmh = float(item["speed_kmh"])
+                    self._speed_t = t0
                 self.error = None
                 # engine switch (Map -> Tracking combo): reconfigure the
                 # locator facade and drop every prior-track state so the new
@@ -347,22 +463,32 @@ class LiveLocator(threading.Thread):
                 # seconds (low-texture areas); with a budget the
                 # localization returns within max 3 s and the thread does
                 # not hang along with it (nor did steer and UI)
-                pose, diag = self._frame_pose(mm, self.mask)
+                pose, diag = self._frame_pose(mm, self.mask, t0)
                 self.search_now = None  # the frame's search is done
                 self._count_reject(diag)
                 slow = time.time() - t0
                 if slow > 3.0 and self.attempt % 20 == 0:
                     logger.warning("[locator] frame took %.1f s (budget 3 s) — map search", slow)
 
+                # A repeated local timeout means the seed may be poisoned by
+                # ECC drift: the next frame must recover globally instead of
+                # growing the radius again (the fail dumps showed this exact
+                # lockout pattern: budget_timeout with search_global=false).
+                if diag.get("reject") == "budget_timeout":
+                    self._local_timeouts += 1
+                    if self._local_timeouts >= 2:
+                        self._prev_xy = None
+                        self._vote_buf.clear()
+                        self._local_timeouts = 0
+                else:
+                    self._local_timeouts = 0
+
                 # autosave of a "failed" frame (black/empty or no pose)
                 # for post-run analysis; enabled by the "collect fail logs"
-                # checkbox in the app (config 'debug.collect_fail_logs')
+                # checkbox in the app (config 'debug.collect_fail_logs').
+                # The vote rejections are dumped too (the vote runs later).
                 collect = bool(self.app_cfg.debug.collect_fail_logs)
-                if collect and pose is None and diag.get("reject") in FAIL_REASONS:
-                    now = time.time()
-                    if now - self._last_fail_save >= FAIL_SAVE_PERIOD_S:
-                        self._last_fail_save = now
-                        self._save_fail_frame(diag, mm, item.get("bgr"), item.get("mask"))
+                self._maybe_save_fail(diag, mm, item, collect)
                 mp = None
                 good = False
                 cand = None  # pending vote approval: (px, py, heading, inl)
@@ -374,6 +500,34 @@ class LiveLocator(threading.Thread):
                 elapsed = time.time() - t0
                 diag["roi"] = list(roi)
                 if cand is not None:
+                    # motion-course gate (root fix for the 180-degree wrong
+                    # lock): while the truck is known to move, a pose heading
+                    # that contradicts the direction of travel is rejected and
+                    # the hybrid track is reset, so the flipped anchor cannot
+                    # feed itself back through `prev_th`/ECC.
+                    if self._last_accepted is not None and self._motion_flip(t0, cand[2], item):
+                        diag["reject"] = "motion_flip"
+                        diag["detail"] = "heading %.0f vs course %.0f deg" % (
+                            cand[2],
+                            self._course if self._course is not None else -1.0,
+                        )
+                        locator.reset_track()
+                        self.latest = dict(
+                            ts=t0,
+                            pose=None,
+                            map_px=None,
+                            good=False,
+                            speed_kmh=item.get("speed_kmh"),
+                            speed_ok=bool(item.get("speed_ok", False)),
+                            speed_frame=item.get("speed_frame"),
+                            speed_mask=item.get("speed_mask"),
+                            speed_boxes=item.get("speed_boxes", ()),
+                            elapsed=elapsed,
+                            diag=diag,
+                        )
+                        self._maybe_save_fail(diag, mm, item, collect)
+                        self.attempt += 1
+                        continue
                     # relocation vote gate: a pose that jumped far away from
                     # the last accepted position (or flipped its heading beyond
                     # heading_gate_deg) must be confirmed by a few frames
@@ -386,13 +540,23 @@ class LiveLocator(threading.Thread):
                             cand[0] - self._last_accepted[0], cand[1] - self._last_accepted[1]
                         )
                         d_th = _ang_diff(cand[2], self._prev_th)
+                        after_gap = (t0 - self._last_accept_t) > REACQUIRE_GAP_S
                         why = None
                         if d_jump > gate:
                             why = "jump %.0f px" % d_jump
                         elif hgate > 0 and d_th > hgate:
                             why = "heading %.0f deg" % d_th
-                        if why is not None and cand[3] < inl_skip:
-                            vote = _vote_decide(self._vote_buf, need, rad, (cand[0], cand[1]))
+                        elif after_gap:
+                            why = "gap %.2f s" % (t0 - self._last_accept_t)
+                        if _needs_vote(why, after_gap, cand[3], inl_skip):
+                            vote = _vote_decide(
+                                self._vote_buf,
+                                need,
+                                rad,
+                                (cand[0], cand[1]),
+                                cand[2],
+                                VOTE_HEADING_TOL_DEG,
+                            )
                             if vote is None:
                                 diag["reject"] = "vote_reject"
                                 diag["detail"] = "%s needs %d agreeing frames (have %d)" % (
@@ -421,6 +585,10 @@ class LiveLocator(threading.Thread):
                                     elapsed=elapsed,
                                     diag=diag,
                                 )
+                                # the vote rejection happens after the first
+                                # dump point; without this the dominant reject
+                                # mode was invisible in the fail dumps
+                                self._maybe_save_fail(diag, mm, item, collect)
                                 self.attempt += 1
                                 continue
                             self._vote_buf.clear()
@@ -457,12 +625,8 @@ class LiveLocator(threading.Thread):
                         self._prev_xy = (cand[0], cand[1])  # bridge only
                         mp = (cand[0], cand[1])
                     self._last_accepted = mp
-                    self._disp_hist.append(mp)
-                disp = mp
-                if len(self._disp_hist) >= 3:
-                    xs = np.median([p[0] for p in self._disp_hist])
-                    ys = np.median([p[1] for p in self._disp_hist])
-                    disp = (float(xs), float(ys))
+                    self._last_accept_t = t0
+                    self._motion_hist.append((t0, mp[0], mp[1]))
                 # black/empty-frame hold: a flat capture (minimap briefly not
                 # drawn) while a good pose exists is NOT a real localization
                 # loss — reuse the last accepted pose for a few frames so the
@@ -481,7 +645,6 @@ class LiveLocator(threading.Thread):
                                 ts=t0,
                                 pose=self._good_pose,
                                 map_px=self._good_xy,
-                                map_px_disp=self._good_xy,
                                 good=False,
                                 speed_kmh=item.get("speed_kmh"),
                                 speed_ok=bool(item.get("speed_ok", False)),
@@ -500,8 +663,8 @@ class LiveLocator(threading.Thread):
                     ts=t0,
                     pose=pose,
                     map_px=mp,
-                    map_px_disp=disp,
                     good=good,
+                    cc=(pose or {}).get("cc"),
                     speed_kmh=item.get("speed_kmh"),
                     speed_ok=bool(item.get("speed_ok", False)),
                     speed_frame=item.get("speed_frame"),
@@ -515,16 +678,15 @@ class LiveLocator(threading.Thread):
             crashlog.log("locator thread exited with an error", exc)
             self.error = str(exc)
 
-    def _fail_payload(self, diag: dict, mm: np.ndarray, mask: np.ndarray | None) -> dict[str, Any]:
-        """Structured context of a failed frame (see fail_dump.fail_payload)."""
-        return fail_payload(
-            diag,
-            mm,
-            mask,
-            locator_cfg=self.locator_cfg,
-            prev_xy=self._prev_xy,
-            attempt=self.attempt,
-        )
+    def _maybe_save_fail(self, diag: dict, mm: np.ndarray, item: dict, collect: bool) -> None:
+        """Throttled fail-frame dump for any FAIL_REASONS reject (incl. vote)."""
+        if not collect or diag.get("reject") not in FAIL_REASONS:
+            return
+        now = time.time()
+        if now - self._last_fail_save < FAIL_SAVE_PERIOD_S:
+            return
+        self._last_fail_save = now
+        self._save_fail_frame(diag, mm, item.get("bgr"), item.get("mask"))
 
     def _save_fail_frame(
         self,

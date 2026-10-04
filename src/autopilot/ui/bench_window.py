@@ -78,6 +78,7 @@ from ..bench import (
     write_report,
 )
 from .icons import icon
+from .param_tips import summary_for, tip_for
 from .theme import BLUE, GREEN, RED, TEXT_DIM, TEXT_MUTED, YELLOW
 
 #: Table columns: (header, RunResult attribute; None = a computed cell).
@@ -132,9 +133,13 @@ def charts_available() -> bool:
 
 
 def param_hint(engine: str) -> str:
-    """Tooltip listing the keys one engine can be swept over."""
-    keys = list(param_registry(engine))
-    return "sweepable: %s" % (", ".join(keys) if keys else "none")
+    """Tooltip listing the keys one engine can be swept over and what they do."""
+    registry = param_registry(engine)
+    if not registry:
+        return "no sweepable parameters for this engine"
+    lines = ["Sweepable keys (add them in the sweep card below):"]
+    lines += [f"- {key}: {summary_for(key, spec.label)}" for key, spec in registry.items()]
+    return "\n".join(lines)
 
 
 def config_label(config: dict[str, Any]) -> str:
@@ -295,6 +300,10 @@ class _SweepRow:
         self.key_box = QComboBox(self.widget)
         self.key_box.addItems(list(keys))
         self.key_box.setCurrentText(key)
+        self.key_box.setToolTip(tip_for(key))
+        self.key_box.currentTextChanged.connect(
+            lambda selected: self.key_box.setToolTip(tip_for(selected))
+        )
         self.value_box = QLineEdit(values, self.widget)
 
         drop = QPushButton(self.widget)
@@ -466,15 +475,15 @@ class BenchWindow(QWidget):
         self.frames_spin = QSpinBox(card)
         self.frames_spin.setRange(2, 2000)
         self.frames_spin.setValue(60)
-        self.frames_spin.setToolTip("frames per scenario")
+        self.frames_spin.setToolTip(tip_for("bench.frames"))
         self.fps_spin = QSpinBox(card)
         self.fps_spin.setRange(1, 120)
         self.fps_spin.setValue(10)
-        self.fps_spin.setToolTip("scenario frame rate (Hz)")
+        self.fps_spin.setToolTip(tip_for("bench.fps"))
         self.speed_spin = QSpinBox(card)
         self.speed_spin.setRange(1, 90)
         self.speed_spin.setValue(15)
-        self.speed_spin.setToolTip("vehicle speed in m/s")
+        self.speed_spin.setToolTip(tip_for("bench.speed"))
         for row, (label, spin) in enumerate(
             (("frames", self.frames_spin), ("fps", self.fps_spin), ("speed m/s", self.speed_spin))
         ):
@@ -491,7 +500,10 @@ class BenchWindow(QWidget):
 
         self.sweep_key = QComboBox(card)
         self.sweep_key.addItems(list(param_registry()))
-        self.sweep_key.setToolTip("parameter to sweep")
+        self.sweep_key.setToolTip(tip_for(self.sweep_key.currentText()))
+        self.sweep_key.currentTextChanged.connect(
+            lambda selected: self.sweep_key.setToolTip(tip_for(selected))
+        )
         self.sweep_values = QLineEdit(card)
         self.sweep_values.setPlaceholderText("e.g. 0.75,0.82,0.88")
         self.sweep_values.setFixedWidth(220)

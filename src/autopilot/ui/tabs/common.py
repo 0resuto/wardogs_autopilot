@@ -94,6 +94,7 @@ class MapTabBase(_BaseQt):
     driver: Any
     map_widget: Any
     preset_mgr: PresetManager
+    _preset_reloading: bool
     p_sel: Any
     tune_vars: dict[str, StringVarCompat]
     tune_inputs: dict[str, QLineEdit]

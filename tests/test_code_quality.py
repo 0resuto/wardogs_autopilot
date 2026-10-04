@@ -15,7 +15,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
-from PySide6.QtCore import QEvent, QRect
+from PySide6.QtCore import QEvent, QRect, Qt
 from PySide6.QtWidgets import (
     QApplication,
     QGroupBox,
@@ -178,6 +178,46 @@ class TestTuningValidation(unittest.TestCase):
         self.assertIn("Invalid VEH max km/h", self.tab.tune_status.text())
 
 
+class TestParameterTooltips(unittest.TestCase):
+    """Every tunable control explains itself and its direction of change."""
+
+    DIRECTION_WORDS = ("lower", "higher", "increase", "decrease")
+
+    def _assert_effect_tip(self, key: str, tip: str) -> None:
+        self.assertTrue(tip.strip(), f"{key}: no hover text")
+        self.assertTrue(
+            any(word in tip for word in self.DIRECTION_WORDS),
+            f"{key}: hover text does not say what changing the value does",
+        )
+
+    def test_tuning_fields_explain_themselves_on_hover(self):
+        cfg = AppConfig()
+        tab = MapTab(
+            None,
+            cfg,
+            save_cfg_fn=lambda: None,
+            loc_thread_supplier=lambda: None,
+            app_cfg=cfg,
+        )
+        self.assertGreaterEqual(len(tab.tune_inputs), 30)
+        for key, inp in tab.tune_inputs.items():
+            self._assert_effect_tip(key, inp.toolTip())
+
+    def test_capture_fields_explain_themselves_on_hover(self):
+        cfg = AppConfig().to_dict()
+        tab = RoiTab(
+            None,
+            cfg,
+            save_cfg_fn=lambda: None,
+            screen_cap_supplier=lambda: None,
+            loc_thread_supplier=lambda: None,
+        )
+        self.assertEqual(len(tab.coord_inputs), 4)
+        for group in (tab.coord_inputs, tab.center_inputs, tab.speed_inputs):
+            for key, inp in group.items():
+                self._assert_effect_tip(key, inp.toolTip())
+
+
 class TestRouteEditor(unittest.TestCase):
     def setUp(self):
         self.cfg = AppConfig()
@@ -329,6 +369,33 @@ class TestPresetStartup(unittest.TestCase):
 
         self.assertEqual(tab.p_sel.currentText(), name)
         self.assertEqual(tab.route_pts, tab.preset_mgr.load_preset(name))
+
+    def test_combo_selection_loads_and_remembers_the_preset(self):
+        cfg = AppConfig()
+        tab = MapTab(
+            None,
+            cfg,
+            save_cfg_fn=lambda: None,
+            loc_thread_supplier=lambda: None,
+            app_cfg=cfg,
+        )
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        mgr = PresetManager(tmp.name, subdir="presets")
+        mgr.save_preset("a", [[1.0, 1.0]])
+        mgr.save_preset("b", [[2.0, 2.0], [3.0, 3.0]])
+
+        with patch("autopilot.ui.tabs.map_presets.PresetManager", lambda *a, **k: mgr):
+            tab.route_pts = []
+            tab.preset_reload()
+            self.assertEqual(tab.p_sel.currentText(), "a")
+            self.assertEqual(tab.route_pts, [[1.0, 1.0]])
+
+            tab.p_sel.setCurrentText("b")
+
+        self.assertEqual(tab.route_pts, [[2.0, 2.0], [3.0, 3.0]])
+        self.assertEqual(tab.app_cfg.navigator.last_preset, "b")
+        self.assertEqual(tab.cfg["navigator"]["last_preset"], "b")
 
     def test_preset_selection_updates_both_config_views(self):
         cfg = AppConfig()
@@ -639,6 +706,7 @@ class TestAppSmoke(unittest.TestCase):
                 self.assertIs(app.routes_tab, app.map_tab)
                 self.assertIsNotNone(app._loc_thread)
                 self.assertIsNotNone(app._hotkeys)
+                self.assertIsNotNone(app._override_keys)
                 # the map canvas fills the right pane, the live capture preview
                 # stays in the Capture section
                 self.assertTrue(app.right_pane.isAncestorOf(app.map_tab.map_widget))
@@ -667,6 +735,39 @@ class TestAppSmoke(unittest.TestCase):
             self.assertEqual(
                 (ui.window_x, ui.window_y, ui.window_w, ui.window_h),
                 (123, 45, 900, 700),
+            )
+
+    def test_save_cfg_persists_the_live_window_geometry(self):
+        """Geometry must reach disk on any save, not only a clean close.
+
+        A crash or a forced kill after a preset load used to leave the window
+        rect from the previous session on disk, so the next start ignored the
+        position the user had moved the window to.
+        """
+        from autopilot.ui.app import App
+        from autopilot.vision.tracker import LiveLocator
+
+        with tempfile.TemporaryDirectory() as tmp:
+            target = os.path.join(tmp, "ui.json")
+            AppConfig().save(target)
+
+            with (
+                patch.object(LiveLocator, "start", lambda _self: None),
+                patch.object(App, "_load_map_worker", lambda _self, _name: None),
+            ):
+                app = App(AppConfig.load(target))
+                try:
+                    app.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+                    app.show()
+                    app.setGeometry(222, 111, 903, 702)
+                    app._save_cfg()
+                    ui = AppConfig.load(target).ui
+                finally:
+                    app.close()
+
+            self.assertEqual(
+                (ui.window_x, ui.window_y, ui.window_w, ui.window_h),
+                (222, 111, 903, 702),
             )
 
     def test_offscreen_geometry_is_clamped_to_a_screen(self):
@@ -1285,6 +1386,7 @@ class TestSidebarAdaptiveLayout(unittest.TestCase):
 
     def test_sidebar_cards_never_exceed_the_page_width(self):
         app = self._app()
+        checked = 0
         try:
             for tab in range(app.side_stack.count()):
                 app.side_stack.setCurrentIndex(tab)
@@ -1295,7 +1397,9 @@ class TestSidebarAdaptiveLayout(unittest.TestCase):
                     page = app.side_stack.currentWidget()
                     for card in page.findChildren(QGroupBox):
                         if card.parentWidget() is page:
+                            checked += 1
                             self.assertLessEqual(card.width(), page.width(), card.title())
+            self.assertGreater(checked, 0, "no sidebar cards were measured")
         finally:
             app.close()
 

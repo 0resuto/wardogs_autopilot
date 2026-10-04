@@ -79,7 +79,9 @@ class TestUralProfile(unittest.TestCase):
         capped = self.model.yaw_rate_max_deg_s(speed_kmh, lat_accel_mps2=lat)
         uncapped = self.model.yaw_rate_max_deg_s(speed_kmh)
 
-        self.assertAlmostEqual(capped, math.degrees(lat / v), delta=1e-6)
+        # the calibrated tracking gain scales the grip ceiling (applied after
+        # the cap), not only the kinematic term
+        self.assertAlmostEqual(capped, math.degrees(lat / v) * self.model.yaw_gain, delta=1e-6)
         self.assertLess(capped, uncapped)
 
     def test_low_speed_authority_stays_geometric(self):

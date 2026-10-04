@@ -17,13 +17,29 @@ import os
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEFAULT_SOURCE = r"C:\Users\Engineer\Desktop\wardogs-vehicle-physics"
+DEFAULT_SOURCE = r"C:\Users\ORESUTO_PC\Desktop\wardogs-vehicle-physics"
 
 CALIBRATION_DEFAULTS = {
     "yaw_gain": 1.0,
     "wheelbase_m": 3.8,
     "steer_angle_max_deg": 35.0,
     "drive_efficiency": 0.9,
+    # Gray-box longitudinal calibration: accel = drive_accel_scale * F_drive
+    # - resist_a - resist_b * v^2 - brake_decel on SPACE. The brake and yaw
+    # values are refitted from recorded runs by
+    # .agents/pending/calibrate_vehicle_predictor.py; the drive scale is provisional from
+    # the reference manual drive (~1.7 m/s^2 at 60-70 km/h) and should be
+    # refitted with a controlled throttle-step test on flat ground.
+    "drive_accel_scale": 0.00022,  # m/s^2 per model force unit
+    "resist_a_mps2": 0.15,
+    "resist_b": 0.0003,
+    "brake_decel_mps2": 5.0,
+    "brake_yaw_gain": 1.8,  # measured p90 yaw under SPACE at speed
+    # Measured net acceleration/deceleration tables (km/h -> m/s^2), fitted
+    # from controlled manual recordings by the pending predictor calibrator.
+    # Empty means "use the physics force model above".
+    "drive_accel_curve": [],
+    "coast_decel_curve": [],
 }
 
 
@@ -69,15 +85,31 @@ def extract(source, vehicle_id):
     steer_speed = curve_pairs(curves.get("steer_speed", {}).get("keys", []))
 
     tire_peak = 0.0
+    tire_slip: list[list[float]] = []
     for slip in data.get("data_assets", {}).get("tire_model", {}).get("slip_curves", []):
-        for _slip, force in slip.get("samples", []):
+        samples = slip.get("samples", [])
+        tire_slip = [[round(float(c), 4), round(float(f), 3)] for c, f in samples[::2]]
+        for _slip, force in samples:
             tire_peak = max(tire_peak, abs(float(force)))
+    if tire_slip and tire_slip[-1][0] != float(
+        data["data_assets"]["tire_model"]["slip_curves"][0]["samples"][-1][0]
+    ):
+        last = data["data_assets"]["tire_model"]["slip_curves"][0]["samples"][-1]
+        tire_slip.append([round(float(last[0]), 4), round(float(last[1]), 3)])
+
+    # The game's own client-prediction constants (class defaults, identical
+    # across all wheeled vehicles; field names need a .usmap schema).
+    prediction_raw = data.get("data_assets", {}).get("prediction", {}).get("float_tokens", [])
+    prediction_values = [round(float(v), 4) for _o, v in prediction_raw if abs(float(v)) > 1e-9]
 
     profile = {
         "vehicle_id": vehicle_id,
         "name": data.get("name", vehicle_id),
         "source": "wardogs-vehicle-physics pack (cooked asset decode)",
-        "confidence": "gears/rpm/torque/steer curves: high; wheel radius: derived",
+        "confidence": (
+            "gears/rpm/torque/steer curves: high; wheel radius: derived; "
+            "brake/yaw: fitted from recorded runs; drive accel: provisional"
+        ),
         "max_speed_kmh": max_speed_kmh,
         "wheel_radius_m": round(wheel_radius, 4),
         "gears_forward": forward,
@@ -88,7 +120,16 @@ def extract(source, vehicle_id):
         "torque_nm": torque,
         "steer_limit_pct": steer_limit,
         "steer_speed_mult": steer_speed,
+        "brake_engagement": curve_pairs(curves.get("brake_engagement", {}).get("keys", [])),
+        "clutch_engagement": curve_pairs(curves.get("clutch_engagement", {}).get("keys", [])),
+        "throttle_engagement": curve_pairs(curves.get("throttle_engagement", {}).get("keys", [])),
+        "tire_slip_curve": tire_slip,
         "tire_peak_force": tire_peak,
+        "game_prediction_defaults": {
+            "values": prediction_values,
+            "note": "DA_PredictionSettings_* class defaults (identical for all "
+            "wheeled vehicles); labels require the game's .usmap schema",
+        },
         "calibration": dict(CALIBRATION_DEFAULTS),
     }
     return profile

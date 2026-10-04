@@ -31,10 +31,12 @@ if ROOT not in sys.path:
 
 import autopilot.common.config as config_mod  # noqa: E402
 import autopilot.ui.hotkeys as hotkeys_mod  # noqa: E402
+import autopilot.ui.override_watch as override_mod  # noqa: E402
 from autopilot.common.config import AppConfig, CaptureConfig, atomic_write_json  # noqa: E402
 from autopilot.hardware.arduino_keyboard import ArduinoKeyDriver  # noqa: E402
 from autopilot.hardware.screen_capture import ScreenCapture  # noqa: E402
 from autopilot.ui.hotkeys import HotkeyManager  # noqa: E402
+from autopilot.ui.override_watch import OverrideKeyWatcher  # noqa: E402
 from autopilot.vision import locator  # noqa: E402
 from autopilot.vision import map_store as map_store_mod  # noqa: E402
 
@@ -373,6 +375,151 @@ class TestHotkeyManager(unittest.TestCase):
 
         self.assertEqual(len(created), 1)
         self.assertIs(manager._thread, created[0])
+
+
+class TestOverrideKeyWatcher(unittest.TestCase):
+    """WASD/SPACE override watch: Arduino HID events are filtered by VID/PID."""
+
+    @staticmethod
+    def _payload(vk: int, message: int = override_mod._WM_KEYDOWN, device: int = 0x1234) -> bytes:
+        raw = override_mod._RAWINPUT()
+        raw.header.dwType = override_mod._RID_INPUT_KEYBOARD
+        raw.header.dwSize = ctypes.sizeof(raw)
+        raw.header.hDevice = wintypes.HANDLE(device)
+        raw.keyboard.VKey = vk
+        raw.keyboard.Message = message
+        return ctypes.string_at(ctypes.byref(raw), ctypes.sizeof(raw))
+
+    @staticmethod
+    def _fake_user32(payload: bytes, path: str) -> SimpleNamespace:
+        def get_raw_input_data(_raw, _cmd, data, size, _header):
+            ctypes.cast(size, ctypes.POINTER(wintypes.UINT)).contents.value = len(payload)
+            if data:
+                ctypes.memmove(data, payload, len(payload))
+                return len(payload)
+            return 0
+
+        def device_info(_device, _cmd, data, size):
+            if data:
+                ctypes.memmove(data, (path + "\0").encode("utf-16-le"), (len(path) + 1) * 2)
+            else:
+                ctypes.cast(size, ctypes.POINTER(wintypes.UINT)).contents.value = len(path) + 1
+            return len(path) + 1
+
+        return SimpleNamespace(
+            GetRawInputData=get_raw_input_data, GetRawInputDeviceInfoW=device_info
+        )
+
+    def _armed(self) -> OverrideKeyWatcher:
+        watcher = OverrideKeyWatcher(None)
+        watcher._ignore_id = "VID_2341&PID_8037"
+        return watcher
+
+    def test_hardware_id_is_derived_from_the_configured_port(self):
+        fake_ports = [
+            SimpleNamespace(device="COM6", vid=0x2341, pid=0x8037),
+            SimpleNamespace(device="COM9", vid=None, pid=None),
+        ]
+        with patch("serial.tools.list_ports.comports", lambda: fake_ports):
+            self.assertEqual(override_mod.arduino_hardware_id("com6"), "VID_2341&PID_8037")
+            self.assertIsNone(override_mod.arduino_hardware_id("COM9"))
+            self.assertIsNone(override_mod.arduino_hardware_id("COM7"))
+
+    def test_arm_is_disabled_when_the_port_cannot_be_identified(self):
+        watcher = OverrideKeyWatcher(None)
+        with (
+            patch.object(override_mod, "arduino_hardware_id", lambda _port: None),
+            patch.object(OverrideKeyWatcher, "start") as start,
+            self.assertLogs("override", level="WARNING"),
+        ):
+            self.assertFalse(watcher.arm("COM6"))
+        self.assertFalse(watcher.is_armed())
+        start.assert_not_called()
+
+    def test_failed_arm_is_not_rescanned_until_disarm(self):
+        watcher = OverrideKeyWatcher(None)
+        scans: list[str] = []
+
+        def identify(port: str) -> None:
+            scans.append(port)
+
+        with (
+            patch.object(override_mod, "arduino_hardware_id", identify),
+            self.assertLogs("override", level="WARNING"),
+        ):
+            self.assertFalse(watcher.arm("COM6"))
+            self.assertFalse(watcher.arm("COM6"))
+            self.assertEqual(scans, ["COM6"])
+            watcher.disarm()
+            self.assertFalse(watcher.arm("COM6"))
+        self.assertEqual(scans, ["COM6", "COM6"])
+
+    def test_arm_identifies_the_arduino_and_disarm_clears_the_filter(self):
+        watcher = OverrideKeyWatcher(None)
+        with (
+            patch.object(override_mod, "arduino_hardware_id", lambda _port: "VID_2341&PID_8037"),
+            patch.object(OverrideKeyWatcher, "start") as start,
+        ):
+            self.assertTrue(watcher.arm("COM6"))
+        start.assert_called_once()
+        self.assertTrue(watcher.is_armed())
+
+        watcher.disarm()
+        self.assertFalse(watcher.is_armed())
+
+    def test_only_non_arduino_keydowns_are_reported(self):
+        received: list[int] = []
+        watcher = self._armed()
+        watcher.override_pressed.connect(received.append)
+
+        arduino = self._fake_user32(
+            self._payload(0x57, device=0x1111), r"\\?\HID#VID_2341&PID_8037&MI_02#a&33a4e856"
+        )
+        watcher._on_raw_input(arduino, 0)
+        self.assertEqual(received, [])
+
+        human = self._fake_user32(
+            self._payload(0x57, device=0x2222), r"\\?\HID#VID_1532&PID_0094&MI_01#8&273b801"
+        )
+        watcher._on_raw_input(human, 0)
+        self.assertEqual(received, [0x57])
+
+    def test_key_releases_and_other_keys_are_ignored(self):
+        received: list[int] = []
+        watcher = self._armed()
+        watcher.override_pressed.connect(received.append)
+        path = r"\\?\HID#VID_1532&PID_0094"
+
+        watcher._on_raw_input(self._fake_user32(self._payload(0x57, 0x0101), path), 0)
+        watcher._on_raw_input(self._fake_user32(self._payload(0x51), path), 0)
+        self.assertEqual(received, [])
+
+    def test_events_are_ignored_while_disarmed(self):
+        received: list[int] = []
+        watcher = OverrideKeyWatcher(None)
+        watcher.override_pressed.connect(received.append)
+        path = r"\\?\HID#VID_1532&PID_0094"
+
+        watcher._on_raw_input(self._fake_user32(self._payload(0x57), path), 0)
+        self.assertEqual(received, [])
+
+
+class TestAppOverrideKey(unittest.TestCase):
+    def test_override_key_stops_only_while_the_driver_runs(self):
+        from autopilot.ui.app import App
+
+        stops: list[bool] = []
+        app = App.__new__(App)
+        app.routes_tab = SimpleNamespace(  # type: ignore[assignment]
+            driver=object(), emergency_stop=lambda: stops.append(True)
+        )
+
+        App._on_override_key(app, 0x57)
+        self.assertEqual(stops, [True])
+
+        app.routes_tab.driver = None
+        App._on_override_key(app, 0x20)
+        self.assertEqual(stops, [True])
 
 
 if __name__ == "__main__":

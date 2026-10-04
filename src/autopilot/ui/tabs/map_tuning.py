@@ -23,229 +23,67 @@ from PySide6.QtWidgets import (
 )
 
 from ...common.config import CaptureConfig, LocatorConfig, NavigatorConfig
+from ..param_tips import tip_for
 from ..theme import GREEN, RED, TEXT_MUTED
 from .common import MapTabBase, StringVarCompat, compact_label
 
-# (label, config key, default, is_int, section, tooltip)
+# (label, config key, default, is_int, section); hover text lives in
+# ui/param_tips.py so the tuning panel and the bench share one source.
 _TUNE_GROUPS: list[tuple[str, list[tuple[Any, ...]]]] = [
     (
         "Tracking",
         [
-            ("ratio", "ratio_local", 0.85, False, "locator", ""),
-            ("inl", "min_inl_local", 4, True, "locator", ""),
-            ("inl%", "min_inl_rate_local", 0.0, False, "locator", ""),
-            ("rad", "track_radius", 900, True, "locator", ""),
-            (
-                "kps",
-                "max_kp_frame",
-                1200,
-                True,
-                "locator",
-                "Keypoints kept per frame (response-ranked): lower = less latency,\n"
-                "higher = more robust in low-texture areas",
-            ),
-            (
-                "smooth",
-                "smooth_alpha",
-                0.5,
-                False,
-                "locator",
-                "Measured-pose smoothing (alpha-beta filter): the weight of each fresh\n"
-                "match per frame. Lower = steadier marker (noise filtered, slight lag\n"
-                "while accelerating); higher = follows the raw match closer; 0 = off.",
-            ),
-            (
-                "reset px",
-                "smooth_reset_px",
-                100,
-                True,
-                "locator",
-                "Residual above which the smoothed pose jumps straight to the fresh match\n"
-                "(map px; 0.5 m/px maps: 100 px = ~50 m). Keep it well above the matcher\n"
-                "noise so real relocations are not glided to.",
-            ),
-            (
-                "ransac px",
-                "ransac_px",
-                3.0,
-                False,
-                "locator",
-                "RANSAC inlier threshold (map px at minimap scale; 1 px ~ 1.3 m): matches\n"
-                "farther than this from the fitted pose are rejected. Tight = lazy matches\n"
-                "cannot pull the position; loose = keeps weak/textureless frames alive.",
-            ),
-            (
-                "xfeat cos",
-                "xfeat_min_cos",
-                0.82,
-                False,
-                "locator",
-                "XFeat engine: minimum cosine similarity for a mutual match.\n"
-                "Higher = fewer, cleaner matches; lower = more matches in hard frames.",
-            ),
-            (
-                "xfeat kp",
-                "xfeat_top_k",
-                2000,
-                True,
-                "locator",
-                "XFeat engine: keypoints kept per frame (response-ranked)",
-            ),
+            ("ratio", "ratio_local", 0.85, False, "locator"),
+            ("inl", "min_inl_local", 4, True, "locator"),
+            ("inl%", "min_inl_rate_local", 0.0, False, "locator"),
+            ("rad", "track_radius", 900, True, "locator"),
+            ("kps", "max_kp_frame", 1200, True, "locator"),
+            ("smooth", "smooth_alpha", 0.5, False, "locator"),
+            ("reset px", "smooth_reset_px", 100, True, "locator"),
+            ("ransac px", "ransac_px", 3.0, False, "locator"),
+            ("xfeat cos", "xfeat_min_cos", 0.82, False, "locator"),
+            ("xfeat kp", "xfeat_top_k", 2000, True, "locator"),
         ],
     ),
     (
         "Re-Acquisition",
         [
-            ("ratio", "ratio_global", 0.9, False, "locator", ""),
-            ("inl", "min_inl_global", 5, True, "locator", ""),
-            ("inl%", "min_inl_rate_global", 0.0, False, "locator", ""),
+            ("ratio", "ratio_global", 0.9, False, "locator"),
+            ("inl", "min_inl_global", 5, True, "locator"),
+            ("inl%", "min_inl_rate_global", 0.0, False, "locator"),
         ],
     ),
     (
         "Consensus",
         [
-            ("vote", "vote_need", 3, True, "locator", ""),
-            ("head°", "heading_gate_deg", 0, True, "locator", ""),
-            ("skip", "vote_inl_skip", 40, True, "locator", ""),
-            (
-                "brk",
-                "early_inl",
-                40,
-                True,
-                "locator",
-                "Stop trying further scale-level candidates once a match reaches\n"
-                "this many inliers (0 = scan every level; lower = snappier,\n"
-                "higher = more thorough)",
-            ),
-            ("hold", "hold_frames", 5, True, "locator", ""),
+            ("vote", "vote_need", 3, True, "locator"),
+            ("head°", "heading_gate_deg", 0, True, "locator"),
+            ("skip", "vote_inl_skip", 40, True, "locator"),
+            ("brk", "early_inl", 40, True, "locator"),
+            ("hold", "hold_frames", 5, True, "locator"),
         ],
     ),
     (
         "Vehicle",
         [
-            (
-                "gain",
-                "yaw_gain",
-                1.0,
-                False,
-                "navigator",
-                "Yaw-authority scale of the model (see tools/calibrate_vehicle.py)",
-            ),
-            (
-                "lat g",
-                "corner_lat_g",
-                0.35,
-                False,
-                "navigator",
-                "Lateral grip budget for planning corner speeds: v = sqrt(lat_g*9.81*R).\n"
-                "Lower = slower corners (if it slides wide), higher = faster (but the planner\n"
-                "may outrun what the steering can hold).",
-            ),
-            (
-                "brake g",
-                "brake_g",
-                0.45,
-                False,
-                "navigator",
-                "Braking deceleration budget for planning when to brake before a corner.\n"
-                "Higher = brakes later/harder. Measured value from your runs: ~0.5g\n"
-                "(python tools/calibrate_vehicle.py output/nav_dbg_*.jsonl).",
-            ),
-            (
-                "min km/h",
-                "corner_min_kmh",
-                12.0,
-                False,
-                "navigator",
-                "Lower edge of the steady-corner hold window (km/h)",
-            ),
-            (
-                "max km/h",
-                "corner_max_kmh",
-                22.0,
-                False,
-                "navigator",
-                "Upper edge of the steady-corner hold window: inside the window the\n"
-                "driver neither accelerates nor brakes (no more brake/gas hunting)",
-            ),
-            (
-                "ahead m",
-                "plan_ahead_m",
-                200.0,
-                False,
-                "navigator",
-                "Speed planning horizon along the route (meters)",
-            ),
-            (
-                "cut m",
-                "corner_cut_m",
-                15.0,
-                False,
-                "navigator",
-                "Distance over which a sharp vertex is rounded by the planner",
-            ),
+            ("gain", "yaw_gain", 1.0, False, "navigator"),
+            ("lat g", "corner_lat_g", 0.35, False, "navigator"),
+            ("brake g", "brake_g", 0.45, False, "navigator"),
+            ("min km/h", "corner_min_kmh", 12.0, False, "navigator"),
+            ("max km/h", "corner_max_kmh", 22.0, False, "navigator"),
+            ("ahead m", "plan_ahead_m", 200.0, False, "navigator"),
+            ("cut m", "corner_cut_m", 15.0, False, "navigator"),
         ],
     ),
     (
         "Corridors",
         [
-            (
-                "inner m",
-                "xte_m",
-                4.0,
-                False,
-                "navigator",
-                "Inner corridor (normal driving). Deviations beyond it get firmer corrections.",
-            ),
-            (
-                "outer m",
-                "xte_outer_m",
-                12.0,
-                False,
-                "navigator",
-                "Outer corridor (warning). Past it the driver slows down and steers hardest.",
-            ),
-            (
-                "look s",
-                "steer_look_s",
-                1.6,
-                False,
-                "navigator",
-                "Steering lookahead in seconds of travel: the aim point ahead on the route.\n"
-                "Lower = tighter line and more active steering; higher = smoother, cuts curves.",
-            ),
-            (
-                "settle s",
-                "settle_s",
-                0.6,
-                False,
-                "navigator",
-                "Pause after a completed steering hold before the next one (s).\n"
-                "Lower = more frequent corrections; higher = smoother but a dead wheel\n"
-                "for that long after each correction. At speed the pause is also capped\n"
-                "by distance (8 m), so it shortens automatically.",
-            ),
-            (
-                "lead s",
-                "steer_lead_s",
-                0.25,
-                False,
-                "navigator",
-                "Release anticipation in seconds: how much heading change still arrives\n"
-                "through the pose/key latency after the wheel is released. Raise it if the\n"
-                "car systematically overshoots, lower it if it releases too early.",
-            ),
-            (
-                "skip m",
-                "skip_ahead_m",
-                150.0,
-                False,
-                "navigator",
-                "Route re-acquisition window (m). Only when the car is outside the outer\n"
-                "corridor: the active point may jump forward to the nearest route point\n"
-                "within this route length (it never jumps backwards or to the final point).\n"
-                "0 disables the re-acquisition.",
-            ),
+            ("inner m", "xte_m", 4.0, False, "navigator"),
+            ("outer m", "xte_outer_m", 12.0, False, "navigator"),
+            ("look s", "steer_look_s", 1.6, False, "navigator"),
+            ("settle s", "settle_s", 0.6, False, "navigator"),
+            ("lead s", "steer_lead_s", 0.25, False, "navigator"),
+            ("skip m", "skip_ahead_m", 150.0, False, "navigator"),
         ],
     ),
 ]
@@ -274,13 +112,7 @@ class MapTuningMixin(MapTabBase):
         current = str(self._loc_tune_cur("engine", "sift") or "sift")
         slot = self.engine_combo.findText(current)
         self.engine_combo.setCurrentIndex(slot if slot >= 0 else 0)
-        self.engine_combo.setToolTip(
-            "Localization engine:\n"
-            "sift — robust feature index (default)\n"
-            "orb — faster binary features (needs the ORB index built from the source PNG)\n"
-            "xfeat — learned features on the GPU (needs the XFeat index + ONNX model)\n"
-            "hybrid — SIFT anchor + ECC frame-to-frame tracking (best with capture.fps 20-30)"
-        )
+        self.engine_combo.setToolTip(tip_for("engine"))
         self.engine_combo.currentTextChanged.connect(self._engine_changed)
         eng_row.addWidget(self.engine_combo)
 
@@ -294,10 +126,7 @@ class MapTuningMixin(MapTabBase):
         self.fps_input.setObjectName("TuneInput")
         self.fps_input.setFixedWidth(_FIELD_W)
         self.fps_input.setCursorPosition(0)
-        self.fps_input.setToolTip(
-            "Capture cadence in fps (1..60), applied live.\n"
-            "Hybrid: 20-30 fps gives smoother tracking; sift drops extra frames anyway."
-        )
+        self.fps_input.setToolTip(tip_for("fps"))
         self.fps_input.editingFinished.connect(self.apply_tune)
         eng_row.addWidget(self.fps_input)
         self.fps_var = StringVarCompat(fps_val)
@@ -314,11 +143,9 @@ class MapTuningMixin(MapTabBase):
             grid.setVerticalSpacing(4)
             grid.setColumnStretch(0, 1)
             grid.setColumnStretch(1, 1)
-            for i, (lbl_text, var, default, is_int, section, tip) in enumerate(fields):
+            for i, (lbl_text, var, default, is_int, section) in enumerate(fields):
                 row, col = divmod(i, 2)
-                self._add_tune_cell(
-                    grid, grp, row, col, lbl_text, var, default, is_int, section, tip
-                )
+                self._add_tune_cell(grid, grp, row, col, lbl_text, var, default, is_int, section)
             tune_vbox.addWidget(grp)
 
         # Action footer: status left, Reset/Apply right (they apply to every group)
@@ -352,7 +179,6 @@ class MapTuningMixin(MapTabBase):
         default: Any,
         is_int: bool,
         section: str,
-        tip: str,
     ) -> None:
         cell = QHBoxLayout()
         cell.setSpacing(6)
@@ -367,6 +193,7 @@ class MapTuningMixin(MapTabBase):
         inp.setObjectName("TuneInput")
         inp.setFixedWidth(_FIELD_W)
         inp.setCursorPosition(0)  # narrow fields must show the leading digits
+        tip = tip_for(var_name)
         if tip:
             inp.setToolTip(tip)
         cell.addWidget(inp)

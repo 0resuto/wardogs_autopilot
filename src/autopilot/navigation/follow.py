@@ -6,10 +6,12 @@ and Arduino keyboard driver key injection.
 
 from __future__ import annotations
 
+import hashlib
 import math
 import random
 import threading
 import time
+from collections import deque
 from collections.abc import Sequence
 from typing import Any
 
@@ -24,6 +26,86 @@ from .telemetry import NavTelemetryLogger
 from .vehicle_model import VehicleModel
 
 logger = get_logger("follow")
+
+#: Progressive rejoin: the heading error (deg) above which the speed target
+#: starts easing down while the car is back inside the corridor. Pure pursuit
+#: holds a 15-25 deg error through every bend, so a lower gate braked through
+#: normal cornering (23% of the ticks in the 2026-10-01 22:19 run).
+REJOIN_ALIGN_DEG = 20.0
+#: Inside-corridor rejoin cap debounce (s) and deviation factor: a single
+#: bearing spike (err 30-57 deg at xte 2-4 m on a straight, 2026-10-03 23:14
+#: run) used to drop the target to ~55 km/h and brake the truck; the cap now
+#: needs a sustained misalignment past 1.5x the inner corridor half-width.
+REJOIN_DEBOUNCE_S = 0.4
+REJOIN_XTE_FACTOR = 1.5
+#: Cap anchors ((err_deg, cap_kmh), ...) the target eases through; the first
+#: anchor is the cruise speed, so the cap grows continuously from the gate.
+#: The inside-corridor cap only applies past the inner corridor edge.
+REJOIN_ERR_KMH = ((30.0, 65.0), (45.0, 50.0), (60.0, 38.0))
+#: Off-corridor rejoin target range (km/h): never a crawl — a stopped truck
+#: cannot turn — easing down as the excursion gets deeper.
+REJOIN_KMH = 30.0
+REJOIN_MIN_KMH = 20.0
+#: Motion course (`mh`) is trusted only while genuinely fresh. It stops
+#: updating below ~10 px of travel per 0.5 s window (~36 km/h at 2 px/m);
+#: a frozen course used to steer the truck against the map heading. The
+#: 0.35 s window tolerates 2-3 dropped pose frames; beyond it the run data
+#: showed half of the ticks >20 deg off the map heading.
+MH_MAX_AGE_S = 0.35
+#: The truck cannot yaw faster than this (deg/s) at speed; measured sustained
+#: maximum is ~28 deg/s under braking. A measured pose whose heading rate over
+#: the recent window exceeds the physically available rate is a wrong
+#: re-acquisition, not a manoeuvre: after a tracking gap the matcher can lock
+#: the same place with the wrong orientation and publish a coherent-looking
+#: but rotated track (2026-10-03 02:29 run: 39-50 deg/s -> phantom xte 30 m).
+MAX_POSE_YAW_DEG_S = 38.0
+#: Lateral budgets (m/s^2) used to raise the allowed heading rate at low speed:
+#: the same yaw is physically possible at 20 km/h that is impossible at 80
+#: (a_lat / v). Values from the recorded runs (coast p95 3.5, SPACE p95 7.5).
+GATE_LAT_ACCEL_COAST_MPS2 = 3.5
+GATE_LAT_ACCEL_BRAKE_MPS2 = 7.5
+#: Measured-pose gap (s) after which the driver goes blind: keys are released
+#: and the truck coasts until a fresh pose arrives. Driving on the frozen pose
+#: chased a phantom the moment the delayed (possibly wrong) pose arrived.
+POSE_BLIND_S = 0.4
+#: Above this speed a rate-rejected heading is never accepted by the lockout:
+#: a real spin needs low speed, so at speed the flip can only be a wrong lock.
+LOCKOUT_MAX_KMH = 30.0
+#: A spun or backwards car (heading error beyond this) is recovering, not
+#: tracking: the corridor crawl stalls it, and the W/SPACE chatter at 1-3 km/h
+#: had it circling 40 m off route for 15 s (2026-10-01 23:18 run).
+SPIN_ERR_DEG = 100.0
+#: Stuck/escape watchdog: a truck crawling at a big off-route error cannot
+#: turn (a 2026-10-03 run ended stuck for 40 s at xte 27 m; a 23:53 run crept
+#: 20 m sideways for 5 s - net displacement hid it, so progress is measured as
+#: closing on the active waypoint). No approach for STUCK_WINDOW_S -> a
+#: yaw-authority speed floor; still stuck after ESCAPE_REVERSE_AFTER_S -> a
+#: short reverse with opposite lock, then retry.
+STUCK_WINDOW_S = 3.0
+STUCK_MIN_PROGRESS_M = 2.0
+#: Excess (px/s) over the ghost limit required to call a pose a ghost. Without
+#: it a steady speed sitting exactly on the 40 px/s floor flapped the gate on
+#: floating-point noise (unit test test_frozen_hold_pose_releases_the_wheel).
+GHOST_MARGIN_PX_S = 5.0
+ESCAPE_ERR_DEG = 40.0
+ESCAPE_SPEED_KMH = 30.0
+ESCAPE_REVERSE_AFTER_S = 2.0
+ESCAPE_REVERSE_DUR_S = 1.0
+ESCAPE_MAX_REVERSES = 3
+#: Target speed floor while recovering from a spin (km/h): enough yaw
+#: authority to complete the turn without flying off again.
+SPIN_RECOVER_KMH = 35.0
+
+
+def config_hash(path: str | None) -> str:
+    """Short hash of the config file (provenance for the run telemetry)."""
+    if not path:
+        return "none"
+    try:
+        with open(path, "rb") as fh:
+            return hashlib.sha1(fh.read()).hexdigest()[:10]
+    except OSError:
+        return "none"
 
 
 class FollowDriver(FinalStopMixin, threading.Thread):
@@ -56,8 +138,10 @@ class FollowDriver(FinalStopMixin, threading.Thread):
         vehicle_model: Any = None,
         px_per_m: float | None = None,
         nav_cfg: NavigatorConfig | dict[str, Any] | None = None,
+        config_path: str | None = None,
     ) -> None:
         super().__init__(daemon=True)
+        self._config_hash = config_hash(config_path)
         if isinstance(nav_cfg, dict):
             try:
                 self.nav_cfg = NavigatorConfig(**nav_cfg)
@@ -172,6 +256,18 @@ class FollowDriver(FinalStopMixin, threading.Thread):
         self._speed_kmh = 0.0
         self._heading: float | None = None
         self._last_heading_t = 0.0
+        self._th_hist: deque[tuple[float, float]] = deque(maxlen=8)
+        self._heading_rejects = 0
+        self._blind = False
+        self._rejoin_since: float | None = None
+        self._stuck_t0: float | None = None
+        self._stuck_dist = 0.0
+        self._stuck_idx = -1
+        self._stuck_since: float | None = None
+        self._stuck_active = False
+        self._stuck_reverses = 0
+        self._escape_until = 0.0
+        self._escape_steer = 0
         self._lost = False
         self._route_snapped = False
         self._dbg_n = 0
@@ -209,18 +305,6 @@ class FollowDriver(FinalStopMixin, threading.Thread):
     @property
     def _mh_t(self) -> float:
         return self.path.mh_t
-
-    @property
-    def _ang(self) -> float:
-        return self.steer_ctrl.ang
-
-    @property
-    def _steer(self) -> int:
-        return self.steer_ctrl.steer
-
-    @property
-    def _micro(self) -> bool:
-        return self.steer_ctrl.micro
 
     @property
     def _px_per_m(self) -> float:
@@ -268,9 +352,6 @@ class FollowDriver(FinalStopMixin, threading.Thread):
     def _m(self, d_px: float) -> float:
         return self.speed_ctrl.to_meters(d_px)
 
-    def _lost_limit(self) -> float:
-        return self.path.lost_limit()
-
     def _push_pose(self, ts: float, x: float, y: float) -> bool:
         added = self.path.push_pose(ts, x, y)
         if added:
@@ -278,23 +359,8 @@ class FollowDriver(FinalStopMixin, threading.Thread):
             self.speed_ctrl.update_scale(self.path.mv, ocr_kmh=ocr)
         return added
 
-    def _pose_at(self, now: float) -> tuple[float, float] | None:
-        return self.path.pose_at(now)
-
-    def _impulse(self, err: float) -> float:
-        return self.steer_ctrl.calc_impulse(err)
-
-    def _dbg_open(self) -> None:
-        self.telemetry.open(self.pts, self._get_telemetry_params())
-
     def _dbg_tick(self, row: dict[str, Any]) -> None:
         self.telemetry.tick(row, self.pts, self._get_telemetry_params())
-
-    def _dbg_flush(self) -> None:
-        self.telemetry.flush()
-
-    def _dbg_close(self) -> None:
-        self.telemetry.close()
 
     def _wait(self, base: float) -> None:
         self._stop_ev.wait(base * random.uniform(0.75, 1.35))
@@ -339,6 +405,145 @@ class FollowDriver(FinalStopMixin, threading.Thread):
         self._heading = (self._heading + step) % 360.0
         return self._heading
 
+    def _heading_source(
+        self, pose: dict[str, Any], now: float
+    ) -> tuple[float, str, float | None, bool]:
+        """Pick the control heading and report where it came from.
+
+        The motion course (`mh`) is the direction over the last `mh_dt` of
+        poses; it stops updating below ~10 px of travel in that window and is
+        then stale, even though `pose["th"]` (the map heading) keeps tracking.
+        It is used only while genuinely fresh; otherwise the measured map
+        heading drives the loop. The pose rate is ~10 Hz, so at low speed the
+        fallback is both accurate and faster than the frozen course.
+        """
+        pose_th = float(pose["th"]) % 360.0 if pose.get("th") is not None else None
+        mh_age = self.path.mh_age(now)
+        mh_on = (
+            self.path.mh is not None
+            and self.path.mv > 10.0
+            and mh_age is not None
+            and mh_age < MH_MAX_AGE_S
+        )
+        if mh_on:
+            return float(self.path.mh) % 360.0, "mh", mh_age, True
+        if pose_th is not None:
+            return pose_th, "pose", mh_age, False
+        fallback = float(self.path.mh) % 360.0 if self.path.mh is not None else 0.0
+        return fallback, "none", mh_age, False
+
+    def _heading_rate_ok(self, ts: float, th: float, now: float) -> bool:
+        """False when the measurement implies a physically impossible yaw rate.
+
+        The recent accepted headings are compared with the new one over the
+        window that is at least one pose interval old; a rate above the
+        physically available one means the matcher re-acquired at the wrong
+        orientation (a coherent rotated track), not that the truck turned. The
+        allowance grows at low speed as `a_lat / v`: the same yaw rate is
+        possible at 20 km/h that is impossible at 80.
+        """
+        speed_kmh = max(0.0, self._speed_kmh_estimate(now))
+        v = speed_kmh / 3.6
+        a_lat = (
+            GATE_LAT_ACCEL_BRAKE_MPS2 if self.speed_ctrl.is_braking else GATE_LAT_ACCEL_COAST_MPS2
+        )
+        allowed = MAX_POSE_YAW_DEG_S
+        if v > 1.0:
+            allowed = max(allowed, math.degrees(a_lat / v))
+        # Compare with the NEWEST sample at least one pose interval old: the
+        # immediately previous heading, not the whole history. Scanning every
+        # entry kept rejecting a persistent change for as long as the old
+        # samples stayed in the deque (a 3.6 s driver lockout in the
+        # 2026-10-03 22:44 run), and the old `dt > 0.8: break` skipped the
+        # check entirely after long gaps.
+        for t_old, th_old in reversed(self._th_hist):
+            dt = ts - t_old
+            if dt < 0.15:
+                continue
+            return abs(wrap180(th - th_old)) / dt <= allowed
+        return True
+
+    def _heading_acceptable(self, ts: float, th: float, now: float) -> bool:
+        """Rate gate with a bounded lockout.
+
+        A persistent high-yaw track may be a real spin (the gate cannot tell
+        it from a wrong lock), so after two rejections the pose is accepted and
+        the driver's own spin handling takes over instead of going blind for
+        seconds. That reasoning only holds at LOW speed: at 80 km/h a
+        180-degree flip is physically impossible, i.e. a wrong lock — the
+        2026-10-04 02:52 run drove off route because the lockout accepted a
+        flipped pose at speed. Above LOCKOUT_MAX_KMH the lockout is disabled
+        and the driver stays blind (keys released, coast) until the locator
+        agrees with the track again.
+        """
+        if self._heading_rate_ok(ts, th, now):
+            self._heading_rejects = 0
+            return True
+        self._heading_rejects += 1
+        return self._heading_rejects >= 3 and self._speed_kmh_estimate(now) <= LOCKOUT_MAX_KMH
+
+    def _pose_blind(self, now: float) -> bool:
+        """True while the measured pose is too old to drive on."""
+        return self._last_measured_t is not None and now - self._last_measured_t > POSE_BLIND_S
+
+    def _tick_stuck(
+        self,
+        now: float,
+        mp: tuple[float, float],
+        err: float,
+        xte: float,
+        dist: float,
+        idx: int,
+    ) -> bool:
+        """Stuck/escape watchdog: no approach to the active waypoint at a big error.
+
+        Returns True while the escape state is active (speed floor); after
+        `ESCAPE_REVERSE_AFTER_S` seconds of no progress it arms a short
+        reverse with the opposite lock (a stopped truck cannot turn). The
+        progress is measured as the closing speed to the active waypoint, so a
+        creeping or circling truck counts as stuck too (net displacement did
+        not: the 2026-10-03 23:53 run crept 20 m sideways for 5 s). The window
+        restarts whenever the active waypoint advances: `dist` then measures a
+        different target and the difference is meaningless (a 2026-10-04 00:15
+        run got a false stuck + reverse right after a waypoint switch).
+        """
+        if self._stuck_t0 is None or idx != self._stuck_idx:
+            self._stuck_t0 = now
+            self._stuck_dist = dist
+            self._stuck_idx = idx
+            return False
+        if now - self._stuck_t0 >= STUCK_WINDOW_S:
+            progress_m = self._m(self._stuck_dist - dist)  # positive = closer
+            off = abs(xte) > self.xte_m * self._px_per_m_now() and abs(err) > ESCAPE_ERR_DEG
+            self._stuck_active = progress_m < STUCK_MIN_PROGRESS_M and off
+            self._stuck_t0 = now
+            self._stuck_dist = dist
+            self._stuck_idx = idx
+        if self._stuck_active:
+            if self._stuck_since is None:
+                self._stuck_since = now
+                self._dbg_tick(dict(kind="stuck", t=round(now, 4), err=round(err, 1)))
+            elif (
+                now - self._stuck_since >= ESCAPE_REVERSE_AFTER_S
+                and self._stuck_reverses < ESCAPE_MAX_REVERSES
+                and now >= self._escape_until
+            ):
+                self._stuck_reverses += 1
+                self._stuck_since = now
+                self._escape_until = now + ESCAPE_REVERSE_DUR_S
+                self._escape_steer = -1 if err > 0 else 1
+                self._dbg_tick(
+                    dict(
+                        kind="reverse",
+                        t=round(now, 4),
+                        n=self._stuck_reverses,
+                        err=round(err, 1),
+                    )
+                )
+        else:
+            self._stuck_since = None
+        return self._stuck_active
+
     def _speed_kmh_estimate(self, now: float) -> float:
         """Best available speed for model lookups: OCR when fresh, else the track."""
         if self._speed_fresh(now):
@@ -346,13 +551,20 @@ class FollowDriver(FinalStopMixin, threading.Thread):
         return self._kmh(self.path.mv)
 
     def _yaw_rate_max(self, speed_kmh: float) -> float | None:
-        """Grip-limited yaw authority at a speed (None when no profile is loaded)."""
+        """Grip-limited yaw authority at a speed (None when no profile is loaded).
+
+        This is the physical ceiling used to reject localization glitches and
+        to bound smoothing, so it excludes the fitted tracking gain: the truck's
+        real rotation (up to ~28 deg/s under braking) must not be clipped.
+        """
         if self.vehicle_model is None:
             return None
         lat_accel = (
             self.planner.lat_accel if self.planner is not None else self.nav_cfg.corner_lat_g * G
         )
-        return self.vehicle_model.yaw_rate_max_deg_s(speed_kmh, lat_accel_mps2=lat_accel)
+        return self.vehicle_model.yaw_rate_max_deg_s(
+            speed_kmh, lat_accel_mps2=lat_accel, include_gain=False
+        )
 
     def _route_target_kmh(self, mp: tuple[float, float]) -> float | None:
         """Planned corner/braking speed limit ahead (None when disabled)."""
@@ -377,6 +589,82 @@ class FollowDriver(FinalStopMixin, threading.Thread):
                 self.speed_ctrl.from_kmh(plan_kmh),
             )
         return self.speed_ctrl.calc_target_speed(road_turn)
+
+    def _rejoin_cap_debounced(
+        self, xte_px: float, err: float, outside_outer: bool, now: float
+    ) -> float | None:
+        """Rejoin cap with an inside-corridor debounce.
+
+        A single-frame bearing spike (|err| > 20 deg with xte just past the
+        inner edge) used to drop the target and brake the truck on straights
+        (2026-10-03 23:14 run). Inside the outer corridor the cap now needs a
+        sustained misalignment past `REJOIN_XTE_FACTOR` x the inner edge;
+        outside it stays immediate (a genuine excursion must slow now).
+        """
+        if outside_outer:
+            self._rejoin_since = None
+            return self._recovery_speed_cap_kmh(self._m(abs(xte_px)), err, True)
+        xte_abs_m = self._m(abs(xte_px))
+        active = abs(err) > REJOIN_ALIGN_DEG and xte_abs_m > self.xte_m * REJOIN_XTE_FACTOR
+        if not active:
+            self._rejoin_since = None
+            return None
+        if self._rejoin_since is None:
+            self._rejoin_since = now
+            return None
+        if now - self._rejoin_since < REJOIN_DEBOUNCE_S:
+            return None
+        return self._recovery_speed_cap_kmh(xte_abs_m, err, False)
+
+    def _spin_recovery_override(self, tgt_spd: float, err: float) -> tuple[bool, float]:
+        """(spin, target) for a spun car: no corridor crawl, keep yaw authority.
+
+        A backwards car at the 20 km/h corridor crawl cannot turn: the relay
+        chatters W/SPACE between 1 and 40 km/h and the truck circles instead of
+        coming around. In recovery the corridor cap is dropped and the target
+        is raised to `SPIN_RECOVER_KMH` until the heading error closes.
+        """
+        if abs(err) < SPIN_ERR_DEG:
+            return False, tgt_spd
+        return True, max(tgt_spd, self.speed_ctrl.from_kmh(SPIN_RECOVER_KMH))
+
+    def _recovery_speed_cap_kmh(
+        self, xte_m: float, err: float, outside_outer: bool
+    ) -> float | None:
+        """Speed ceiling (km/h) while the car returns to the line, or None.
+
+        The old rule capped the target to a crawl only once the car was outside
+        the outer corridor and dropped the cap entirely the moment it was back
+        inside — the truck either stopped (no steering authority at ~0 speed)
+        or jumped to cruise while still ~25 deg off the line and oscillated.
+        The cap now follows the deviation: deepest off the line -> lowest
+        target, easing back to cruise only as the heading error closes.
+        """
+        if outside_outer:
+            # Continuous from the outer edge: a marginal excursion (xte just
+            # past the corridor) used to drop the target from cruise to 30 km/h
+            # in a single step and demanded hard braking in the bend - with the
+            # wheel already held that spun the truck (2026-10-03 02:19 run:
+            # xte 6.4 m at 85 km/h -> SPACE + full lock -> 180 deg spin). The
+            # cap now eases from the cruise speed at the edge to REJOIN_MIN
+            # one corridor width deeper.
+            over = min(1.0, max(0.0, (xte_m - self.xte_outer_m) / max(self.xte_outer_m, 1.0)))
+            cap = self.speed_cap_kmh - over * (self.speed_cap_kmh - REJOIN_MIN_KMH)
+            return max(self.nav_cfg.corner_min_kmh, cap)
+
+        err_abs = abs(err)
+        if err_abs <= REJOIN_ALIGN_DEG or xte_m <= self.xte_m:
+            # Centered and merely aiming through a bend: no cap. The cap is
+            # for actually returning to the line, not for any heading error.
+            return None
+        anchors = ((REJOIN_ALIGN_DEG, self.speed_cap_kmh), *REJOIN_ERR_KMH)
+        cap = anchors[-1][1]
+        for (e0, c0), (e1, c1) in zip(anchors, anchors[1:], strict=False):
+            if err_abs <= e1:
+                k = (err_abs - e0) / (e1 - e0)
+                cap = c0 + (c1 - c0) * k
+                break
+        return min(cap, self.speed_cap_kmh)
 
     def apply_vehicle_tuning(self, cfg: NavigatorConfig) -> None:
         """Apply live vehicle/planner tuning changed in the UI."""
@@ -406,6 +694,7 @@ class FollowDriver(FinalStopMixin, threading.Thread):
 
     def _get_telemetry_params(self) -> dict[str, Any]:
         return dict(
+            config_hash=self._config_hash,
             arrive_r=self.arrive_r,
             dead=self.dead,
             dead_off=self.dead_off,
@@ -447,6 +736,27 @@ class FollowDriver(FinalStopMixin, threading.Thread):
                 new_sample, keep_going = self._ingest(now, it)
                 if not keep_going:
                     continue
+
+                # Blind mode: the measured pose is too old to drive on. Keys
+                # are released and the truck coasts; driving on the frozen pose
+                # chased a phantom the moment the delayed pose arrived. The
+                # final stop is exempt: there a fresh speedometer reading is
+                # the ground truth, and its own state machine handles staleness.
+                if not self._final_stop and self._pose_blind(now):
+                    if not self._blind:
+                        self._blind = True
+                        measured = self._last_measured_t
+                        self._dbg_tick(
+                            dict(
+                                kind="blind",
+                                t=round(now, 4),
+                                sa=round(now - measured, 2) if measured is not None else -1.0,
+                            )
+                        )
+                    self._rel("wait_pose")
+                    self._wait(0.05)
+                    continue
+                self._blind = False
 
                 if not self.path.clean_stale_samples(now, max_age=1.5):
                     self._rel("wait_pose")
@@ -531,7 +841,7 @@ class FollowDriver(FinalStopMixin, threading.Thread):
             lt, lx, ly = self.path.samples[-1]
             dts = ts - lt
             d = math.hypot(x - lx, y - ly)
-            if dts > 1e-3 and d / dts > self.path.lost_limit():
+            if dts > 1e-3 and d / dts > self.path.lost_limit() + GHOST_MARGIN_PX_S:
                 self._lost = True
                 self._dbg_tick(
                     dict(
@@ -545,9 +855,32 @@ class FollowDriver(FinalStopMixin, threading.Thread):
                 self._rel("lost")
                 self._wait(0.25)
                 return False, False
+        # Heading continuity: a wrong re-acquisition after a tracking gap
+        # publishes a coherent-looking but rotated track. The yaw rate implied
+        # by the new measurement is checked before the sample is accepted.
+        th_new = None
+        pose_d = it.get("pose")
+        if isinstance(pose_d, dict) and pose_d.get("th") is not None:
+            th_new = float(pose_d["th"]) % 360.0
+            if not self._heading_acceptable(ts, th_new, now):
+                self._lost = True
+                self._dbg_tick(
+                    dict(
+                        kind="lost",
+                        t=now,
+                        sa=round(now - self.path.samples[-1][0], 2) if self.path.samples else -1.0,
+                        d=-1.0,
+                        v_claim="heading_rate",
+                    )
+                )
+                self._rel("lost")
+                self._wait(0.25)
+                return False, False
         new_sample = self._push_pose(ts, x, y)
         if new_sample:
             self._lost = False
+            if th_new is not None:
+                self._th_hist.append((ts, th_new))
         return new_sample, True
 
     def _enter_route(self, mp: tuple[float, float], course: float | None) -> None:
@@ -680,33 +1013,50 @@ class FollowDriver(FinalStopMixin, threading.Thread):
         # Speed estimation from successive positions
         self._update_speed(now, mp)
 
-        # Cross-track error & pure pursuit bearing
-        xte, xte_lim, bearing = self.path.calc_xte_and_bearing(mp, self._px_per_m_now())
+        # Cross-track error & pure pursuit bearing (now enables the centering trend)
+        xte, xte_lim, bearing = self.path.calc_xte_and_bearing(mp, self._px_per_m_now(), now=now)
 
-        # Heading calculation & smoothing
-        mh_age = now - self.path.mh_t if self.path.mh is not None else 1e9
-        mh_on = self.path.mh is not None and self.path.mv > 10.0 and mh_age < 1.5
-        if self.path.mh is not None and mh_age < 3.0:
-            heading_src = self.path.mh
-        elif pose is not None:
-            heading_src = float(pose["th"]) % 360.0
-        else:
-            heading_src = self.path.mh or 0.0
+        # Heading calculation & smoothing: the motion course only while it is
+        # genuinely fresh, otherwise the measured map heading (accurate at low
+        # speed, where the motion course freezes).
+        heading_src, head_src, mh_age, mh_on = self._heading_source(pose, now)
 
         # Steering state machine (speed-dependent yaw authority)
         yaw_max = self._yaw_rate_max(self._speed_kmh_estimate(now))
         heading = self._smooth_heading(heading_src, now, yaw_max)
         err = wrap180(bearing - heading)
 
+        # Stuck/escape watchdog: a truck crawling at a big error cannot turn
+        stuck = self._tick_stuck(now, mp, err, xte, dist, self.path.idx)
+        reversing = now < self._escape_until
+
         # Road geometry angles
         turn_angle, road_turn = self.path.calc_road_turn(heading)
         plan_kmh = self._route_target_kmh(mp)
         tgt_spd = self._speed_target(road_turn, plan_kmh)
         outside_outer = abs(xte) > self.xte_outer_m * self._px_per_m_now()
-        if outside_outer:
-            # Far outside the corridor: bleed speed while steering back.
-            rejoin_kmh = max(self.nav_cfg.corner_min_kmh, 10.0)
-            tgt_spd = min(tgt_spd, self.speed_ctrl.from_kmh(rejoin_kmh))
+        rejoin_cap = self._rejoin_cap_debounced(xte, err, outside_outer, now)
+        if rejoin_cap is not None:
+            # Returning to the line: cap the speed progressively instead of
+            # the old binary crawl-outside / cruise-inside switch.
+            tgt_spd = min(tgt_spd, self.speed_ctrl.from_kmh(rejoin_cap))
+
+        # Centering urgency (0 at the inner edge, 1 at the outer edge): the
+        # wheel amplitude and cadence scale continuously with it, so a long
+        # bend is held by firmer/more frequent taps instead of running to the
+        # wall and braking.
+        xte_abs_m = self._m(abs(xte))
+        span = max(self.xte_outer_m - self.xte_m, 0.1)
+        center_urgency = (
+            1.0 if outside_outer else max(0.0, min(1.0, (xte_abs_m - self.xte_m) / span))
+        )
+        spin, tgt_spd = self._spin_recovery_override(tgt_spd, err)
+        if spin:
+            rejoin_cap = None
+        if stuck and not spin:
+            # stalled off-route: give it yaw authority instead of the crawl
+            rejoin_cap = None
+            tgt_spd = max(tgt_spd, self.speed_ctrl.from_kmh(ESCAPE_SPEED_KMH))
 
         # Age of the last MEASURED pose: the tracker republishes a
         # frozen position with a fresh frame timestamp during a capture
@@ -726,35 +1076,49 @@ class FollowDriver(FinalStopMixin, threading.Thread):
             pose_age=steer_pose_age,
             mv_mps=self._m(self.path.mv),
             heading_meas=raw_heading,
+            # The speed controller latches its last decision; the wheels on the
+            # ground still reflect it while this tick decides the new keys.
+            braking=bool(self.speed_ctrl.is_braking),
+            center_urgency=center_urgency,
+            recovery=spin,
         )
         keys: dict[str, bool] = {}
-        if steer_action == 1:
-            keys["D"] = True
-        elif steer_action == -1:
-            keys["A"] = True
+        gas_w = brake_space = False
+        if reversing:
+            # escape manoeuvre: back out of the stall with the opposite lock
+            keys["S"] = True
+            if self._escape_steer == 1:
+                keys["D"] = True
+            elif self._escape_steer == -1:
+                keys["A"] = True
+        else:
+            if steer_action == 1:
+                keys["D"] = True
+            elif steer_action == -1:
+                keys["A"] = True
 
-        # Throttle and braking evaluation
-        gas_w, brake_space = self.speed_ctrl.decide_throttle_and_brake(
-            mv=self.path.mv,
-            tgt_spd=tgt_spd,
-            steer=self.steer_ctrl.steer,
-            micro=self.steer_ctrl.micro,
-            road_turn=road_turn,
-            turn_min=10.0,
-            xte=xte,
-            xte_lim=xte_lim,
-            hold_window=not outside_outer,
-        )
+            # Throttle and braking evaluation
+            gas_w, brake_space = self.speed_ctrl.decide_throttle_and_brake(
+                mv=self.path.mv,
+                tgt_spd=tgt_spd,
+                steer=self.steer_ctrl.steer,
+                micro=self.steer_ctrl.micro,
+                road_turn=road_turn,
+                turn_min=10.0,
+                xte=xte,
+                xte_lim=xte_lim,
+                hold_window=rejoin_cap is None,
+                err=err,
+            )
 
-        if brake_space:
-            # Keep A/D: dropping the wheel here left the vehicle unable
-            # to catch a slide until it slowed down to the target.
-            keys["SPACE"] = True
-        elif gas_w:
-            keys["W"] = True
+            if brake_space:
+                # Keep A/D: dropping the wheel here left the vehicle unable
+                # to catch a slide until it slowed down to the target.
+                keys["SPACE"] = True
+            elif gas_w:
+                keys["W"] = True
 
         if self._dbg_n % 5 == 0:
-            hmode = "M" if mh_on else "S"
             logger.info(
                 "[nav] mp=%.0f,%.0f goal=%d (%.0f,%.0f) dist=%.0fm "
                 "bearing=%.1f heading=%.1f err=%.1f xte=%.1fm "
@@ -775,7 +1139,7 @@ class FollowDriver(FinalStopMixin, threading.Thread):
                 self._kmh(self.path.mv),
                 self.path.mv,
                 "".join(k for k in ("W", "A", "D", "SPACE") if keys.get(k)),
-                hmode,
+                head_src,
                 f" ocr={self._speed_kmh:.0f}km/h" if self._speed_fresh(now) else "",
             )
 
@@ -795,12 +1159,17 @@ class FollowDriver(FinalStopMixin, threading.Thread):
                 dict(
                     t=round(now, 4),
                     tick=self._dbg_n,
+                    x=round(mp[0], 1),
+                    y=round(mp[1], 1),
                     pose_age=round(now - float(it["ts"]), 3) if it else 0.0,
                     sample_age=round(now - self.path.samples[-1][0], 3),
                     new_sample=bool(new_sample),
+                    fresh=bool(new_sample),
                     mode="M" if mh_on else "S",
+                    head_src=head_src,
                     mv=round(self.path.mv, 1),
                     mh=round(self.path.mh, 1) if self.path.mh is not None else None,
+                    mh_age=round(mh_age, 3) if mh_age is not None else None,
                     heading=round(heading, 2),
                     bearing=round(bearing, 2),
                     err=round(err, 2),
@@ -818,10 +1187,24 @@ class FollowDriver(FinalStopMixin, threading.Thread):
                     th_raw=round(float(pose["th"]), 2) if pose else None,
                     yaw_max=round(yaw_max, 1) if yaw_max else None,
                     plan_kmh=round(plan_kmh, 1) if plan_kmh is not None else None,
+                    rejoin=round(rejoin_cap, 1) if rejoin_cap is not None else None,
                     ang=round(self.steer_ctrl.ang, 2),
                     lead=round(self.steer_ctrl.last_lead, 1),
                     steer=self.steer_ctrl.steer,
                     micro=self.steer_ctrl.micro,
+                    hold=bool(self.steer_ctrl.hold),
+                    hold_left=round(max(0.0, self.steer_ctrl.imp_end - now), 2),
+                    settle=round(max(0.0, self.steer_ctrl.settle_until - now), 2),
+                    urg=round(center_urgency, 2),
+                    spin=bool(spin),
+                    stuck=bool(stuck),
+                    rev=bool(reversing),
+                    elapsed=round(float(it.get("elapsed") or 0.0), 3),
+                    reject=(it.get("diag") or {}).get("reject"),
+                    anchor=bool((it.get("diag") or {}).get("anchor")),
+                    cc=it.get("cc"),
+                    vkmh=round(self._kmh(self.path.mv), 1),
+                    inl=int(pose.get("inl", 0)) if pose else 0,
                     braking=bool(brake_space),
                     keys="".join(k for k in ("W", "A", "D", "SPACE") if keys.get(k)),
                     idx=self.path.idx,

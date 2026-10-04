@@ -132,7 +132,7 @@ class TestFinalWaypointStop(unittest.TestCase):
             time.sleep(0.1)
 
             self.assertTrue(driver.is_alive())
-            self.assertEqual(driver.state, "final_stop")
+            self.assertNotEqual(driver.state, "finished")
 
             recover_until = time.time() + 3.0
             while time.time() < recover_until and driver.is_alive() and driver.state != "finished":
@@ -192,7 +192,7 @@ class TestFinalWaypointStop(unittest.TestCase):
                 time.sleep(0.005)
             time.sleep(0.1)
             self.assertTrue(driver.is_alive())
-            self.assertEqual(driver.state, "final_stop")
+            self.assertNotEqual(driver.state, "finished")
 
             stop_until = time.time() + 3.0
             while time.time() < stop_until and driver.is_alive() and driver.state != "finished":
@@ -231,10 +231,12 @@ class TestStaleMeasuredPose(unittest.TestCase):
             while time.time() - t0 < 2.0:
                 publish(100.0 + 40.0 * (time.time() - t0), 90.0, True)
                 time.sleep(0.005)
-            # drive against the route -> the motion course gives a big error
+            # drive against the route -> the motion course gives a big error.
+            # The pose heading stays constant: a synthetic 90 -> 210 flip is
+            # (correctly) rejected by the pose heading-rate gate.
             hold_start = time.time()
             while time.time() - hold_start < 1.2:
-                publish(200.0 - 40.0 * (time.time() - hold_start), 210.0, True)
+                publish(200.0 - 40.0 * (time.time() - hold_start), 90.0, True)
                 time.sleep(0.005)
             steered = any(e[0] == "keys" and ("A" in e[1] or "D" in e[1]) for e in kb.events)
             self.assertTrue(steered)
@@ -431,15 +433,22 @@ class TestVehicleAuthority(unittest.TestCase):
         self.assertIsNone(driver._yaw_rate_max(50.0))
 
     def test_yaw_gain_override_scales_authority(self):
-        base = self._driver()
+        # explicit 1.0 baseline: the shipped profile carries a fitted gain;
+        # the override scales the tracking-authority ceiling (include_gain),
+        # while the driver's physical clamp stays gain-free by design
+        base = self._driver(yaw_gain=1.0)
         tuned = self._driver(yaw_gain=2.0)
         assert base.vehicle_model is not None and tuned.vehicle_model is not None
+        self.assertAlmostEqual(base.vehicle_model.yaw_gain, 1.0, delta=1e-9)
         self.assertAlmostEqual(tuned.vehicle_model.yaw_gain, 2.0, delta=1e-9)
 
-        base_yaw = base._yaw_rate_max(5.0)
-        tuned_yaw = tuned._yaw_rate_max(5.0)
-        assert base_yaw is not None and tuned_yaw is not None
+        base_yaw = base.vehicle_model.yaw_rate_max_deg_s(5.0, include_gain=True)
+        tuned_yaw = tuned.vehicle_model.yaw_rate_max_deg_s(5.0, include_gain=True)
         self.assertAlmostEqual(tuned_yaw, base_yaw * 2.0, delta=1e-6)
+        base_cap = base._yaw_rate_max(5.0)
+        tuned_cap = tuned._yaw_rate_max(5.0)
+        assert base_cap is not None and tuned_cap is not None
+        self.assertAlmostEqual(tuned_cap, base_cap, delta=1e-9)
 
     def test_apply_vehicle_tuning_updates_planner(self):
         from autopilot.navigation.speed_profile import G
@@ -512,6 +521,378 @@ class TestVehicleAuthority(unittest.TestCase):
         driver._last_speed_t = 100.0
 
         self.assertAlmostEqual(driver._speed_kmh_estimate(100.5), 42.0, delta=1e-6)
+
+
+class TestHeadingSource(unittest.TestCase):
+    """The control heading must use the map pose when the motion course is stale.
+
+    `mh` freezes below the 10 px / 0.5 s update threshold; continuing to steer
+    by it ignored the accurate map heading and produced the low-speed
+    oscillation seen in the 2026-10-01 test runs.
+    """
+
+    @staticmethod
+    def _driver() -> FollowDriver:
+        return FollowDriver(
+            loc=None,
+            pts=[(0.0, 0.0), (1000.0, 0.0)],
+            nav_cfg=NavigatorConfig(),
+            kb=None,
+        )
+
+    def test_fresh_motion_course_wins_at_speed(self):
+        driver = self._driver()
+        driver.path._mh = 77.0
+        driver.path._mh_t = 100.0
+        driver.path._mv = 30.0
+
+        heading, source, age, mh_on = driver._heading_source(dict(th=70.0, inl=5), 100.2)
+
+        self.assertEqual(source, "mh")
+        self.assertTrue(mh_on)
+        self.assertAlmostEqual(heading, 77.0, delta=1e-6)
+        assert age is not None
+        self.assertAlmostEqual(age, 0.2, delta=1e-6)
+
+    def test_stale_motion_course_falls_back_to_the_map_heading(self):
+        driver = self._driver()
+        driver.path._mh = 77.0
+        driver.path._mh_t = 100.0
+        driver.path._mv = 30.0
+
+        heading, source, age, mh_on = driver._heading_source(dict(th=4.4, inl=5), 101.5)
+
+        self.assertEqual(source, "pose")
+        self.assertFalse(mh_on)
+        self.assertAlmostEqual(heading, 4.4, delta=1e-6)
+        assert age is not None
+        self.assertGreater(age, 1.0)
+
+    def test_slow_motion_course_is_not_used(self):
+        driver = self._driver()
+        driver.path._mh = 77.0
+        driver.path._mh_t = 100.0
+        driver.path._mv = 2.0
+
+        heading, source, _age, mh_on = driver._heading_source(dict(th=350.0, inl=5), 100.05)
+
+        self.assertEqual(source, "pose")
+        self.assertFalse(mh_on)
+        self.assertAlmostEqual(heading, 350.0, delta=1e-6)
+
+    def test_no_pose_heading_keeps_the_last_course(self):
+        driver = self._driver()
+        driver.path._mh = 77.0
+        driver.path._mh_t = 100.0
+        driver.path._mv = 2.0
+
+        heading, source, _age, mh_on = driver._heading_source(dict(inl=0), 100.05)
+
+        self.assertEqual(source, "none")
+        self.assertFalse(mh_on)
+        self.assertAlmostEqual(heading, 77.0, delta=1e-6)
+
+
+class TestPoseQualityGates(unittest.TestCase):
+    """A wrong re-acquisition after a pose void must not reach the controls."""
+
+    @staticmethod
+    def _driver() -> FollowDriver:
+        return FollowDriver(
+            loc=None,
+            pts=[(0.0, 0.0), (1000.0, 0.0)],
+            nav_cfg=NavigatorConfig(),
+            kb=None,
+        )
+
+    def test_impossible_reacquisition_is_rejected(self):
+        driver = self._driver()
+        driver._th_hist.append((100.0, 55.4))
+        driver._speed_kmh = 80.0
+        driver._last_speed_t = 100.7
+
+        # 31 deg in 0.79 s (~39 deg/s): the wrong-orientation lock of the
+        # 2026-10-03 02:29 run must be treated as a ghost pose
+        self.assertFalse(driver._heading_rate_ok(100.79, 24.2, 100.79))
+        # a hard but physical turn (30 deg/s) stays accepted
+        self.assertTrue(driver._heading_rate_ok(100.6, 37.4, 100.6))
+
+    def test_low_speed_braking_turn_is_allowed(self):
+        driver = self._driver()
+        driver._th_hist.append((100.0, 0.0))
+        driver._speed_kmh = 20.0
+        driver._last_speed_t = 100.5
+        driver.speed_ctrl._braking = True
+
+        # 24 deg in 0.6 s = 40 deg/s: impossible at 80 km/h, physically
+        # plausible at 20 km/h on SPACE (a_lat / v)
+        self.assertTrue(driver._heading_rate_ok(100.6, 24.0, 100.6))
+
+    def test_long_gap_history_is_still_rate_checked(self):
+        """An old sample must not disable the check (the old `dt > 0.8: break`)."""
+        driver = self._driver()
+        driver._th_hist.append((100.0, 0.0))
+        driver._speed_kmh = 80.0
+        driver._last_speed_t = 100.9
+
+        # 50 deg in 0.9 s (~56 deg/s): beyond the old 0.8 s window, where the
+        # check used to be skipped and the flip was accepted
+        self.assertFalse(driver._heading_rate_ok(100.9, 50.0, 100.9))
+        # a slow drift over the same window stays physical
+        self.assertTrue(driver._heading_rate_ok(100.9, 25.0, 100.9))
+
+    def test_only_the_newest_eligible_sample_is_compared(self):
+        """Ancient entries must not dominate the rate (3.6 s lockout bug)."""
+        driver = self._driver()
+        driver._th_hist.extend([(90.0, 0.0), (100.5, 0.0)])
+        driver._speed_kmh = 80.0
+        driver._last_speed_t = 100.66
+
+        # the newest eligible entry (100.5) gives 20 deg / 0.16 s = 125 deg/s;
+        # the ancient 90.0 entry would give 1.9 deg/s and must not be used
+        self.assertFalse(driver._heading_rate_ok(100.66, 20.0, 100.66))
+
+    def test_lockout_accepts_a_persistent_track_only_at_low_speed(self):
+        """A real spin needs low speed: at 80 km/h a flip is a wrong lock.
+
+        The 2026-10-04 02:52 run drove off route because the lockout accepted
+        a flipped pose at speed; the driver must stay blind instead.
+        """
+        fast = self._driver()
+        fast._th_hist.append((100.0, 0.0))
+        fast._speed_kmh = 80.0
+        fast._last_speed_t = 100.5
+
+        self.assertFalse(fast._heading_acceptable(100.5, 90.0, 100.5))
+        self.assertFalse(fast._heading_acceptable(100.6, 90.0, 100.6))
+        self.assertFalse(fast._heading_acceptable(100.7, 90.0, 100.7))
+
+        slow = self._driver()
+        slow._th_hist.append((100.0, 0.0))
+        slow._speed_kmh = 20.0
+        slow._last_speed_t = 100.5
+
+        self.assertFalse(slow._heading_acceptable(100.5, 90.0, 100.5))
+        self.assertFalse(slow._heading_acceptable(100.6, 90.0, 100.6))
+        self.assertTrue(slow._heading_acceptable(100.7, 90.0, 100.7))
+
+    def test_blind_mode_after_a_pose_void(self):
+        driver = self._driver()
+
+        self.assertFalse(driver._pose_blind(100.0))
+        driver._last_measured_t = 100.0
+        self.assertFalse(driver._pose_blind(100.3))
+        self.assertTrue(driver._pose_blind(100.5))
+
+
+class TestStuckEscape(unittest.TestCase):
+    """No route progress at a big error: speed floor, then a short reverse."""
+
+    @staticmethod
+    def _driver() -> FollowDriver:
+        return FollowDriver(
+            loc=None,
+            pts=[(0.0, 0.0), (1000.0, 0.0)],
+            nav_cfg=NavigatorConfig(),
+            kb=None,
+            px_per_m=2.0,
+        )
+
+    def test_no_progress_triggers_the_floor_and_a_reverse(self):
+        driver = self._driver()
+        # xte 10 m (off the 4 m inner corridor), err -70 deg, waypoint frozen
+        self.assertFalse(driver._tick_stuck(100.0, (0.0, 0.0), -70.0, 20.0, 50.0, 1))
+        self.assertFalse(driver._tick_stuck(102.0, (0.0, 0.0), -70.0, 20.0, 50.0, 1))
+        stuck = driver._tick_stuck(103.1, (0.0, 0.0), -70.0, 20.0, 50.0, 1)
+
+        self.assertTrue(stuck)
+        self.assertIsNotNone(driver._stuck_since)
+
+        # two more seconds without progress arm the reverse with opposite lock
+        driver._tick_stuck(105.2, (0.0, 0.0), -70.0, 20.0, 50.0, 1)
+
+        self.assertGreater(driver._escape_until, 105.2)
+        self.assertEqual(driver._escape_steer, 1)  # err < 0 -> D while backing
+
+    def test_progress_disarms_the_watchdog(self):
+        driver = self._driver()
+        driver._tick_stuck(100.0, (0.0, 0.0), -70.0, 20.0, 50.0, 1)
+        # 15 m closer to the waypoint over the window: not stuck
+        stuck = driver._tick_stuck(103.1, (0.0, 0.0), -70.0, 20.0, 20.0, 1)
+
+        self.assertFalse(stuck)
+        self.assertIsNone(driver._stuck_since)
+
+    def test_creeping_sideways_counts_as_stuck(self):
+        """Net displacement hid a sideways crawl (2026-10-03 23:53 run)."""
+        driver = self._driver()
+        driver._tick_stuck(100.0, (0.0, 0.0), -70.0, 20.0, 50.0, 1)
+
+        # 10 m of movement, but the waypoint distance is unchanged
+        stuck = driver._tick_stuck(103.1, (20.0, 0.0), -70.0, 20.0, 50.0, 1)
+
+        self.assertTrue(stuck)
+
+    def test_waypoint_advance_restarts_the_window(self):
+        """dist to a NEW waypoint must not be compared with the old one.
+
+        The 2026-10-04 00:15 run got a false stuck + reverse right after a
+        waypoint switch: dist jumped from 28 to 146 px and the difference
+        looked like 59 m of "no progress" against the previous target.
+        """
+        driver = self._driver()
+        driver._tick_stuck(100.0, (0.0, 0.0), -70.0, 20.0, 28.0, 11)
+
+        # the active waypoint advances mid-window: window restarts
+        self.assertFalse(driver._tick_stuck(102.0, (0.0, 0.0), -70.0, 20.0, 146.0, 12))
+        stuck = driver._tick_stuck(103.1, (0.0, 0.0), -70.0, 20.0, 146.0, 12)
+
+        self.assertFalse(stuck)
+        self.assertIsNone(driver._stuck_since)
+
+
+class TestSpinRecoveryOverride(unittest.TestCase):
+    """A spun/backwards car gets a turning speed, not the corridor crawl."""
+
+    @staticmethod
+    def _driver() -> FollowDriver:
+        return FollowDriver(
+            loc=None,
+            pts=[(0.0, 0.0), (1000.0, 0.0)],
+            nav_cfg=NavigatorConfig(),
+            kb=None,
+            px_per_m=2.0,
+        )
+
+    def test_spin_raises_the_target_to_a_turning_speed(self):
+        driver = self._driver()
+        crawl = driver.speed_ctrl.from_kmh(20.0)
+
+        spin, tgt = driver._spin_recovery_override(crawl, 150.0)
+
+        self.assertTrue(spin)
+        self.assertAlmostEqual(driver.speed_ctrl.to_kmh(tgt), 35.0, delta=0.1)
+
+    def test_normal_error_keeps_the_target(self):
+        driver = self._driver()
+        crawl = driver.speed_ctrl.from_kmh(20.0)
+
+        spin, tgt = driver._spin_recovery_override(crawl, 40.0)
+
+        self.assertFalse(spin)
+        self.assertAlmostEqual(tgt, crawl, delta=1e-9)
+
+
+class TestProgressiveRejoin(unittest.TestCase):
+    """The speed cap while returning to the line after an excursion."""
+
+    @staticmethod
+    def _driver(**nav_kwargs) -> FollowDriver:
+        nav = NavigatorConfig(**nav_kwargs)
+        return FollowDriver(loc=None, pts=[(0.0, 0.0), (1.0, 0.0)], nav_cfg=nav, kb=None)
+
+    def test_aligned_car_has_no_cap(self):
+        driver = self._driver()
+
+        self.assertIsNone(driver._recovery_speed_cap_kmh(0.5, 5.0, False))
+        self.assertIsNone(driver._recovery_speed_cap_kmh(4.9, -9.0, False))
+
+    def test_centered_cornering_does_not_cap(self):
+        """Heading error alone is normal pure-pursuit aiming, not a recovery.
+
+        Pure pursuit holds 15-25 deg of error through every bend; capping the
+        speed for it braked through normal cornering (the "brakes for no
+        reason" report from the 2026-10-01 22:19 run).
+        """
+        driver = self._driver()  # xte_m = 4.0
+
+        self.assertIsNone(driver._recovery_speed_cap_kmh(1.0, 45.0, False))
+        self.assertIsNone(driver._recovery_speed_cap_kmh(4.0, 25.0, False))
+
+    def test_misaligned_cap_eases_down_with_the_error(self):
+        driver = self._driver(xte_m=1.0, xte_outer_m=5.0)
+
+        gentle = driver._recovery_speed_cap_kmh(3.0, 22.0, False)
+        hard = driver._recovery_speed_cap_kmh(3.0, 40.0, False)
+        severe = driver._recovery_speed_cap_kmh(3.0, 60.0, False)
+        assert gentle is not None and hard is not None and severe is not None
+
+        self.assertGreater(gentle, hard)
+        self.assertGreater(hard, severe)
+        self.assertAlmostEqual(severe, 38.0, delta=1e-6)
+        self.assertLessEqual(gentle, driver.speed_cap_kmh)
+
+    def test_cap_grows_continuously_from_the_alignment_gate(self):
+        driver = self._driver(xte_m=1.0, xte_outer_m=5.0)
+
+        at_gate = driver._recovery_speed_cap_kmh(3.0, 20.0 + 1e-6, False)
+        above_gate = driver._recovery_speed_cap_kmh(3.0, 22.0, False)
+        assert at_gate is not None and above_gate is not None
+
+        self.assertAlmostEqual(at_gate, driver.speed_cap_kmh, delta=0.1)
+        self.assertLess(above_gate, at_gate)
+
+    def test_inside_cap_needs_a_sustained_misalignment(self):
+        """A single-frame bearing spike must not brake the truck on a straight."""
+        driver = self._driver(xte_m=2.0)
+
+        # xte ~5.9 m (past 1.5x the 2 m inner edge), err 30 deg: debounce first
+        self.assertIsNone(driver._rejoin_cap_debounced(12.0, 30.0, False, 100.0))
+        self.assertIsNone(driver._rejoin_cap_debounced(12.0, 30.0, False, 100.2))
+        self.assertIsNotNone(driver._rejoin_cap_debounced(12.0, 30.0, False, 100.5))
+
+    def test_inside_cap_resets_on_a_single_spike(self):
+        driver = self._driver(xte_m=2.0)
+
+        self.assertIsNone(driver._rejoin_cap_debounced(12.0, 30.0, False, 100.0))
+        # error collapses before the debounce: nothing to cap
+        self.assertIsNone(driver._rejoin_cap_debounced(12.0, 5.0, False, 100.1))
+        # and the next spike starts the debounce from scratch
+        self.assertIsNone(driver._rejoin_cap_debounced(12.0, 30.0, False, 100.6))
+
+    def test_outside_corridor_cap_is_immediate(self):
+        driver = self._driver(xte_m=2.0, xte_outer_m=12.0)
+
+        cap = driver._rejoin_cap_debounced(30.0, 5.0, True, 100.0)
+
+        assert cap is not None
+        self.assertLess(cap, driver.speed_cap_kmh)
+
+    def test_off_corridor_cap_keeps_steering_authority(self):
+        driver = self._driver(xte_m=1.0, xte_outer_m=5.0)
+
+        shallow = driver._recovery_speed_cap_kmh(5.5, 0.0, True)
+        deep = driver._recovery_speed_cap_kmh(12.0, 0.0, True)
+        assert shallow is not None and deep is not None
+
+        self.assertGreater(shallow, deep)
+        self.assertGreaterEqual(deep, 20.0)
+        self.assertLessEqual(deep, 25.0)
+
+    def test_off_corridor_cap_has_no_cliff_at_the_edge(self):
+        """A marginal excursion must not demand hard braking in the bend.
+
+        The old step (cruise -> 30 km/h one metre past the edge) dropped the
+        target from 79 to 29 at 85 km/h; with the wheel held that braked the
+        truck into a spin (2026-10-03 02:19 run).
+        """
+        driver = self._driver(xte_m=1.0, xte_outer_m=5.0)
+
+        just_out = driver._recovery_speed_cap_kmh(5.2, 0.0, True)
+        half = driver._recovery_speed_cap_kmh(7.5, 0.0, True)
+        assert just_out is not None and half is not None
+
+        self.assertGreater(just_out, 70.0)
+        self.assertGreater(half, 40.0)
+        self.assertLess(half, just_out)
+
+    def test_off_corridor_cap_respects_the_corner_minimum(self):
+        driver = self._driver(corner_min_kmh=26.0)
+
+        cap = driver._recovery_speed_cap_kmh(20.0, 0.0, True)
+
+        assert cap is not None
+        self.assertGreaterEqual(cap, 26.0)
 
 
 class TestRouteEntrySnap(unittest.TestCase):

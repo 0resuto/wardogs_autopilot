@@ -67,7 +67,7 @@ class HybridLocalizer:
         ui_mask: np.ndarray | None,
         prev_xy: tuple[float, float] | None = None,
         min_inl: int = 4,
-        prev_th: float = 0.0,
+        prev_th: float | None = None,
         debug: bool = False,
         budget: float | None = None,
         progress: Callable[[tuple[Any, ...]], None] | None = None,
@@ -93,15 +93,30 @@ class HybridLocalizer:
         diag: dict[str, Any] = dict(
             mode="hybrid", engine="hybrid", anchor=False, reject=None, detail="OK (hybrid track)"
         )
+        map_ecc = bool(cfg.get("hybrid_map_ecc", False))
+        map_cc = float(cfg.get("hybrid_map_min_cc", 0.35) or 0.0)
         if not need_anchor:
             M_prev = self._M
             assert M_prev is not None
-            ok, warp, cc, why = self._track(pp)
-            if ok and warp is not None and cc >= min_cc:
+            if map_ecc:
+                # Absolute measurement: the frame is aligned against the map
+                # itself, so the position error cannot accumulate between
+                # anchors (the frame-to-frame track wandered 3-10 m per second).
+                ok, warp, cc, why = self._track_map(pp, M_prev, mm.shape[:2])
+                cc_floor = map_cc
+            else:
+                ok, warp, cc, why = self._track(pp)
+                cc_floor = min_cc
+            if ok and warp is not None and cc >= cc_floor:
                 M = M_prev @ _inv3(warp)
                 pose = self._pose_from_M(M, mm, cfg)
-                pose["inl"] = self._anchor_inl
-                pose["n_match"] = self._anchor_n
+                # ECC is not a feature match: reporting the last anchor's
+                # inliers let the vote's strong-candidate bypass trust stale
+                # evidence. The correlation coefficient is its real quality.
+                pose["inl"] = 0
+                pose["n_match"] = 0
+                pose["cc"] = round(float(cc), 4)
+                pose["anchor_inl"] = self._anchor_inl
                 self._M = M
                 self._prev_pp = pp
                 diag["cc"] = round(cc, 4)
@@ -157,6 +172,49 @@ class HybridLocalizer:
         except cv2.error as exc:
             return False, None, 0.0, "ecc failed: %s" % exc
         return True, np.asarray(estimate, np.float32), float(cc), ""
+
+    def _track_map(
+        self, pp: np.ndarray, M_prev: np.ndarray, shape: tuple[int, int]
+    ) -> tuple[bool, np.ndarray | None, float, str]:
+        """ECC step of the frame against the map patch at the predicted pose.
+
+        The patch is the map rendered into the frame pixel grid via `M_prev`,
+        so the returned warp maps patch coords -> frame coords and the caller
+        applies the same `M_prev @ inv(warp)` update as the frame-to-frame path.
+        """
+        patch = self._map_patch(shape, M_prev)
+        if patch is None:
+            return False, None, 0.0, "map patch unavailable"
+        template = shadow_fill_norm(patch, None)
+        try:
+            cc, estimate = cv2.findTransformECC(
+                template.astype(np.float32),
+                pp.astype(np.float32),
+                np.eye(2, 3, dtype=np.float32),
+                cv2.MOTION_EUCLIDEAN,
+                ECC_CRITERIA,
+            )
+        except cv2.error as exc:
+            return False, None, 0.0, "map ecc failed: %s" % exc
+        return True, np.asarray(estimate, np.float32), float(cc), ""
+
+    def _map_patch(self, shape: tuple[int, int], M: np.ndarray) -> np.ndarray | None:
+        """Render the map into the frame pixel grid at the pose `M` (mu coords)."""
+        mu = self.store.load_global_map()
+        if mu is None or not getattr(mu, "size", 0):
+            return None
+        h, w = shape[:2]
+        a = np.asarray(M, np.float32)[:2]
+        # WARP_INVERSE_MAP: `a` maps frame coords -> map coords (sampling
+        # matrix); without the flag warpAffine treats it as source -> dest and
+        # inverts it, rendering a constant border instead of the map.
+        return cv2.warpAffine(
+            mu,
+            a,
+            (w, h),
+            flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
+            borderMode=cv2.BORDER_REPLICATE,
+        )
 
     @staticmethod
     def _center_px(mm: np.ndarray, cfg: dict[str, Any]) -> tuple[float, float]:

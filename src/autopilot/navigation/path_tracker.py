@@ -7,6 +7,18 @@ import time
 
 from .steering_controller import wrap180
 
+#: Cross-track centering: the aim distance for the xte term (m). Short enough
+#: that 1-2 m of drift is already a visible wheel command, unlike the 1.6 s
+#: pursuit look (~30 m at speed) whose bearing deviation stays under the dead
+#: zone until the car is at the corridor edge.
+XTE_AIM_M = 12.0
+#: Trend prediction horizon (s): the centering term aims where the car will be
+#: if the current lateral rate continues, so a drift toward the edge is
+#: corrected before it becomes large.
+XTE_TREND_S = 0.7
+#: Base centering gain applied from the centre (not only past the inner edge).
+XTE_GAIN = 0.7
+
 
 class PathTracker:
     """Tracks position relative to waypoints, cross-track error, and lookahead angles."""
@@ -53,6 +65,9 @@ class PathTracker:
         self._mh_dt = float(mh_dt)
         self._mh_min_d = float(mh_min_d)
         self._mh_max_d = float(mh_max_d)
+        self._xte_rate = 0.0  # smoothed lateral drift (px/s)
+        self._xte_last: float | None = None
+        self._xte_last_t = 0.0
 
     @property
     def mv(self) -> float:
@@ -79,11 +94,23 @@ class PathTracker:
         return bool(self._samples)
 
     def lost_limit(self) -> float:
-        """Max plausible speed for ghost-pose detection (px/s)."""
-        return max(self._mv * 2.0 + 8.0, 50.0)
+        """Max plausible track speed for ghost-pose detection (px/s).
+
+        Tightened from 2x+8 to 1.5x+10: a wrong re-acquisition teleports with
+        an implausible track speed (a 143 km/h spike in the 2026-10-03 23:37
+        run) that the old limit let through.
+        """
+        return max(self._mv * 1.5 + 10.0, 40.0)
 
     def push_pose(self, ts: float, x: float, y: float) -> bool:
-        """Append a fresh pose sample and update motion-derived course (M-heading)."""
+        """Append a fresh pose sample and update motion-derived course (M-heading).
+
+        `mh_t` is the time of the last REAL course update, not the last pose:
+        the course is only recomputed after at least `mh_min_d` px of travel
+        within the `mh_dt` window. Refreshing the timestamp on every pose made
+        a course frozen at low speed look fresh forever, and the driver kept
+        steering by it while the (accurate) map heading was ignored.
+        """
         if self._samples and abs(ts - self._samples[-1][0]) < 1e-6:
             return False
 
@@ -99,8 +126,8 @@ class PathTracker:
             d = math.hypot(x - bx, y - by)
             if dts > 1e-3:
                 self._mv = d / dts
-                self._mh_t = ts
                 if d >= self._mh_min_d:
+                    self._mh_t = ts
                     raw = math.degrees(math.atan2(x - bx, -(y - by))) % 360.0
                     if self._mh is None:
                         self._mh = raw
@@ -113,6 +140,12 @@ class PathTracker:
         if len(self._samples) > 16:
             self._samples = self._samples[-16:]
         return True
+
+    def mh_age(self, now: float) -> float | None:
+        """Age (s) of the last motion-course update, or None before the first one."""
+        if self._mh is None:
+            return None
+        return max(0.0, now - self._mh_t)
 
     def pose_at(self, now: float) -> tuple[float, float] | None:
         """Estimate current position via linear interpolation/extrapolation."""
@@ -314,13 +347,15 @@ class PathTracker:
         self,
         mp: tuple[float, float],
         px_per_m: float,
+        now: float | None = None,
     ) -> tuple[float, float, float]:
         """Calculate cross-track error, corridor limit, and pure pursuit target bearing.
 
         The aim point is the point on the polyline at arc distance `look` ahead
         of the car's projection, walked across as many segments as needed:
         dense taught lines (short chords) get the same lookahead as sparse
-        drawn routes instead of aiming at the next vertex only.
+        drawn routes instead of aiming at the next vertex only. `now` enables
+        the lateral-drift trend used by the centering term.
         """
         # Lookahead in seconds of travel: a fixed 60 + 2.6*mv was ~4 s at
         # speed, which cut 4-6 m inside long curves and made the driver fight
@@ -353,6 +388,19 @@ class PathTracker:
 
         xte_lim = self.xte_m * px_per_m
 
+        # Lateral drift rate for the centering trend (smoothed; pose updates
+        # arrive at ~10 Hz while the loop runs at ~24 Hz).
+        xte_rate = 0.0
+        if now is not None:
+            if self._xte_last is not None:
+                dt = now - self._xte_last_t
+                if 1e-3 < dt < 1.0:
+                    inst = (xte - self._xte_last) / dt
+                    self._xte_rate = self._xte_rate * 0.5 + inst * 0.5
+                    xte_rate = self._xte_rate
+            self._xte_last = xte
+            self._xte_last_t = now
+
         # Pure pursuit only. The old corridor mode aimed at the perpendicular
         # foot of the active segment once |xte| passed xte_lim, which pointed
         # the wheel up to ~90 deg across the route and spun the truck out; the
@@ -377,7 +425,7 @@ class PathTracker:
 
         bearing = math.degrees(math.atan2(ax2 - mp[0], -(ay2 - mp[1]))) % 360.0
         if seg_dir is not None:
-            bearing = self._corridor_correction(bearing, seg_dir, xte, px_per_m, look)
+            bearing = self._corridor_correction(bearing, seg_dir, xte, px_per_m, look, xte_rate)
         return xte, xte_lim, bearing
 
     def _corridor_correction(
@@ -387,25 +435,32 @@ class PathTracker:
         xte: float,
         px_per_m: float,
         look: float,
+        xte_rate: float = 0.0,
     ) -> float:
         """Corridor cross-track guidance for the pure-pursuit bearing.
 
         The aim deviation relative to the segment direction mixes the
-        cross-track part with the curvature lead over the lookahead; only the
-        cross-track part is amplified (multiplying the lead commanded absurd
-        headings in bends). The gain ramps continuously from the inner edge to
-        the outer edge - the old hard steps let the loop ping-pong across the
-        boundary - and the result stays clamped short of perpendicular. The
-        speed side of the outer corridor is handled by the driver.
+        curvature lead over the lookahead with an explicit centering term:
+        the cross-track error is predicted `XTE_TREND_S` ahead from its rate
+        and aimed at the near point `XTE_AIM_M` away, so 1-2 m of drift is
+        already a wheel command instead of a one-tick tap under the dead zone.
+        The gain ramps continuously from the centre to the outer edge - the
+        old hard steps let the loop ping-pong across the boundary - and the
+        result stays clamped short of perpendicular. The speed side of the
+        outer corridor is handled by the driver.
         """
         corr = wrap180(bearing - seg_dir)
         xte_m = abs(xte) / px_per_m if px_per_m > 0 else 0.0
         span = max(self.xte_outer_m - self.xte_m, 0.1)
         frac = max(0.0, min(1.0, (xte_m - self.xte_m) / span))
-        gain = 1.0 + 1.2 * frac
         cap = 20.0 + 15.0 * frac
-        corr_xte = math.degrees(math.atan2(xte, max(look, 1.0)))
-        corr += (gain - 1.0) * corr_xte
+        xte_pred = xte + xte_rate * XTE_TREND_S
+        xte_pred = max(
+            -3.0 * self.xte_outer_m * px_per_m,
+            min(3.0 * self.xte_outer_m * px_per_m, xte_pred),
+        )
+        corr_xte = math.degrees(math.atan2(xte_pred, max(XTE_AIM_M * px_per_m, 1.0)))
+        corr += (XTE_GAIN + 1.2 * frac) * corr_xte
         corr = max(-cap, min(cap, corr))
         return (seg_dir + corr) % 360.0
 

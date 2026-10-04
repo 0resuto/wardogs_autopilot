@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Autopilot for WARDOGS supply runs: minimap capture, localization, Arduino-key driving."
 requires-python = ">=3.11"
 dependencies = [
-    "opencv-python",
+    "opencv-python>=4.11,<5",
     "numpy",
     "mss",
     "pyserial",
@@ -42,6 +42,8 @@ pythonpath = ["src", "."]
 [tool.ruff]
 target-version = "py311"
 line-length = 100
+# The agent workspace (skills, pending work) is gitignored and not product code.
+exclude = [".agents"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "UP", "B", "SIM"]

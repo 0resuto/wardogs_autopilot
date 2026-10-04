@@ -154,9 +154,12 @@ changes are written back to `config.json`.
 | F6 | start / pause follow |
 | F7 | emergency stop (release all keys) |
 | F8 | reverse the route direction |
+| W / A / S / D / SPACE | emergency stop while the autopilot drives (physical keyboard) |
 
 Registration is retried while another process holds the keys, and the studio
-toolbar shows their state.
+toolbar shows their state. The WASD/SPACE stop is armed only while the
+autopilot drives; the Arduino's own presses are ignored by USB device, and a
+human press still reaches the game, so the player takes over immediately.
 
 ## Routes, presets and teach-and-repeat
 
@@ -192,7 +195,9 @@ The firmware has a 200 ms watchdog.
 | `tools/build_map_assets.py` | refresh `catalog.json` from the artifacts; `--rebuild` regenerates caches from the source PNG (maintainer) |
 | `python -m autopilot.vision.featureindex` | build the SIFT index (`--build <map>`) |
 | `tools/selfcheck_features.py` | offline localization regression |
+| `tools/selfcheck_hybrid.py` | hybrid-engine regression: SIFT anchor + ECC tracking on a synthetic path |
 | `tools/nav_dbg.py` | navigation trace inspector (`--tail`, `--bursts`) |
+| `tools/reference_score.py` | score a run against the human reference (segment time / xte / safety gates) |
 | `tools/calibrate_vehicle.py` | fit `yaw_gain` / `brake_g` from nav logs |
 | `tools/route_from_manual.py` | convert a manual-driving recording into a preset |
 | `tools/map_match_debug.py` | frame matching collage for failed matches |

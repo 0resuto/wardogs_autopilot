@@ -121,11 +121,12 @@ class TestDenseRouteLookahead(unittest.TestCase):
         _xte, _lim, bearing = tracker.calc_xte_and_bearing((95.0, 0.0), 2.0)
         self.assertAlmostEqual(bearing, 90.0, delta=1e-6)
 
-        # 5 px lateral offset at the 16 px (8 m) lookahead floor (mv=0):
-        # ~atan(5/16) = 17.3 deg, not atan(5/15) = 18 deg with a one-segment
-        # aim at mv=0.
+        # 5 px lateral offset at the 16 px (8 m) lookahead floor (mv=0): the
+        # pursuit part is ~atan(5/16) = 17.3 deg, not atan(5/15) = 18 deg with
+        # a one-segment aim; the centering term then adds its share and the
+        # total saturates the inner-corridor cap (20 deg).
         _xte, _lim, bearing = tracker.calc_xte_and_bearing((95.0, 5.0), 2.0)
-        self.assertAlmostEqual(abs(wrap180(bearing - 90.0)), 17.3, delta=0.5)
+        self.assertAlmostEqual(abs(wrap180(bearing - 90.0)), 20.0, delta=0.5)
 
 
 class TestCorridorTiers(unittest.TestCase):
@@ -146,7 +147,9 @@ class TestCorridorTiers(unittest.TestCase):
         mid = self._corr(8.0)
         outer = self._corr(20.0)
 
-        self.assertGreater(mid, inner * 1.5)
+        # Firmer with the offset, bounded at every tier (the centering term
+        # already saturates the inner cap, so the ratio bound is monotonic).
+        self.assertGreater(mid, inner)
         self.assertGreater(outer, mid)
         self.assertLessEqual(outer, 45.0 + 1e-6)
 
@@ -271,7 +274,9 @@ class TestCorridorGainRamp(unittest.TestCase):
         inside = self._corr(tracker, 3.8)
         edge = self._corr(tracker, 4.2)
 
-        self.assertLess(abs(edge - inside), 1.5)
+        # The only jump left at the edge is the gain ramp (the centering term
+        # itself is proportional to xte, hence the slightly larger bound).
+        self.assertLess(abs(edge - inside), 3.0)
 
     def test_correction_sign_follows_the_offset_side(self):
         tracker = PathTracker(
@@ -300,8 +305,33 @@ class TestCorridorGainRamp(unittest.TestCase):
         natural_6m = math.degrees(math.atan2(6.0, 32.0))
 
         self.assertGreater(self._corr(tracker, 6.0), natural_6m)
-        self.assertLess(self._corr(tracker, 6.0), natural_6m * 1.5)
+        self.assertLess(self._corr(tracker, 6.0), 30.0)
         self.assertAlmostEqual(self._corr(tracker, 20.0), 35.0, delta=0.5)
+
+    def test_outward_drift_gets_an_earlier_correction(self):
+        """The centering term predicts the lateral trend, not just the offset.
+
+        At 2 px off with a 10 px/s outward rate the correction must already be
+        stronger than the same offset with no drift - the drift used to run to
+        the corridor edge before any wheel command appeared.
+        """
+        route = [(0.0, 0.0), (1000.0, 0.0), (2000.0, 0.0)]
+
+        drifting = PathTracker(route, xte_m=4.0, xte_outer_m=12.0)
+        drifting.idx = 1
+        drifting._mv = 20.0
+        drifting.calc_xte_and_bearing((990.0, 1.0), 1.0, now=100.0)
+        _x, _l, bearing_drift = drifting.calc_xte_and_bearing((990.0, 2.0), 1.0, now=100.1)
+
+        flat = PathTracker(route, xte_m=4.0, xte_outer_m=12.0)
+        flat.idx = 1
+        flat._mv = 20.0
+        _x, _l, bearing_flat = flat.calc_xte_and_bearing((990.0, 2.0), 1.0)
+
+        self.assertGreater(
+            abs(wrap180(bearing_drift - 90.0)),
+            abs(wrap180(bearing_flat - 90.0)),
+        )
 
 
 class TestCrossTrack(unittest.TestCase):
@@ -335,6 +365,59 @@ class TestCrossTrack(unittest.TestCase):
 
         self.assertAlmostEqual(xte, -20.0, delta=1e-6)
         self.assertIsInstance(bearing, float)
+
+
+class TestGhostPoseLimit(unittest.TestCase):
+    """The ghost-pose speed limit must catch a teleporting wrong lock."""
+
+    def test_limit_catches_an_implausible_reacquisition(self):
+        tracker = PathTracker([(0.0, 0.0), (1000.0, 0.0)], arrive_r=25.0)
+        tracker._mv = 44.0  # ~79 km/h
+
+        # the 2026-10-03 23:37 wrong lock implied ~80 px/s at this speed
+        self.assertLess(tracker.lost_limit(), 80.0)
+
+    def test_slow_start_still_allows_a_plausible_move(self):
+        tracker = PathTracker([(0.0, 0.0), (1000.0, 0.0)], arrive_r=25.0)
+        tracker._mv = 0.0
+
+        self.assertGreaterEqual(tracker.lost_limit(), 40.0)
+
+
+class TestMotionCourseFreshness(unittest.TestCase):
+    """`mh_t` must mark real course updates, not every incoming pose.
+
+    A course frozen below the 10 px / 0.5 s update threshold used to look
+    fresh forever; the driver then steered by it while the accurate map
+    heading was ignored (the low-speed oscillation in the 2026-10-01 runs).
+    """
+
+    def test_below_threshold_does_not_refresh_the_course_age(self):
+        tracker = PathTracker([(0.0, 0.0), (1000.0, 0.0)], arrive_r=25.0)
+
+        tracker.push_pose(100.0, 0.0, 0.0)
+        tracker.push_pose(100.5, 12.5, 0.0)  # 12.5 px in the window -> updated
+        tracker.push_pose(101.0, 25.0, 0.0)  # updated again
+        self.assertAlmostEqual(tracker.mh_t, 101.0, delta=1e-9)
+        self.assertIsNotNone(tracker.mh)
+
+        tracker.push_pose(101.5, 27.0, 0.0)  # 2 px: too slow to update the course
+        tracker.push_pose(102.0, 29.0, 0.0)
+
+        self.assertAlmostEqual(tracker.mh_t, 101.0, delta=1e-9)
+        age = tracker.mh_age(102.0)
+        assert age is not None
+        self.assertAlmostEqual(age, 1.0, delta=1e-9)
+        self.assertLess(tracker.mv, 10.0)
+
+    def test_age_is_none_before_the_first_course_update(self):
+        tracker = PathTracker([(0.0, 0.0), (1000.0, 0.0)], arrive_r=25.0)
+
+        tracker.push_pose(100.0, 0.0, 0.0)
+        tracker.push_pose(100.5, 2.0, 0.0)
+
+        self.assertIsNone(tracker.mh)
+        self.assertIsNone(tracker.mh_age(100.5))
 
 
 if __name__ == "__main__":

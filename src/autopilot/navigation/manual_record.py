@@ -141,7 +141,7 @@ class ManualDriveRecorder(threading.Thread):
                 keys = keys_source()
                 latest = getattr(self.loc, "latest", None) or {}
                 pose = latest.get("pose") or {}
-                mp = latest.get("map_px") or latest.get("map_px_disp")
+                mp = latest.get("map_px")
                 th = pose.get("th")
                 row = dict(
                     t=round(time.time(), 4),

@@ -28,6 +28,10 @@ DEFAULT_XFEAT_MIN_COS = 0.82
 # radius search on a dense map can collect that many: thin oversized sets
 # before matching (this cv2.error used to kill the tracker thread).
 BF_MAX_TRAIN_DESC = 200_000
+#: Slice of the frame budget kept for the global fallback. Without it a slow
+#: local knnMatch ate the whole budget and the absolute recovery never ran
+#: (2026-10-03 fail dumps: 78% budget_timeout with search_global=false).
+GLOBAL_BUDGET_FRAC = 0.4
 
 
 def _over(t0: float, budget: float | None) -> bool:
@@ -153,8 +157,15 @@ class IndexSearchMixin:
         cands: list[tuple[Any, np.ndarray, np.ndarray]] | None = None,
         prev_s: float | None = None,
         early_inl: int = 0,
+        prev_th: float | None = None,
     ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
-        """SIFT match of the minimap against index descriptors within radius r (or globally)."""
+        """SIFT match of the minimap against index descriptors within radius r (or globally).
+
+        `prev_th` (the last accepted heading, only supplied while the truck is
+        known to move) rejects a candidate whose rotation contradicts it: on a
+        symmetric patch the matcher can lock the same place 180 degrees
+        rotated, and that wrong lock is persistent (2026-10-04 runs).
+        """
         start_t = t0 if t0 is not None else time.time()
         if feats is not None:
             kp1, d1 = feats
@@ -218,6 +229,7 @@ class IndexSearchMixin:
         # fallback retries the SAME matches with a looser threshold when the
         # tight one leaves too few inliers (low-texture frames).
         loc = self.store.loc_cfg()
+        rot_gate = float(loc.get("anchor_rot_gate_deg", 60.0) or 0.0)
         primary_px = float(loc.get("ransac_px", 3.0) or 0.0)
         fallback_px = float(loc.get("ransac_fallback_px", 6.0) or 0.0)
         thresholds: list[float] = [primary_px] if primary_px > 0.0 else []
@@ -295,6 +307,11 @@ class IndexSearchMixin:
                 break
             if cand_pose is None:
                 continue
+            if prev_th is not None and rot_gate > 0.0:
+                d_th = abs((cand_pose["th"] - prev_th + 540.0) % 360.0 - 180.0)
+                if d_th > rot_gate:
+                    tried.append((n_good, inl, f"rot {d_th:.0f} deg"))
+                    continue
             if best is None or cand_pose["inl"] > int(best["inl"]):
                 best = cand_pose
                 best_len = len(d2)
@@ -348,6 +365,7 @@ class IndexSearchMixin:
         progress: Callable[[tuple[Any, ...]], None] | None = None,
         feats: tuple[list[cv2.KeyPoint], np.ndarray | None] | None = None,
         prev_s: float | None = None,
+        prev_th: float | None = None,
     ) -> (
         tuple[dict[str, Any] | None, dict[str, Any], float, float, float]
         | tuple[None, dict[str, Any]]
@@ -384,10 +402,13 @@ class IndexSearchMixin:
         # trust gate, and tuning it silently changed matcher thoroughness.
         early_inl = int(cfg.get("early_inl", DEFAULT_EARLY_INL) or 0)
 
+        # Keep a slice of the budget for the global fallback: the local search
+        # used to eat the whole budget and the absolute recovery never ran.
+        local_budget = budget - budget * GLOBAL_BUDGET_FRAC if budget is not None else None
         if cx is not None and cy is not None:
             qx, qy = cx, cy
             for _ in range(10):
-                if _over(start_t, budget):
+                if _over(start_t, local_budget):
                     break
                 if progress is not None:
                     progress(("disc", qx, qy, rad))
@@ -402,12 +423,13 @@ class IndexSearchMixin:
                     qy,
                     rad,
                     thr=thr,
-                    budget=budget,
+                    budget=local_budget,
                     t0=start_t,
                     feats=feats,
                     cands=cands,
                     prev_s=prev_s,
                     early_inl=early_inl,
+                    prev_th=prev_th,
                 )
                 last_diag = dd
                 if res is not None:
@@ -418,7 +440,11 @@ class IndexSearchMixin:
                 cov = sum(len(p) for _, p, _ in cands)
                 if total and cov >= 0.30 * total:
                     break
-                rad *= growth
+                if rad >= track_radius:
+                    # the truck cannot teleport: a local radius beyond the
+                    # tracking radius only pays for a slower knnMatch
+                    break
+                rad = min(rad * growth, track_radius)
 
         if not _over(start_t, budget):
             global_pass = True
@@ -436,6 +462,7 @@ class IndexSearchMixin:
                 t0=start_t,
                 feats=feats,
                 early_inl=early_inl,
+                prev_th=prev_th,
             )
             last_diag = dd
             if res is not None:

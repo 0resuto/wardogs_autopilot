@@ -41,6 +41,7 @@ from ..hardware.screen_capture import ScreenCapture
 from ..vision import locator
 from ..vision.tracker import LiveLocator
 from .hotkeys import _HK_F6, _HK_F7, _HK_F8, HotkeyManager
+from .override_watch import OverrideKeyWatcher
 from .tabs.logs_tab import LogsTab
 from .tabs.map_tab import MapTab
 from .tabs.roi_tab import RoiTab
@@ -135,6 +136,7 @@ class App(QMainWindow):
 
         self._hotkeys = HotkeyManager(self, self._on_global_hotkey)
         self._hotkeys.start()
+        self._override_keys = OverrideKeyWatcher(self, self._on_override_key)
 
         self._map_pyr: dict[int, np.ndarray] | None = None
         self._last_loc: dict[str, Any] | None = None
@@ -146,10 +148,11 @@ class App(QMainWindow):
         # Load map in background thread
         threading.Thread(target=self._load_map_worker, args=(self._map_name,), daemon=True).start()
 
-        # Main thread 20 Hz (50 ms) poll timer
+        # Main thread 30 Hz (33 ms) poll timer: matches the tracker's publish
+        # cadence so the marker is not additionally quantized by the UI poll.
         self._poll_timer = QTimer(self)
         self._poll_timer.timeout.connect(self._poll)
-        self._poll_timer.start(50)
+        self._poll_timer.start(33)
 
     def _restore_window_geometry(self) -> None:
         """Restore the last session's window rect, clamped to current screens."""
@@ -421,6 +424,7 @@ class App(QMainWindow):
             # Dirty checking for header badges (<0.1 us when unchanged)
             loc_active = bool(latest and latest.get("pose"))
             driver = self.routes_tab.driver
+            self._sync_override_watch(driver)
             nav_state = driver.state if driver is not None else "idle"
             state_sig = (loc_active, nav_state)
             if state_sig != self._last_state_sig:
@@ -463,6 +467,21 @@ class App(QMainWindow):
         elif key_id == _HK_F8:
             self.routes_tab.routes_invert(silent=True)
 
+    def _sync_override_watch(self, driver: Any) -> None:
+        """Arm the WASD/SPACE watch exactly while the autopilot driver runs."""
+        if driver is not None:
+            if not self._override_keys.is_armed():
+                self._override_keys.arm(str(self.app_cfg.navigator.port))
+        else:
+            self._override_keys.disarm()
+
+    def _on_override_key(self, vk: int) -> None:
+        """Human W/A/S/D/SPACE press (Arduino filtered out) -> emergency stop."""
+        if self.routes_tab.driver is None:
+            return
+        logger.info("[studio] emergency stop: override key VK=0x%02X", vk)
+        self.routes_tab.emergency_stop()
+
     def _save_cfg(self) -> None:
         """Persist the configuration, merging only values changed this session.
 
@@ -484,6 +503,10 @@ class App(QMainWindow):
             data = copy.deepcopy(self._cfg_start)
 
         # Window geometry is runtime state owned by this window: always fresh.
+        # Captured on every save (not only close), so a crash or a forced kill
+        # after a preset load still leaves the current rect on disk.
+        if self.isVisible():
+            self._remember_window_geometry()
         data["ui"] = self.app_cfg.ui.model_dump()
         for section in ("capture", "locator", "map", "navigator", "debug"):
             stored = data.get(section)
@@ -522,6 +545,7 @@ class App(QMainWindow):
         self._remember_window_geometry()
         self._save_cfg()
         self._hotkeys.stop()
+        self._override_keys.stop()
         self.logs_tab.stop_manual_record()
         self.routes_tab.emergency_stop()
         self._loc_thread.stop()

@@ -76,10 +76,10 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
         self._map_loaded = False
 
         self.map_name = self.get_map_name()
-        self._disp_th: float | None = None
         self._last_loc: dict[str, Any] | None = None
 
         self.preset_mgr = PresetManager()
+        self._preset_reloading = False
         self.driver: FollowDriver | None = None
         self._edit_snapshot: list[list[float]] | None = None
 
@@ -226,6 +226,7 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
 
         self.p_sel = QComboBox(self)
         self.p_sel.setFixedWidth(110)
+        self.p_sel.currentTextChanged.connect(self._on_preset_selected)
         top_bar.addWidget(self.p_sel)
 
         self._preset_menu_btn = QPushButton("⋯", self)
@@ -366,19 +367,15 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
             return
 
         pose = last_loc.get("pose")
-        mp = last_loc.get("map_px_disp") or last_loc.get("map_px")
+        mp = last_loc.get("map_px")
         if pose is None or mp is None:
             self.map_status.setText("")
             self.map_widget.scene.hide_vehicle()
             return
 
+        # The marker is the navigator's truth: the same map_px and pose
+        # heading the driver reads, with no UI-side filtering.
         heading = locator.heading_deg(pose)
-        if self._disp_th is None:
-            self._disp_th = heading
-        else:
-            dth = (heading - self._disp_th + 540.0) % 360.0 - 180.0
-            self._disp_th = (self._disp_th + dth * 0.4) % 360.0
-        heading = self._disp_th
 
         self.map_widget.scene.update_vehicle(mp[0], mp[1], heading)
         if self.map_widget.is_follow_centered():
@@ -401,7 +398,7 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
         loc = self._last_loc
         if loc is None:
             loc = getattr(self.get_loc(), "latest", None)
-        mp = (loc.get("map_px_disp") or loc.get("map_px")) if loc else None
+        mp = loc.get("map_px") if loc else None
         if mp is not None:
             self.map_widget.view.center_on_coords(mp[0], mp[1])
         else:
@@ -467,6 +464,7 @@ class MapTab(MapTuningMixin, MapPresetsMixin, MapRouteEditMixin, QWidget):
             kb=kb,
             px_per_m=self._map_px_per_m(),
             debug=self._nav_log_enabled(),
+            config_path=self.app_cfg.cfg_path,
         )
         self.driver.start()
         self._set_follow_state(True)
