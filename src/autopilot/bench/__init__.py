@@ -1,10 +1,9 @@
-"""Synthetic benchmark for the localization engines.
+"""Synthetic benchmark for the localization engine.
 
-Runs `sift` / `orb` / `xfeat` / `hybrid` over deterministic synthetic
-trajectories with a known ground truth, sweeps curated tuning parameters one at
-a time and scores every frame. Nothing here changes production tracking logic
-and nothing is written outside `output/bench_*` (except what the caller asks
-for).
+Runs `hybrid` over deterministic synthetic trajectories with a known ground
+truth, sweeps curated tuning parameters one at a time and scores every frame.
+Nothing here changes production tracking logic and nothing is written outside
+`output/bench_*` (except what the caller asks for).
 
 Public API:
 
@@ -12,7 +11,7 @@ Public API:
     BenchSkip, ScenarioInputs, load_inputs, render_scenarios
     ParamSpec, ENGINE_PARAMS, SHARED_PARAMS, parse_sweep, expand_oat, ConfigOverlay
     BenchTracker, FrameRecord
-    RunResult, available_engines, xfeat_skip_reason, run_case, write_csv, write_jsonl
+    RunResult, available_engines, run_case, write_csv, write_jsonl
     write_report, plot_results
 """
 
@@ -45,7 +44,6 @@ from .runner import (
     run_case,
     write_csv,
     write_jsonl,
-    xfeat_skip_reason,
 )
 from .scenario import (
     SCENARIO_NAMES,
@@ -94,5 +92,4 @@ __all__ = [
     "write_csv",
     "write_jsonl",
     "write_report",
-    "xfeat_skip_reason",
 ]

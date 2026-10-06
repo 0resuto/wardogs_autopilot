@@ -81,32 +81,10 @@ class LocatorConfig(BaseModel):
     local_radius: int = Field(default=450, ge=50, description="Tracking search radius (px)")
     radius_growth: float = Field(default=1.6, ge=1.0, le=5.0)
     global_max_features: int = Field(default=100000, ge=1000)
-    engine: Literal["sift", "orb", "xfeat", "hybrid"] = Field(
-        default="sift",
-        description="Localization engine: 'sift' (robust feature index), 'orb' "
-        "(faster binary features; needs <map>_feat_orb.npz built from the source "
-        "PNG), 'xfeat' (learned features on the GPU via ONNX Runtime; needs "
-        "<map>_feat_xfeat.npz and the model from tools/download_models.py) or "
-        "'hybrid' (SIFT anchor + ECC frame-to-frame tracking; best with "
-        "capture.fps 20-30)",
-    )
-    xfeat_top_k: int = Field(
-        default=2000,
-        ge=100,
-        le=8000,
-        description="XFeat engine: keypoints kept per frame (response-ranked)",
-    )
-    xfeat_min_cos: float = Field(
-        default=0.82,
-        ge=0.5,
-        le=1.0,
-        description="XFeat engine: minimum cosine similarity for a mutual match",
-    )
-    xfeat_threshold: float = Field(
-        default=0.05,
-        ge=0.0,
-        le=1.0,
-        description="XFeat engine: keypoint heatmap detection threshold",
+    engine: Literal["hybrid"] = Field(
+        default="hybrid",
+        description="Localization engine: 'hybrid' (SIFT anchor + ECC "
+        "frame-to-frame tracking; best with capture.fps 20-30)",
     )
     max_kp_frame: int = Field(
         default=1200,

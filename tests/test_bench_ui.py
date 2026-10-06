@@ -148,9 +148,9 @@ class TestBenchPlan(unittest.TestCase):
 
     def test_jobs_multiply_engines_scenarios_and_configs(self) -> None:
         plan = BenchPlan(
-            engines=["xfeat", "sift"],
+            engines=["hybrid", "sift"],
             specs=[ScenarioSpec(name="straight", frames=2), ScenarioSpec(name="turns", frames=2)],
-            sweeps=[("xfeat_min_cos", [0.7, 0.8])],
+            sweeps=[("hybrid_min_cc", [0.3, 0.5])],
         )
         scenarios = {spec.name: _empty_scenario(spec.name) for spec in plan.specs}
 
@@ -158,23 +158,24 @@ class TestBenchPlan(unittest.TestCase):
 
         self.assertEqual(plan.job_count(), 8)  # 2 engines x 2 scenarios x 2 values
         self.assertEqual(len(jobs), 8)
-        self.assertEqual(jobs[0][0], "xfeat")
+        self.assertEqual(jobs[0][0], "hybrid")
         self.assertEqual(jobs[0][1].spec.name, "straight")
-        self.assertEqual(jobs[0][2], {"xfeat_min_cos": 0.7})
-        # An xfeat sweep must not leak into sift's runs, which have no such key.
+        self.assertEqual(jobs[0][2], {"hybrid_min_cc": 0.3})
+        # A hybrid sweep must not leak into the other engine's runs, which
+        # have no such key.
         self.assertTrue(all(not cfg for e, _s, cfg in jobs if e == "sift"))
-        xfeat_cfgs = {tuple(sorted(cfg.items())) for e, _s, cfg in jobs if e == "xfeat"}
+        hybrid_cfgs = {tuple(sorted(cfg.items())) for e, _s, cfg in jobs if e == "hybrid"}
         self.assertEqual(
-            xfeat_cfgs,
+            hybrid_cfgs,
             {
-                (("xfeat_min_cos", 0.7),),
-                (("xfeat_min_cos", 0.8),),
+                (("hybrid_min_cc", 0.3),),
+                (("hybrid_min_cc", 0.5),),
             },
         )
 
     def test_a_shared_key_reaches_every_engine_that_knows_it(self) -> None:
         plan = BenchPlan(
-            engines=["sift", "xfeat"],
+            engines=["hybrid", "sift"],
             specs=[ScenarioSpec(name="straight", frames=2)],
             sweeps=[("smooth_alpha", [0.35, 0.8])],
         )
@@ -186,7 +187,7 @@ class TestBenchPlan(unittest.TestCase):
 
     def test_job_count_is_zero_for_an_empty_selection(self) -> None:
         self.assertEqual(BenchPlan().job_count(), 0)
-        self.assertEqual(BenchPlan(engines=["sift"]).job_count(), 0)
+        self.assertEqual(BenchPlan(engines=["hybrid"]).job_count(), 0)
         self.assertEqual(BenchPlan(specs=[ScenarioSpec(name="straight")]).job_count(), 0)
 
     def test_expand_oat_keeps_the_baseline(self) -> None:
@@ -202,7 +203,7 @@ class TestBenchWorker(unittest.TestCase):
 
     def test_worker_streams_results_and_keeps_records(self) -> None:
         worker = BenchWorker(
-            self._plan(["sift", "orb"]), "fake", runner=_fake_runner, loader=_inputs
+            self._plan(["hybrid", "sift"]), "fake", runner=_fake_runner, loader=_inputs
         )
         seen: list[Any] = []
         progress: list[tuple[int, int]] = []
@@ -213,7 +214,7 @@ class TestBenchWorker(unittest.TestCase):
 
         worker.run()  # synchronous: the same body the thread runs
 
-        self.assertEqual([r.engine for r in seen], ["sift", "orb"])
+        self.assertEqual([r.engine for r in seen], ["hybrid", "sift"])
         self.assertEqual(errors, [])
         self.assertEqual(progress[-1], (2, 2))
         self.assertEqual(len(worker.records), 2)
@@ -230,11 +231,11 @@ class TestBenchWorker(unittest.TestCase):
 
     def test_worker_reports_one_failure_and_keeps_going(self) -> None:
         def flaky(engine, scenario, overrides, map_name, **kw):
-            if engine == "sift":
+            if engine == "hybrid":
                 raise RuntimeError("engine exploded")
             return _fake_runner(engine, scenario, overrides, map_name, **kw)
 
-        worker = BenchWorker(self._plan(["sift", "orb"]), "fake", runner=flaky, loader=_inputs)
+        worker = BenchWorker(self._plan(["hybrid", "sift"]), "fake", runner=flaky, loader=_inputs)
         seen: list[Any] = []
         errors: list[str] = []
         worker.result.connect(seen.append)
@@ -242,10 +243,10 @@ class TestBenchWorker(unittest.TestCase):
 
         worker.run()
 
-        self.assertEqual([r.engine for r in seen], ["orb"])
+        self.assertEqual([r.engine for r in seen], ["sift"])
         self.assertEqual(len(errors), 1)
         self.assertIn("engine exploded", errors[0])
-        self.assertIn("sift/straight", errors[0])
+        self.assertIn("hybrid/straight", errors[0])
 
     def test_worker_stops_between_cases(self) -> None:
         worker = BenchWorker(self._plan(list(ENGINES)), "fake", runner=_fake_runner, loader=_inputs)
@@ -258,7 +259,7 @@ class TestBenchWorker(unittest.TestCase):
         worker.run()
 
         self.assertEqual(seen, [])
-        self.assertEqual(errors, ["stopped after 0/4 case(s)"])
+        self.assertEqual(errors, ["stopped after 0/1 case(s)"])
         self.assertTrue(worker.stopping)
 
     def test_worker_turns_a_missing_asset_into_a_skip(self) -> None:
@@ -301,7 +302,7 @@ class TestBenchWindow(unittest.TestCase):
             _wait_until(lambda: bool(self.window.available)), "the probe never returned"
         )
 
-    def _window(self, probe=lambda _name: ["sift", "orb"]) -> BenchWindow:
+    def _window(self, probe=lambda _name: ["hybrid"]) -> BenchWindow:
         window = BenchWindow(map_name="fake", runner=_fake_runner, probe=probe, loader=_inputs)
         self.addCleanup(self._close, window)
         return window
@@ -318,14 +319,11 @@ class TestBenchWindow(unittest.TestCase):
 
     def test_probe_ticks_available_engines_and_disables_the_rest(self) -> None:
         boxes = self.window.engine_boxes
-        self.assertEqual(self.window.available, ["sift", "orb"])
-        self.assertTrue(boxes["sift"].isChecked() and boxes["sift"].isEnabled())
-        self.assertTrue(boxes["orb"].isChecked() and boxes["orb"].isEnabled())
-        self.assertFalse(boxes["xfeat"].isChecked() or boxes["xfeat"].isEnabled())
-        self.assertIn("not available", boxes["xfeat"].toolTip())
-        self.assertIn("ratio_local", boxes["sift"].toolTip())
-        self.assertEqual(self.window.selected_engines(), ["sift", "orb"])
-        self.assertIn("unavailable", self.window.status_lbl.text())
+        self.assertEqual(self.window.available, ["hybrid"])
+        self.assertTrue(boxes["hybrid"].isChecked() and boxes["hybrid"].isEnabled())
+        self.assertIn("hybrid_reanchor_s", boxes["hybrid"].toolTip())
+        self.assertEqual(self.window.selected_engines(), ["hybrid"])
+        self.assertNotIn("unavailable", self.window.status_lbl.text())
 
     def test_probe_failure_disables_every_engine(self) -> None:
         window = self._window(probe=_boom_probe)
@@ -363,7 +361,7 @@ class TestBenchWindow(unittest.TestCase):
             self.window.scenario_boxes[name].setChecked(False)
 
         self.assertEqual(self.window.selected_scenarios(), ["straight"])
-        self.assertEqual(self.window._job_count(), 2)
+        self.assertEqual(self.window._job_count(), 1)
         self.window.scenario_boxes["straight"].setChecked(False)
         self.assertEqual(self.window._job_count(), 0)
         self.assertFalse(self.window.run_btn.isEnabled())
@@ -377,15 +375,15 @@ class TestBenchWindow(unittest.TestCase):
 
         self.assertEqual(self.window.sweep_specs(), [("ratio_local", [0.7, 0.8])])
         self.assertIn("sweeping", self.window.sweep_list_lbl.text())
-        # 2 engines x 3 scenarios x 2 swept values
-        self.assertEqual(self.window._job_count(), 12)
+        # 1 engine x 3 scenarios x 2 swept values
+        self.assertEqual(self.window._job_count(), 6)
 
         row = self.window.sweep_rows[0]
         self.window.remove_sweep_row(row)
 
         self.assertEqual(self.window.sweep_rows, [])
         self.assertIn("no sweeps", self.window.sweep_list_lbl.text())
-        self.assertEqual(self.window._job_count(), 6)
+        self.assertEqual(self.window._job_count(), 3)
 
     def test_a_broken_sweep_row_is_ignored(self) -> None:
         self.window.sweep_key.setCurrentText("ratio_local")
@@ -426,9 +424,9 @@ class TestBenchWindow(unittest.TestCase):
 
     def test_results_fill_the_table_and_the_charts(self) -> None:
         results = [
-            _result("sift", "straight"),
-            _result("sift", "turns", latency_ms_mean=20.0),
-            _result("orb", "straight", latency_ms_mean=8.0),
+            _result("hybrid", "straight"),
+            _result("hybrid", "turns", latency_ms_mean=20.0),
+            _result("sift", "straight", latency_ms_mean=8.0),
         ]
 
         for result in results:
@@ -438,34 +436,35 @@ class TestBenchWindow(unittest.TestCase):
         self.assertEqual(table.rowCount(), 3)
         self.assertEqual(_cell_text(table, 0, 0), "sift")
         self.assertEqual(_cell_text(table, 0, 2), "-")
-        self.assertEqual(_cell_text(table, 0, 8), "12")
-        self.assertEqual(_cell_text(table, 1, 8), "20")
+        self.assertEqual(_cell_text(table, 0, 8), "8")
+        self.assertEqual(_cell_text(table, 1, 8), "12")
+        self.assertEqual(_cell_text(table, 2, 8), "20")
         self.assertTrue(self.window.export_btn.isEnabled())
         if self.window.charts_ok:
-            # One bar set per engine, plus one line per swept key with 2+ values.
-            self.assertEqual(set(self.window.latency_sets), {"sift", "orb"})
+            # One bar set per engine; only the shipped engine appears.
+            self.assertEqual(set(self.window.latency_sets), {"hybrid"})
             self.assertEqual(len(self.window.error_series), 0)
             self.window._on_result(
-                _result("sift", "straight", config={"ratio_local": 0.8}, pos_err_px_mean=1.25)
+                _result("hybrid", "straight", config={"hybrid_min_cc": 0.3}, pos_err_px_mean=1.25)
             )
             self.window._on_result(
-                _result("sift", "turns", config={"ratio_local": 0.7}, pos_err_px_mean=2.5)
+                _result("hybrid", "turns", config={"hybrid_min_cc": 0.5}, pos_err_px_mean=2.5)
             )
             self.assertEqual(len(self.window.error_series), 1)
-            self.assertEqual(self.window.error_series[0].name(), "ratio_local")
+            self.assertEqual(self.window.error_series[0].name(), "hybrid_min_cc")
 
     def test_cell_formats_numbers_and_the_config(self) -> None:
         result = _result(
-            "sift",
+            "hybrid",
             "straight",
-            config={"ratio_local": 0.8},
+            config={"hybrid_min_cc": 0.5},
             localized_pct=90.0,
             pos_err_px_mean=1.234,
             vote_rejects=3,
         )
 
-        self.assertEqual(BenchWindow._cell(result, None).text(), "ratio_local=0.8")
-        self.assertEqual(BenchWindow._cell(result, "engine").text(), "sift")
+        self.assertEqual(BenchWindow._cell(result, None).text(), "hybrid_min_cc=0.5")
+        self.assertEqual(BenchWindow._cell(result, "engine").text(), "hybrid")
         self.assertEqual(BenchWindow._cell(result, "scenario").text(), "straight")
         self.assertEqual(BenchWindow._cell(result, "localized_pct").text(), "90")
         self.assertEqual(BenchWindow._cell(result, "pos_err_px_mean").text(), "1.234")
@@ -473,7 +472,7 @@ class TestBenchWindow(unittest.TestCase):
         self.assertEqual(BenchWindow._cell(_result(), None).text(), "-")
 
     def test_numeric_cells_sort_numerically(self) -> None:
-        for engine, latency in (("sift", 12.0), ("orb", 8.0), ("xfeat", 100.0)):
+        for engine, latency in (("hybrid", 12.0), ("sift", 8.0), ("hybrid", 100.0)):
             self.window._on_result(_result(engine, "straight", latency_ms_mean=latency))
 
         self.window.table.sortItems(8, Qt.SortOrder.DescendingOrder)
@@ -489,11 +488,11 @@ class TestBenchWindow(unittest.TestCase):
         )
 
     def test_export_writes_csv_report_and_per_frame(self) -> None:
-        result = _result("sift", "straight")
+        result = _result("hybrid", "straight")
         self.window.results = [result]
         self.window.records = {
             record_key(result): cast(
-                "list[FrameRecord]", [_FakeRecord("sift", 0), _FakeRecord("sift", 1)]
+                "list[FrameRecord]", [_FakeRecord("hybrid", 0), _FakeRecord("hybrid", 1)]
             )
         }
 
@@ -503,12 +502,12 @@ class TestBenchWindow(unittest.TestCase):
             self.assertTrue(os.path.exists(report))
             self.assertTrue(os.path.exists(os.path.join(tmp, "results.csv")))
             files = os.listdir(os.path.join(tmp, "per_frame"))
-            self.assertEqual(files, ["sift_straight_%s.jsonl" % _hash_of(result)])
+            self.assertEqual(files, ["hybrid_straight_%s.jsonl" % _hash_of(result)])
             with open(os.path.join(tmp, "per_frame", files[0]), encoding="utf-8") as fh:
                 rows = [json.loads(line) for line in fh if line.strip()]
             self.assertEqual([r["idx"] for r in rows], [0, 1])
             with open(report, encoding="utf-8") as fh:
-                self.assertIn("sift", fh.read())
+                self.assertIn("hybrid", fh.read())
 
     def test_export_without_results_is_a_no_op(self) -> None:
         self.window.results = []
@@ -523,11 +522,11 @@ class TestBenchWindow(unittest.TestCase):
         self.window.start_run()
 
         self.assertTrue(_wait_until(lambda: self.window.worker is None))
-        self.assertEqual([r.engine for r in self.window.results], ["sift", "orb"])
-        self.assertEqual(self.window.table.rowCount(), 2)
-        self.assertEqual(len(self.window.records), 2)
-        self.assertEqual(self.window.progress.value(), 2)
-        self.assertIn("2 run(s) done", self.window.status_lbl.text())
+        self.assertEqual([r.engine for r in self.window.results], ["hybrid"])
+        self.assertEqual(self.window.table.rowCount(), 1)
+        self.assertEqual(len(self.window.records), 1)
+        self.assertEqual(self.window.progress.value(), 1)
+        self.assertIn("1 run(s) done", self.window.status_lbl.text())
         self.assertTrue(self.window.run_btn.isEnabled())
         self.assertFalse(self.window.stop_btn.isEnabled())
 
@@ -547,8 +546,8 @@ class TestBenchWindow(unittest.TestCase):
         self.assertTrue(worker.stopping)
         self.assertIn("stopping", self.window.status_lbl.text())
         self.assertTrue(_wait_until(lambda: self.window.worker is None, 30.0))
-        # Both engines were in the plan, but the stop lands between cases.
-        self.assertLessEqual(len(self.window.results), 2)
+        # The engine was in the plan, but the stop lands between cases.
+        self.assertLessEqual(len(self.window.results), 1)
 
     def test_start_run_with_nothing_selected_reports_it(self) -> None:
         for box in self.window.engine_boxes.values():
@@ -598,7 +597,7 @@ class TestLogsTabWiring(unittest.TestCase):
             return BenchWindow(
                 map_name=map_name,
                 runner=_fake_runner,
-                probe=lambda _n: ["sift"],
+                probe=lambda _n: ["hybrid"],
                 loader=_inputs,
             )
 
@@ -654,12 +653,12 @@ class TestScenarioInputs(unittest.TestCase):
         self.assertIn("definitely_not_a_map", str(ctx.exception))
 
     def test_engines_and_registry_stay_in_one_place(self) -> None:
-        self.assertEqual(set(ENGINES), {"sift", "orb", "xfeat", "hybrid"})
-        self.assertIn("ratio_local", param_registry("sift"))
+        self.assertEqual(set(ENGINES), {"hybrid"})
+        self.assertIn("hybrid_reanchor_s", param_registry("hybrid"))
 
     def test_param_hint_lists_the_keys_and_what_changing_them_does(self) -> None:
-        hint = param_hint("sift")
-        self.assertIn("ratio_local", hint)
+        hint = param_hint("hybrid")
+        self.assertIn("hybrid_reanchor_s", hint)
         self.assertIn("lower", hint)
         self.assertIn("higher", hint)
 
@@ -676,7 +675,7 @@ class TestNoProductionSideEffects(unittest.TestCase):
 
     def test_opening_the_window_leaves_config_untouched(self) -> None:
         window = BenchWindow(
-            map_name="fake", runner=_fake_runner, probe=lambda _n: ["sift"], loader=_inputs
+            map_name="fake", runner=_fake_runner, probe=lambda _n: ["hybrid"], loader=_inputs
         )
         self.addCleanup(window.close)
         self.assertTrue(_wait_until(lambda: bool(window.available)))
@@ -690,14 +689,14 @@ class TestNoProductionSideEffects(unittest.TestCase):
 
     def test_export_only_touches_the_chosen_directory(self) -> None:
         window = BenchWindow(
-            map_name="fake", runner=_fake_runner, probe=lambda _n: ["sift"], loader=_inputs
+            map_name="fake", runner=_fake_runner, probe=lambda _n: ["hybrid"], loader=_inputs
         )
         self.addCleanup(window.close)
         self.assertTrue(_wait_until(lambda: bool(window.available)))
         before = sorted(os.listdir(os.path.join(ROOT, "output")))
 
         with tempfile.TemporaryDirectory() as tmp:
-            result = _result("sift", "straight")
+            result = _result("hybrid", "straight")
             window.results = [result]
             window.records = {record_key(result): []}
             window.write_export(tmp)

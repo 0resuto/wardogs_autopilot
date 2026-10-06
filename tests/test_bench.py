@@ -1,9 +1,8 @@
 """Tests for the synthetic benchmark: scenarios, sweeps, tracker, runner, report.
 
-No GPU, no ONNX models and no map/index files are needed: the scenario
-geometry runs on a synthetic textured preview and the engine call is
-monkeypatched, so the tracker rules, the metrics and the writers are checked in
-isolation.
+No GPU and no map/index files are needed: the scenario geometry runs on a
+synthetic textured preview and the engine call is monkeypatched, so the tracker
+rules, the metrics and the writers are checked in isolation.
 """
 
 from __future__ import annotations
@@ -54,7 +53,6 @@ from autopilot.bench.report import swept_keys  # noqa: E402
 from autopilot.bench.runner import CSV_COLUMNS  # noqa: E402
 from autopilot.bench.scenario import _build_frame, _pick_center  # noqa: E402
 from autopilot.vision import locator  # noqa: E402
-from autopilot.vision import xfeat as xfeat_mod  # noqa: E402
 
 #: Native px per meter used by the synthetic maps in these tests.
 PX_PER_M = 2.0
@@ -250,10 +248,10 @@ class _FakeStore:
 
 class TestSweep(unittest.TestCase):
     def test_parse_sweep_reads_the_registry_types(self):
-        key, values = parse_sweep("xfeat_min_cos=0.75,0.82,0.88")
+        key, values = parse_sweep("hybrid_min_cc=0.3,0.5,0.7")
 
-        self.assertEqual(key, "xfeat_min_cos")
-        self.assertEqual(values, [0.75, 0.82, 0.88])
+        self.assertEqual(key, "hybrid_min_cc")
+        self.assertEqual(values, [0.3, 0.5, 0.7])
         self.assertTrue(all(isinstance(v, float) for v in values))
 
         key, values = parse_sweep("max_kp_frame=600,1200")
@@ -270,7 +268,7 @@ class TestSweep(unittest.TestCase):
 
         message = str(ctx.exception)
         self.assertIn("nonsense", message)
-        for key in ("ratio_local", "xfeat_min_cos", "hybrid_reanchor_s", "smooth_alpha"):
+        for key in ("ratio_local", "hybrid_reanchor_s", "smooth_alpha"):
             self.assertIn(key, message)
 
     def test_malformed_sweep_is_rejected(self):
@@ -279,11 +277,11 @@ class TestSweep(unittest.TestCase):
                 parse_sweep(expr)
 
     def test_expand_oat_is_a_cartesian_product(self):
-        grid = expand_oat([("xfeat_min_cos", [0.75, 0.82]), ("xfeat_top_k", [500, 1000, 2000])], {})
+        grid = expand_oat([("hybrid_min_cc", [0.3, 0.5]), ("vote_need", [1, 3, 5])], {})
 
         self.assertEqual(len(grid), 6)
-        self.assertIn({"xfeat_min_cos": 0.75, "xfeat_top_k": 500}, grid)
-        self.assertIn({"xfeat_min_cos": 0.82, "xfeat_top_k": 2000}, grid)
+        self.assertIn({"hybrid_min_cc": 0.3, "vote_need": 1}, grid)
+        self.assertIn({"hybrid_min_cc": 0.5, "vote_need": 5}, grid)
 
     def test_expand_oat_carries_the_base_overrides(self):
         grid = expand_oat([("vote_need", [1, 3])], {"smooth_alpha": 0.35})
@@ -298,14 +296,13 @@ class TestSweep(unittest.TestCase):
         self.assertEqual(expand_oat([]), [{}])
 
     def test_registry_covers_every_engine(self):
-        for engine in ("sift", "orb", "xfeat", "hybrid"):
+        for engine in ("hybrid",):
             registry = param_registry(engine)
             for spec in ENGINE_PARAMS[engine]:
                 self.assertIn(spec.key, registry, engine)
                 self.assertTrue(spec.values and spec.label)
         for spec in SHARED_PARAMS:
-            self.assertIn(spec.key, param_registry("sift"))
-            self.assertIn(spec.key, param_registry("xfeat"))
+            self.assertIn(spec.key, param_registry("hybrid"))
 
 
 class TestConfigOverlay(unittest.TestCase):
@@ -543,15 +540,9 @@ class TestBenchTracker(unittest.TestCase):
     def test_reset_clears_the_tracker_and_the_engine_state(self):
         bench = _tracker(smooth_alpha=0.0)
 
-        class _Eng:
-            _last_th: float | None = 42.0
-
-        engine = _Eng()
         with _ScriptedEngine([_pose(1000.0, 2000.0)]):
             bench.step(0, np.zeros((8, 8), np.uint8), None, 0.0, (0.0, 0.0, 0.0))
-        with patch.object(locator, "_active_engine", lambda: engine):
-            bench.reset()
-        self.assertIsNone(engine._last_th, "the derotation heading must be dropped")
+        bench.reset()
 
         self.assertIsNone(bench._prev_xy)
         self.assertIsNone(bench._last_accepted)
@@ -724,58 +715,9 @@ class TestRunner(unittest.TestCase):
         with _ScriptedEngine([{"boom": True}]), self.assertRaises(RuntimeError):
             run_case("sift", self._scenario(frames=2), {}, "fake", warmup=False)
 
-    def test_available_engines_needs_every_index_it_uses(self):
-        with (
-            _indexes({"sift", "orb", "xfeat"}),
-            patch("autopilot.bench.runner.xfeat_skip_reason", return_value=None),
-        ):
-            self.assertEqual(available_engines("m"), ["sift", "orb", "xfeat", "hybrid"])
-        with (
-            _indexes({"sift"}),
-            patch("autopilot.bench.runner.xfeat_skip_reason", return_value="no GPU"),
-        ):
-            self.assertEqual(available_engines("m"), ["sift", "hybrid"])
-        with _indexes({"orb"}):
-            self.assertEqual(available_engines("m"), ["orb"])
-
-    def test_xfeat_skip_reason_reports_every_missing_piece(self):
-        from autopilot.bench import runner as runner_mod
-
-        with _indexes(set()), patch.object(runner_mod, "_gpu_provider", return_value=True):
-            self.assertIn("index missing", str(runner_mod.xfeat_skip_reason("m")))
-
-        with (
-            _indexes({"xfeat"}),
-            patch.object(xfeat_mod, "available", lambda: False),
-            patch.object(runner_mod, "_gpu_provider", return_value=True),
-        ):
-            self.assertIn("backbone model missing", str(runner_mod.xfeat_skip_reason("m")))
-
-        with (
-            _indexes({"xfeat"}),
-            patch.object(xfeat_mod, "available", lambda: True),
-            patch.object(xfeat_mod, "MATCH_MODEL_FILE", "missing-xfeat-match.onnx"),
-            patch.object(runner_mod, "_gpu_provider", return_value=True),
-        ):
-            self.assertIn("match model missing", str(runner_mod.xfeat_skip_reason("m")))
-
-        with (
-            _indexes({"xfeat"}),
-            patch.object(xfeat_mod, "available", lambda: True),
-            patch.object(xfeat_mod, "MATCH_MODEL_FILE", os.devnull),
-            patch.object(runner_mod, "_gpu_provider", return_value=False),
-        ):
-            self.assertIn("no GPU", str(runner_mod.xfeat_skip_reason("m")))
-
-        with (
-            _indexes({"xfeat"}),
-            patch.object(xfeat_mod, "available", lambda: True),
-            patch.object(xfeat_mod, "MATCH_MODEL_FILE", os.devnull),
-            patch.object(runner_mod, "_gpu_provider", return_value=True),
-        ):
-            self.assertIsNone(runner_mod.xfeat_skip_reason("m"))
-
-    def test_available_engines_is_empty_without_any_index(self):
+    def test_available_engines_needs_the_sift_index(self):
+        with _indexes({"sift"}):
+            self.assertEqual(available_engines("m"), ["hybrid"])
         with _indexes(set()):
             self.assertEqual(available_engines("m"), [])
 
@@ -875,14 +817,14 @@ class TestReport(unittest.TestCase):
         results = [
             _result("sift", "straight"),
             _result("sift", "turns", localized_pct=50.0),
-            _result("orb", "straight"),
+            _result("hybrid", "straight"),
         ]
         text = self._text(results)
 
         self.assertIn("# Synthetic localization benchmark", text)
         self.assertIn("`zestafona`", text)
         self.assertIn("## sift", text)
-        self.assertIn("## orb", text)
+        self.assertIn("## hybrid", text)
         rows = [ln for ln in text.splitlines() if ln.startswith("| straight")]
         self.assertEqual(len(rows), 2, "one row per run that used the default config")
         self.assertEqual(len([ln for ln in text.splitlines() if ln.startswith("| turns")]), 1)
@@ -896,7 +838,7 @@ class TestReport(unittest.TestCase):
         text = self._text(results)
 
         self.assertEqual(swept_keys(results, "sift"), ["ransac_px"])
-        self.assertEqual(swept_keys(results, "orb"), [])
+        self.assertEqual(swept_keys(results, "hybrid"), [])
         self.assertIn("### sift: ransac_px", text)
         self.assertNotIn("### sift: smooth_alpha", text)
         self.assertIn("| 2 |", text)

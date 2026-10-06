@@ -21,8 +21,6 @@ logger = get_logger("locator")
 
 DEFAULT_MAX_KP = 1200
 DEFAULT_EARLY_INL = 40
-#: XFeat cosine threshold for the mutual-nearest-neighbour match (kornia default).
-DEFAULT_XFEAT_MIN_COS = 0.82
 # OpenCV's BFMatcher packs every train row index into 18 bits (1 << 18), so
 # knnMatch aborts once a candidate set reaches 262144 descriptors. A growing
 # radius search on a dense map can collect that many: thin oversized sets
@@ -79,42 +77,15 @@ class IndexSearchMixin:
             m[ui_mask] = int(np.median(m[~ui_mask]))
         return self.clahe.apply(m)
 
-    def _xfeat_preprocess(self, mm: np.ndarray, ui_mask: np.ndarray | None) -> np.ndarray:
-        """UI pixels filled with the background median (XFeat sees raw pixels)."""
-        if ui_mask is None or not ui_mask.size:
-            return mm
-        m = mm.copy()
-        m[ui_mask] = int(np.median(m[~ui_mask]))
-        return m
-
-    def _detect(
-        self, mmf: np.ndarray, max_kp: int, derotate_deg: float = 0.0
-    ) -> tuple[list[cv2.KeyPoint], np.ndarray | None]:
-        """Keypoints/descriptors of one frame (kind-aware), capped by response.
+    def _detect(self, mmf: np.ndarray, max_kp: int) -> tuple[list[cv2.KeyPoint], np.ndarray | None]:
+        """Keypoints/descriptors of one frame, capped by response.
 
         Tree canopy and other repetitive texture can yield thousands of weak,
         non-distinctive keypoints (measured 1400+ on a forest frame) that inflate
         the BF.knnMatch cost and dilute RANSAC without adding real inliers.
         Ranking by response and keeping `max_kp` retains the structural points
-        while bounding the per-frame match cost. XFeat already returns its
-        response-ranked top-k from the ONNX extractor.
+        while bounding the per-frame match cost.
         """
-        if self.kind == "xfeat":
-            from . import xfeat
-
-            cfg = self.store.loc_cfg()
-            pts, desc, scores = xfeat.extract(
-                mmf,
-                top_k=int(max_kp) if max_kp > 0 else 2000,
-                threshold=float(cfg.get("xfeat_threshold", 0.05) or 0.05),
-                derotate_deg=derotate_deg,
-                margin=12 if abs(derotate_deg) > 1e-3 else 4,
-            )
-            kp = [
-                cv2.KeyPoint(float(x), float(y), 1.0, response=float(s))
-                for (x, y), s in zip(pts, scores, strict=True)
-            ]
-            return kp, (desc if len(desc) else None)
         kp, desc = self.detector.detectAndCompute(mmf, None)
         if desc is not None:
             # SIFT descriptors are integer 0..255; the index stores uint8 and
@@ -237,7 +208,6 @@ class IndexSearchMixin:
             thresholds.append(fallback_px)
         if not thresholds:
             thresholds = [6.0]
-        min_cos = float(loc.get("xfeat_min_cos", DEFAULT_XFEAT_MIN_COS) or DEFAULT_XFEAT_MIN_COS)
 
         best: dict[str, Any] | None = None
         best_len: int | None = None
@@ -251,25 +221,15 @@ class IndexSearchMixin:
             n_tried += 1
             if d2 is None or len(d2) < 2:
                 continue
-            if self.kind == "xfeat":
-                from . import xfeat
-
-                pairs = xfeat.match_pairs(np.asarray(d1, np.float32), d2, min_cos)
-                n_good = int(len(pairs))
-                if n_good < 4:
-                    continue
-                src = np.asarray([kp1[i].pt for i in pairs[:, 0]], np.float32).reshape(-1, 1, 2)
-                dst = np.asarray(pts[pairs[:, 1]], np.float32).reshape(-1, 1, 2)
-            else:
-                if len(d2) > BF_MAX_TRAIN_DESC:
-                    pts, d2 = _subsample_train(pts, d2)
-                kn = self.bf.knnMatch(d1, d2, k=2)
-                good = [g for g, n in kn if g.distance < ratio * n.distance]
-                n_good = len(good)
-                if n_good < 4:
-                    continue
-                src = np.asarray([kp1[g.queryIdx].pt for g in good], np.float32).reshape(-1, 1, 2)
-                dst = np.asarray([pts[g.trainIdx] for g in good], np.float32).reshape(-1, 1, 2)
+            if len(d2) > BF_MAX_TRAIN_DESC:
+                pts, d2 = _subsample_train(pts, d2)
+            kn = self.bf.knnMatch(d1, d2, k=2)
+            good = [g for g, n in kn if g.distance < ratio * n.distance]
+            n_good = len(good)
+            if n_good < 4:
+                continue
+            src = np.asarray([kp1[g.queryIdx].pt for g in good], np.float32).reshape(-1, 1, 2)
+            dst = np.asarray([pts[g.trainIdx] for g in good], np.float32).reshape(-1, 1, 2)
             cand_pose: dict[str, Any] | None = None
             for thr_px in thresholds:
                 m3, inl_mask = cv2.estimateAffinePartial2D(

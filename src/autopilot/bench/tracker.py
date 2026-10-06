@@ -176,15 +176,12 @@ class BenchTracker:
     def reset(self) -> None:
         """Drop every piece of state, including the engine's own track.
 
-        The hybrid keeps its ECC track and xfeat its derotation heading between
-        runs, so without this a later config would start from a stale pose.
+        The hybrid keeps its ECC track between runs, so without this a later
+        config would start from a stale pose.
         """
-        engine = locator._active_engine()
-        reset = getattr(engine, "reset", None)
+        reset = getattr(locator._active_engine(), "reset", None)
         if callable(reset):
             reset()
-        elif hasattr(engine, "_last_th"):
-            engine._last_th = None
         self._prev_xy = None
         self._prev_th = 0.0
         self._prev_s = None

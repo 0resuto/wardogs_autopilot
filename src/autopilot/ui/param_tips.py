@@ -17,11 +17,8 @@ from __future__ import annotations
 PARAM_TIPS: dict[str, str] = {
     # ------------------------------------------------------------- locator
     "engine": (
-        "Localization engine:\n"
-        "sift - robust feature index (default)\n"
-        "orb - faster binary features (needs the ORB index built from the source PNG)\n"
-        "xfeat - learned features on the GPU (needs the XFeat index + ONNX model)\n"
-        "hybrid - SIFT anchor + ECC frame-to-frame tracking (best with capture.fps 20-30)"
+        "Localization engine: hybrid only (SIFT anchor + ECC frame-to-frame\n"
+        "tracking; best with capture.fps 20-30)."
     ),
     "ratio_local": (
         "Lowe ratio test: lower = more but weaker matches; higher = stricter.\n"
@@ -72,21 +69,6 @@ PARAM_TIPS: dict[str, str] = {
         "Second chance for failed candidates: increase = more localizations (stray risk); 0 = strict.\n"
         "Increase (6-8): dubious matches get re-approved. Decrease/down to 0:\n"
         "safer, but more dropouts on weak frames."
-    ),
-    "xfeat_min_cos": (
-        "Min cosine: lower = more matches (some false); higher = cleaner/fewer.\n"
-        "Lower (0.75): more matches in hard frames, some wrong. Higher (0.9):\n"
-        "only confident matches - cleaner pose, fewer localizations."
-    ),
-    "xfeat_top_k": (
-        "Keypoints per frame: lower = faster; higher = robust in low texture.\n"
-        "Lower (500-1000): quicker per frame. Higher (4000): more points in\n"
-        "empty terrain, slower."
-    ),
-    "xfeat_threshold": (
-        "Heatmap detection threshold: lower = more (noisy) points; higher = only strong points.\n"
-        "Lower (0.03): dense but noisy detections. Higher (0.10): sparse, fast,\n"
-        "fragile over featureless ground."
     ),
     "hybrid_reanchor_s": (
         "Seconds between SIFT anchors: lower = precise/CPU-heavy; higher = cheap/drifts.\n"
@@ -153,8 +135,7 @@ PARAM_TIPS: dict[str, str] = {
     "fps": (
         "Capture rate: lower = less CPU; higher = smoother hybrid, more load.\n"
         "Lower (5-10 fps): fast motion changes more between frames. Higher\n"
-        "(20-30 fps): the hybrid engine tracks smoother; sift/orb drop extra\n"
-        "frames anyway."
+        "(20-30 fps): the hybrid engine tracks smoother."
     ),
     "monitor": (
         "Capture monitor: pick the one the game runs on.\n"

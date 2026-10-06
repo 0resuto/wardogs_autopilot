@@ -14,7 +14,6 @@ dependencies = [
     "pyserial",
     "pydantic>=2.0",
     "pyside6>=6.11.2",
-    "onnxruntime-directml>=1.24",
 ]
 
 [dependency-groups]
@@ -71,7 +70,6 @@ module = [
     "matplotlib.*",
     "mss",
     "mss.*",
-    "onnxruntime",
     "serial",
     "serial.*",
 ]

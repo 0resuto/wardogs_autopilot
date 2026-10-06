@@ -293,7 +293,7 @@ class LogsTab(QWidget):
         card, card_layout = self._card("Localization Benchmark")
         card_layout.addWidget(
             self._hint(
-                "Score sift/orb/xfeat/hybrid on synthetic trajectories with a known "
+                "Score the hybrid engine on synthetic trajectories with a known "
                 "ground truth, sweep one parameter at a time, then export "
                 "results.csv + report.md into output/.",
                 card,

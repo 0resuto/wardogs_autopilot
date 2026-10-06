@@ -1,10 +1,9 @@
 """Run orchestration: engine x scenario x config -> metrics, CSV, per-frame JSONL.
 
 A "run" is one (engine, scenario, config) triple: a fresh `BenchTracker` is
-built for it, the engine's warm-up is paid once and reported separately (xfeat
-initialises its ONNX sessions on the first frame), then every frame is scored
-against the scenario ground truth. Nothing here writes to `config.json` — the
-sweep values reach the engine through `ConfigOverlay` only.
+built for it, the engine's warm-up is paid once and reported separately, then
+every frame is scored against the scenario ground truth. Nothing here writes to
+`config.json` — the sweep values reach the engine through `ConfigOverlay` only.
 """
 
 from __future__ import annotations
@@ -22,16 +21,15 @@ from typing import Any
 import numpy as np
 
 from ..vision import featureindex, locator
-from ..vision import xfeat as xfeat_mod
 from .params import ConfigOverlay
 from .scenario import Scenario
 from .tracker import BenchTracker, FrameRecord
 
-#: Engines the bench knows about, in report order.
-ENGINES = ("sift", "orb", "xfeat", "hybrid")
+#: Engine the bench runs (hybrid anchors with the SIFT index).
+ENGINES = ("hybrid",)
 
 #: Index kind each engine needs ("hybrid" anchors with SIFT).
-_INDEX_KIND = {"sift": "sift", "orb": "orb", "xfeat": "xfeat", "hybrid": "sift"}
+_INDEX_KIND = {"hybrid": "sift"}
 
 #: Stable CSV columns (report tables and plots read the dataclass, not the file).
 CSV_COLUMNS = (
@@ -104,52 +102,10 @@ def _index_ready(map_name: str, kind: str) -> bool:
 
 _INDEX_CACHE: dict[tuple[str, str], bool] = {}
 
-#: Probed once: onnxruntime takes ~1 s to import and the answer cannot change.
-_GPU_PROVIDER: list[bool] = []
-
-
-def xfeat_skip_reason(map_name: str) -> str | None:
-    """Why xfeat cannot run for `map_name`, or None when it can.
-
-    `xfeat.available()` only looks at the backbone model and `provider()` only
-    knows the answer after the session exists, so the bench checks the match
-    model and the registered GPU execution providers up front: a missing GPU or
-    a partial model download has to become a skip line, not a crash mid-run.
-    """
-    if not _index_ready(map_name, "xfeat"):
-        return f"xfeat index missing for {map_name}"
-    if not xfeat_mod.available():
-        return "xfeat backbone model missing (run: python tools/download_models.py)"
-    if not os.path.exists(xfeat_mod.MATCH_MODEL_FILE):
-        return "xfeat match model missing (run: python tools/download_models.py)"
-    if not _gpu_provider():
-        return "no GPU execution provider for xfeat (TensorRT/CUDA/DirectML)"
-    return None
-
-
-def _gpu_provider() -> bool:
-    """True when onnxruntime exposes a GPU EP (xfeat never falls back to CPU)."""
-    if not _GPU_PROVIDER:
-        try:
-            import onnxruntime as ort
-
-            have = set(ort.get_available_providers())
-        except ImportError:
-            have = set()
-        _GPU_PROVIDER.append(any(p in have for p in xfeat_mod._GPU_PROVIDERS))
-    return _GPU_PROVIDER[0]
-
 
 def available_engines(map_name: str) -> list[str]:
-    """Engines runnable for `map_name`: index present, plus the GPU for xfeat."""
-    out: list[str] = []
-    for engine in ENGINES:
-        if not _index_ready(map_name, _INDEX_KIND[engine]):
-            continue
-        if engine == "xfeat" and xfeat_skip_reason(map_name) is not None:
-            continue
-        out.append(engine)
-    return out
+    """Engines runnable for `map_name`: the SIFT index must be present."""
+    return [e for e in ENGINES if _index_ready(map_name, _INDEX_KIND[e])]
 
 
 def config_hash(config: Mapping[str, Any] | None) -> str:
@@ -177,7 +133,7 @@ def run_case(
     store = locator.get_store()
     if map_name:
         locator.set_map(str(map_name))
-    locator.set_engine(str(engine))
+    locator.set_engine("hybrid")
 
     with ConfigOverlay(store, overrides):
         cfg = store.loc_cfg()

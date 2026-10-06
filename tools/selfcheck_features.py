@@ -2,17 +2,16 @@
 
 Builds a synthetic minimap: a 337x278 window of the active map (mu cache)
 rotated by ~35 deg and scaled 1.15, then asks global_pose where the player
-is. Asserts the recovered position is within 60 native px of the truth.
+is. Asserts the recovered position is within 60 native px of the truth. The
+engine is the shipped hybrid (SIFT anchor + ECC track); its cold start
+exercises the SIFT anchor against the feature index.
 
 Usage:
-    python tools/selfcheck_features.py                 # SIFT engine (default)
-    python tools/selfcheck_features.py --engine orb    # needs <map>_feat_orb.npz
-    python tools/selfcheck_features.py --engine hybrid # SIFT anchor + ECC track
+    python tools/selfcheck_features.py
 config.json is NOT modified; the vote-gate scenarios from the consumer are
 tested too.
 """
 
-import argparse
 import math
 import os
 import sys
@@ -88,8 +87,8 @@ def _pose_ok(pose, diag, expected):
     return True, "err=%.0fpx inl=%d mode=%s" % (err, pose["inl"], diag.get("mode"))
 
 
-def _run_mode(mu, cx, cy, mm, expected, engine="sift"):
-    print("--- %s run ---" % engine)
+def _run_mode(mu, cx, cy, mm, expected):
+    print("--- hybrid run ---")
     ui = np.zeros(mm.shape[:2], bool)
 
     pose, diag = locator.global_pose(mm, ui, prev_xy=None, debug=True, budget=30.0)
@@ -103,15 +102,14 @@ def _run_mode(mu, cx, cy, mm, expected, engine="sift"):
         )
 
     # the hybrid may track the identical frame with ECC after the anchor
-    hot_modes = ("index", "hybrid") if engine == "hybrid" else ("index",)
     pose, diag = locator.global_pose(mm, ui, prev_xy=expected, debug=True, budget=30.0)
     ok, info = _pose_ok(pose, diag, expected)
     _check("hot start found pose", ok, info)
     if ok:
         _check(
             "hot start used the feature index",
-            diag.get("mode") in hot_modes,
-            "mode=%s (expected %s)" % (diag.get("mode"), "/".join(hot_modes)),
+            diag.get("mode") in ("index", "hybrid"),
+            "mode=%s (expected index/hybrid)" % diag.get("mode"),
         )
 
 
@@ -137,27 +135,18 @@ def _test_vote():
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument(
-        "--engine",
-        choices=("sift", "orb", "xfeat", "hybrid"),
-        default="sift",
-        help="localization engine to exercise (default: sift)",
-    )
-    args = ap.parse_args()
-    locator.set_engine(args.engine)
+    locator.set_engine("hybrid")
 
-    print("loading map cache + feature index (engine=%s)..." % args.engine)
+    print("loading map cache + feature index (engine=hybrid)...")
     mu = locator.load_global_map()
     ms = locator._mini_scale("zestafona")
-    idx = locator.get_store().get_index("sift" if args.engine == "hybrid" else args.engine)
+    idx = locator.get_store().get_index("sift")
     if idx is not None:
         print("index: %s kind=%s features=%d" % (idx.name, idx.kind, idx.total_features()))
     else:
         print(
-            "WARNING: no %s feature index — build it first: python -m "
-            "autopilot.vision.featureindex --build zestafona%s"
-            % (args.engine, "" if args.engine == "sift" else " --kind " + args.engine)
+            "WARNING: no sift feature index — build it first: python -m "
+            "autopilot.vision.featureindex --build zestafona"
         )
 
     center = _pick_center(mu)
@@ -173,7 +162,7 @@ def main():
         % (mm.shape, SCALE, expected[0], expected[1])
     )
 
-    _run_mode(mu, cx, cy, mm, expected, engine=args.engine)
+    _run_mode(mu, cx, cy, mm, expected)
 
     _test_vote()
 

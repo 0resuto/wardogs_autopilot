@@ -47,19 +47,6 @@ ENGINE_PARAMS: dict[str, list[ParamSpec]] = {
         _spec("max_kp_frame", (600, 1200, 2400), "Keypoints kept per frame"),
         _spec("ransac_px", (2.0, 3.0, 6.0), "RANSAC inlier threshold (px)"),
     ],
-    "orb": [
-        _spec("ratio_local", (0.80, 0.85, 0.90), "Lowe ratio for the tracking radius"),
-        _spec("min_inl_local", (4, 8, 16), "Minimum inliers inside the tracking radius"),
-        _spec("track_radius", (450.0, 900.0), "Tracking search radius (px)"),
-        _spec("max_kp_frame", (600, 1200, 2400), "Keypoints kept per frame"),
-        _spec("ransac_px", (2.0, 3.0, 6.0), "RANSAC inlier threshold (px)"),
-    ],
-    "xfeat": [
-        _spec("xfeat_top_k", (500, 1000, 2000, 4000), "Keypoints kept per frame"),
-        _spec("xfeat_min_cos", (0.75, 0.82, 0.88), "Minimum cosine similarity of a match"),
-        _spec("xfeat_threshold", (0.03, 0.05, 0.10), "Keypoint heatmap detection threshold"),
-        _spec("ransac_px", (2.0, 3.0, 6.0), "RANSAC inlier threshold (px)"),
-    ],
     "hybrid": [
         _spec("hybrid_reanchor_s", (0.5, 1.0, 2.0), "Seconds between SIFT anchors"),
         _spec("hybrid_min_cc", (0.3, 0.5, 0.7), "Minimum ECC correlation coefficient"),

@@ -1,14 +1,13 @@
 """Offline feature index of a map for radius-based localization.
 
 Builds once per map (CLI: python -m autopilot.vision.featureindex --build
-zestafona [--kind orb]) and stores descriptors of the downscaled map pyramid
-in data/maps/<name>_feat.npz (SIFT) or <name>_feat_orb.npz (ORB). Descriptors
-are integer 0..255, so they are stored as uint8 inside a compressed npz (5x
-smaller than the old float32 npz; the live query is cast to uint8 in
-MapLocator._detect because BFMatcher requires both sides to share the type).
-The minimap is then matched via BF.knnMatch against the descriptors of the
-tiles around the last known position (radius search), avoiding per-frame
-SIFT detection over a big window.
+zestafona) and stores descriptors of the downscaled map pyramid in
+data/maps/<name>_feat.npz. Descriptors are integer 0..255, so they are stored
+as uint8 inside a compressed npz (5x smaller than the old float32 npz; the
+live query is cast to uint8 in MapLocator._detect because BFMatcher requires
+both sides to share the type). The minimap is then matched via BF.knnMatch
+against the descriptors of the tiles around the last known position (radius
+search), avoiding per-frame SIFT detection over a big window.
 
 The index is a cache only: load_index() returns None when the npz is absent and
 the caller falls back to the classic window + coarse search (see locator.py).
@@ -37,12 +36,9 @@ TILE = 512
 MAX_PER_TILE = 3000
 LEVELS = (1.0, 0.8, 0.6)
 
-# Supported descriptor kinds. 'sift' is the robust default; 'orb' builds a
-# 32-byte binary index matched with the Hamming distance (several times faster
-# to load and match, a bit less scale/illumination tolerant); 'xfeat' stores
-# the learned 64-D XFeat descriptors (float16) extracted with the GPU ONNX
-# backbone and matched by cosine similarity.
-INDEX_KINDS = ("sift", "orb", "xfeat")
+# Supported descriptor kinds: SIFT only. The tag is kept in the npz and in
+# MapStore.get_index so a stale cache of another kind is rejected loudly.
+INDEX_KINDS = ("sift",)
 _INDEX_KIND = "sift"
 
 # Descriptor build must match the query's preprocessing space. In practice the
@@ -68,12 +64,8 @@ def _feat_path(name, kind=_INDEX_KIND):
     return os.path.join(_MAPS_DIR, "%s%s" % (name, suffix))
 
 
-def _make_detector(kind: str, max_per_tile: int, contrast: float):
-    """Detector for an index build; `contrast` tunes SIFT only."""
-    if kind == "orb":
-        return cv2.ORB.create(
-            nfeatures=int(max_per_tile), scaleFactor=1.2, nlevels=8, fastThreshold=20
-        )
+def _make_detector(max_per_tile: int, contrast: float):
+    """SIFT detector for an index build; `contrast` tunes its sensitivity."""
     if abs(float(contrast) - 0.05) > 1e-6:
         return cv2.SIFT.create(nfeatures=6000, contrastThreshold=float(contrast), edgeThreshold=12)
     from . import locator  # lazy: locator imports this module at load time
@@ -82,7 +74,6 @@ def _make_detector(kind: str, max_per_tile: int, contrast: float):
 
 
 def _tile_features(
-    kind: str,
     detector: Any,
     crop: np.ndarray,
     edge_w: int,
@@ -90,24 +81,9 @@ def _tile_features(
     max_per_tile: int,
     norm_fn,
 ) -> tuple[np.ndarray, np.ndarray] | None:
-    """(points, descriptors) for one build tile, or None when empty.
-
-    SIFT/ORB keep the response-ranked KeyPoint pipeline; XFeat runs its own
-    detector + descriptor network and returns points directly.
-    """
+    """(points, descriptors) for one build tile, or None when empty."""
     if norm_fn is not None:
         crop = norm_fn(crop)
-    if kind == "xfeat":
-        from . import xfeat
-
-        pts, desc = xfeat.extract_tile(crop, top_k=max_per_tile)
-        if len(pts) == 0:
-            return None
-        keep = (pts[:, 0] < edge_w) & (pts[:, 1] < edge_h)
-        if not keep.any():
-            return None
-        return pts[keep].astype(np.float32), np.asarray(desc[keep], np.float16)
-
     kp, desc = detector.detectAndCompute(crop, None)
     if desc is None or len(desc) == 0:
         return None
@@ -154,12 +130,11 @@ def build_index(
     """Build the feature index cache for one map; returns the npz path.
 
     Reads the already-cached *mu.npy (never the full PNG) and extracts SIFT
-    (or ORB, `kind='orb'`) descriptors per pyramid level on a tile grid with
-    reflected borders. With norm='raw' (default) the tiles feed the detector
-    exactly as the map pixels are; 'perc298' percentile-normalizes each tile
-    (kept for experiments). Level coordinates are divided by the level scale
-    into map (mu) pixels. Returns None when the map cache is missing or the
-    build failed.
+    descriptors per pyramid level on a tile grid with reflected borders. With
+    norm='raw' (default) the tiles feed the detector exactly as the map pixels
+    are; 'perc298' percentile-normalizes each tile (kept for experiments).
+    Level coordinates are divided by the level scale into map (mu) pixels.
+    Returns None when the map cache is missing or the build failed.
     """
     if kind not in INDEX_KINDS:
         raise ValueError("unknown index kind %r (expected %s)" % (kind, " or ".join(INDEX_KINDS)))
@@ -183,9 +158,9 @@ def build_index(
         fmt=np.asarray([_INDEX_FMT], dtype="U16"),
         kind=np.asarray([kind], dtype="U8"),
     )
-    detector = None if kind == "xfeat" else _make_detector(kind, max_per_tile, contrast)
+    detector = _make_detector(max_per_tile, contrast)
     norm_fn = (lambda c: locator._shadow_fill_norm(c, None)) if norm == "perc298" else None
-    desc_dim, desc_dtype = (64, np.float16) if kind == "xfeat" else (128, np.uint8)
+    desc_dim, desc_dtype = 128, np.uint8
 
     for k, f in enumerate(levels):
         Wimg = max(1, int(round(mu_w * f)))
@@ -203,7 +178,7 @@ def build_index(
                 crop = img[y0 : y0 + tile, x0 : x0 + tile]
                 if crop.shape[0] < tile or crop.shape[1] < tile:
                     crop = _pad_to(crop, tile, tile)
-                feats = _tile_features(kind, detector, crop, edge_w, edge_h, max_per_tile, norm_fn)
+                feats = _tile_features(detector, crop, edge_w, edge_h, max_per_tile, norm_fn)
                 n_done += 1
                 if progress and n_done % 64 == 0:
                     logger.info(
@@ -238,11 +213,7 @@ def build_index(
             )
 
     path = _feat_path(name, kind)
-    if kind == "xfeat":
-        # learned float16 descriptors are incompressible; skip zlib entirely
-        np.savez(path, **out)
-    else:
-        np.savez_compressed(path, **out)
+    np.savez_compressed(path, **out)
     return path
 
 
@@ -286,7 +257,7 @@ class FeatureIndex:
         self.kind = _INDEX_KIND
         if "kind" in data.files and data["kind"].size:
             self.kind = str(data["kind"][0])
-        desc_dtype = np.float16 if self.kind == "xfeat" else np.uint8
+        desc_dtype = np.uint8
         self.levels = np.asarray(data["levels"], np.float32)
         self._levels = []
         for k, f in enumerate(self.levels):
@@ -387,8 +358,7 @@ class FeatureIndex:
 def main():
     ap = argparse.ArgumentParser(
         prog="featureindex",
-        description="Build/cache the feature index for maps "
-        "(SIFT: data/maps/<name>_feat.npz, ORB: <name>_feat_orb.npz).",
+        description="Build/cache the SIFT feature index for maps (data/maps/<name>_feat.npz).",
     )
     ap.add_argument(
         "--build", nargs="+", metavar="NAME", help="map names to index (zestafona bakurani ozeti)"

@@ -8,8 +8,8 @@ the engine through an in-memory overlay.
 
 Examples:
     uv run python tools/bench_synthetic.py --quick --no-plot
-    uv run python tools/bench_synthetic.py --engines orb --scenarios straight --frames 20
-    uv run python tools/bench_synthetic.py --engines xfeat --sweep xfeat_min_cos=0.75,0.82,0.88
+    uv run python tools/bench_synthetic.py --scenarios turns --frames 150
+    uv run python tools/bench_synthetic.py --sweep hybrid_reanchor_s=0.5,1.0,2.0
 """
 
 from __future__ import annotations
@@ -47,7 +47,6 @@ from autopilot.bench import (  # noqa: E402
     write_csv,
     write_jsonl,
     write_report,
-    xfeat_skip_reason,
 )
 from autopilot.vision import locator  # noqa: E402
 
@@ -127,17 +126,6 @@ def main(argv: list[str] | None = None) -> int:
     if not engines:
         print(f"skip: no engine index available for map '{map_name}'")
         print("      run: python tools/download_map.py <map>")
-        return 0
-    # An explicitly requested engine still has to be runnable: xfeat needs its
-    # index, both models and a GPU EP, and a missing one is a skip, not a crash.
-    for engine in list(engines):
-        reason = xfeat_skip_reason(map_name) if engine == "xfeat" else None
-        if reason is None:
-            continue
-        print(f"skip: {engine}: {reason}")
-        engines.remove(engine)
-    if not engines:
-        print("skip: no requested engine can run on this machine")
         return 0
 
     out_dir = args.out or os.path.join(

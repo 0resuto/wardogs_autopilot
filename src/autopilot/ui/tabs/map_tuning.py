@@ -41,8 +41,6 @@ _TUNE_GROUPS: list[tuple[str, list[tuple[Any, ...]]]] = [
             ("smooth", "smooth_alpha", 0.5, False, "locator"),
             ("reset px", "smooth_reset_px", 100, True, "locator"),
             ("ransac px", "ransac_px", 3.0, False, "locator"),
-            ("xfeat cos", "xfeat_min_cos", 0.82, False, "locator"),
-            ("xfeat kp", "xfeat_top_k", 2000, True, "locator"),
         ],
     ),
     (
@@ -100,16 +98,16 @@ class MapTuningMixin(MapTabBase):
         tune_vbox.setContentsMargins(0, 2, 0, 2)
         tune_vbox.setSpacing(6)
 
-        # Engine selector: the three localization variants apply live; the
-        # tracker reconfigures the locator on its next frame.
+        # Engine selector: hybrid ships as the only localization engine; the
+        # tracker reconfigures the locator on its next frame if it ever changes.
         eng_row = QHBoxLayout()
         eng_row.setSpacing(6)
         eng_lbl = QLabel("engine", self._tune_container)
         eng_lbl.setStyleSheet(f"color: {TEXT_MUTED};")
         eng_row.addWidget(eng_lbl)
         self.engine_combo = QComboBox(self._tune_container)
-        self.engine_combo.addItems(["sift", "orb", "xfeat", "hybrid"])
-        current = str(self._loc_tune_cur("engine", "sift") or "sift")
+        self.engine_combo.addItems(["hybrid"])
+        current = str(self._loc_tune_cur("engine", "hybrid") or "hybrid")
         slot = self.engine_combo.findText(current)
         self.engine_combo.setCurrentIndex(slot if slot >= 0 else 0)
         self.engine_combo.setToolTip(tip_for("engine"))
@@ -224,7 +222,7 @@ class MapTuningMixin(MapTabBase):
 
     def _engine_changed(self, kind: str) -> None:
         """Apply the engine choice live (the tracker picks it up next frame)."""
-        kind = str(kind or "sift")
+        kind = str(kind or "hybrid")
         self.cfg.setdefault("locator", {})["engine"] = kind
         self.app_cfg.locator.engine = cast(Any, kind)
         loc = self.get_loc()
@@ -242,8 +240,6 @@ class MapTuningMixin(MapTabBase):
             "min_inl_local": ("locator", 1, 50, int, "TRACK min_inl in [1 .. 50]"),
             "min_inl_rate_local": ("locator", 0.0, 1.0, float, "TRACK inl% in [0.0 .. 1.0]"),
             "ransac_px": ("locator", 0.5, 24.0, float, "TRACK ransac px in [0.5 .. 24]"),
-            "xfeat_min_cos": ("locator", 0.5, 1.0, float, "XFEAT cos in [0.5 .. 1.0]"),
-            "xfeat_top_k": ("locator", 100, 8000, int, "XFEAT kp in [100 .. 8000]"),
             "track_radius": ("locator", 50, 4000, int, "TRACK rad in [50 .. 4000] px"),
             "ratio_global": ("locator", 0.1, 1.0, float, "RE-ACQ ratio in [0.1 .. 1.0]"),
             "min_inl_global": ("locator", 1, 50, int, "RE-ACQ min_inl in [1 .. 50]"),

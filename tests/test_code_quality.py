@@ -94,9 +94,10 @@ class TestTuningValidation(unittest.TestCase):
         self.assertEqual(self.tab.cfg["capture"]["fps"], 30)
 
     def test_engine_choice_applies_live_and_saves(self):
-        self.assertEqual(self.tab.cfg["locator"].get("engine", "sift"), "sift")
+        self.assertEqual(self.tab.cfg["locator"].get("engine", "hybrid"), "hybrid")
+        self.assertEqual(self.tab.engine_combo.currentText(), "hybrid")
 
-        self.tab.engine_combo.setCurrentText("hybrid")
+        self.tab._engine_changed("hybrid")
 
         self.assertEqual(self.tab.cfg["locator"]["engine"], "hybrid")
         self.assertEqual(self.tab.app_cfg.locator.engine, "hybrid")

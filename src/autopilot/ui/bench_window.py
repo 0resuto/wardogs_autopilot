@@ -1,4 +1,4 @@
-"""Interactive benchmark window (PySide6): synthetic runs over the real engines.
+"""Interactive benchmark window (PySide6): synthetic runs over the real engine.
 
 The window is a thin shell over `autopilot.bench`: it collects a selection of
 engines, scenarios, rates and OAT sweep rows, then a worker thread runs the same
@@ -7,9 +7,8 @@ while two QtCharts views update.
 
 Every piece of bench work happens off the GUI thread. `run_case` drives the
 locator singletons (map, engine, feature index), which the studio thread must not
-touch while a run is in flight, and both the engine availability probe (which
-imports onnxruntime, ~4 s the first time) and the frame rendering are slow
-enough to freeze the UI.
+touch while a run is in flight, and both the engine availability probe and the
+frame rendering are slow enough to freeze the UI.
 
 The window is non-modal and opens from the Logs section, because that section
 owns every control that writes into `output/`.
@@ -183,7 +182,7 @@ class BenchPlan:
 
 
 class ProbeWorker(QThread):
-    """Asks `available_engines` off the GUI thread (onnxruntime import is slow)."""
+    """Asks `available_engines` off the GUI thread (the index load is slow)."""
 
     done = Signal(object, str)
 

@@ -16,6 +16,7 @@ import cv2
 import numpy as np
 
 from ..common.log import get_logger
+from .hybrid import HybridLocalizer
 from .index_search import (
     DEFAULT_MAX_KP,
     IndexSearchMixin,
@@ -74,35 +75,15 @@ FAST_BUDGET_FRAC = 0.4
 
 
 class MapLocator(IndexSearchMixin):
-    """Feature-based localization engine (kind='sift' or kind='orb')."""
+    """SIFT feature-index localization engine (the hybrid's anchor)."""
 
-    def __init__(self, store: MapStore | None = None, kind: str = "sift") -> None:
+    def __init__(self, store: MapStore | None = None) -> None:
         self.store = store or MapStore()
-        self.kind = kind
-        if kind == "xfeat":
-            # learned 64-D descriptors from the ONNX GPU backbone, matched by
-            # cosine similarity (_xfeat_pairs); no classical detector/matcher
-            self.detector = None
-            self.bf = None
-            self.ratio = 1.0
-        elif kind == "orb":
-            # ORB descriptor matching runs on Hamming distance; a slightly
-            # tighter ratio than SIFT keeps the false-match rate down.
-            self.detector = cv2.ORB.create(
-                nfeatures=4000, scaleFactor=1.2, nlevels=8, fastThreshold=20
-            )
-            self.bf = cv2.BFMatcher(cv2.NORM_HAMMING)
-            self.ratio = 0.78
-        else:
-            self.detector = cv2.SIFT.create(
-                nfeatures=6000, contrastThreshold=0.05, edgeThreshold=12
-            )
-            self.bf = cv2.BFMatcher(cv2.NORM_L2)
-            self.ratio = 0.80
+        self.kind = "sift"
+        self.detector = cv2.SIFT.create(nfeatures=6000, contrastThreshold=0.05, edgeThreshold=12)
+        self.bf = cv2.BFMatcher(cv2.NORM_L2)
+        self.ratio = 0.80
         self.clahe = cv2.createCLAHE(2.0, (8, 8))
-        # last successful heading: XFeat derotates the frame with it (the
-        # descriptors are not rotation invariant, the minimap rotates)
-        self._last_th: float | None = None
 
     def heading_deg(self, pose: dict[str, Any]) -> float:
         """Player's heading on the map: 0 deg = north, 90 deg = east (clockwise)."""
@@ -167,17 +148,11 @@ class MapLocator(IndexSearchMixin):
         diag = self._base_diag(mm, ui_mask)
 
         loc = self.store.loc_cfg()
-        if self.kind == "xfeat":
-            # XFeat expects raw pixels (instance norm inside); only UI pixels
-            # are masked out. No CLAHE / percentile stretch pass.
-            max_kp = int(loc.get("xfeat_top_k", 2000) or 2000)
-            passes: list[Callable[[np.ndarray, np.ndarray | None], np.ndarray]] = [
-                self._xfeat_preprocess
-            ]
-        else:
-            max_kp = int(loc.get("max_kp_frame", DEFAULT_MAX_KP))
-            fast = bool(loc.get("fast_clahe", False))
-            passes = [self._clahe_preprocess, shadow_fill_norm] if fast else [shadow_fill_norm]
+        max_kp = int(loc.get("max_kp_frame", DEFAULT_MAX_KP))
+        fast = bool(loc.get("fast_clahe", False))
+        passes: list[Callable[[np.ndarray, np.ndarray | None], np.ndarray]] = (
+            [self._clahe_preprocess, shadow_fill_norm] if fast else [shadow_fill_norm]
+        )
 
         _ = self.store.load_global_map()
         ms = self.store.mini_scale()
@@ -191,30 +166,12 @@ class MapLocator(IndexSearchMixin):
         if idx is None:
             active_name = self.store.map_name()
             diag["reject"] = "no_index"
-            extra = "" if self.kind == "sift" else f" --kind {self.kind}"
             diag["detail"] = (
                 f"{self.kind} feature index not built for {active_name} — run "
-                f"python -m autopilot.vision.featureindex --build {active_name}{extra}"
+                f"python -m autopilot.vision.featureindex --build {active_name}"
             )
             return (None, diag) if debug else None
 
-        if self.kind == "xfeat":
-            return self._localize_xfeat(
-                mm,
-                ui_mask,
-                idx,
-                cx,
-                cy,
-                min_inl=min_inl,
-                budget=budget,
-                t0=t0,
-                progress=progress,
-                prev_s=prev_s,
-                ms=ms,
-                max_kp=max_kp,
-                diag=diag,
-                debug=debug,
-            )
         pose = self._localize_index(
             mm,
             ui_mask,
@@ -233,83 +190,6 @@ class MapLocator(IndexSearchMixin):
             prev_th=prev_th,
         )
         return (pose, diag) if debug else pose
-
-    def _localize_xfeat(
-        self,
-        mm: np.ndarray,
-        ui_mask: np.ndarray | None,
-        idx: Any,
-        cx: float | None,
-        cy: float | None,
-        *,
-        min_inl: int,
-        budget: float | None,
-        t0: float,
-        progress: Callable[[tuple[Any, ...]], None] | None,
-        prev_s: float | None,
-        ms: float,
-        max_kp: int,
-        diag: dict[str, Any],
-        debug: bool,
-    ) -> tuple[dict[str, Any] | None, dict[str, Any]] | dict[str, Any] | None:
-        """XFeat pass with a heading derotation and, when cold, a rotation ring.
-
-        The engine keeps the last successful heading and derotates every frame
-        with it (the descriptors tolerate only ~30 deg). A miss falls back to
-        the full 45-deg ring, so a cold start or a stale heading recovers; the
-        ring reports the candidate with the most inliers, and a ring that found
-        nothing reports the diagnostics of its last attempt (never a bare
-        reject=None).
-        """
-        ring = [0.0, 45.0, 90.0, 135.0, 180.0, 225.0, 270.0, 315.0]
-        known = self._last_th
-        attempts = ([float(known)] + ring) if known is not None else list(ring)
-        best_pose: dict[str, Any] | None = None
-        best_inl = -1
-        best_diag: dict[str, Any] = diag
-        fallback_diag: dict[str, Any] = diag
-        for i, ang in enumerate(attempts):
-            if budget is not None and (time.time() - t0) > budget:
-                fallback_diag = dict(
-                    diag,
-                    reject="budget_timeout",
-                    detail="frame budget exhausted during the rotation ring",
-                )
-                break
-            d = dict(diag)
-            d["derot"] = round(float(ang), 1)
-            pose = self._localize_index(
-                mm,
-                ui_mask,
-                idx,
-                cx,
-                cy,
-                min_inl=min_inl,
-                budget=budget,
-                t0=t0,
-                progress=progress,
-                prev_s=prev_s,
-                ms=ms,
-                max_kp=max_kp,
-                passes=[self._xfeat_preprocess],
-                diag=d,
-                derotate_deg=ang,
-            )
-            if pose is None:
-                fallback_diag = d
-                continue
-            if known is not None and i == 0:
-                self._last_th = float(pose["th"])
-                return (pose, d) if debug else pose
-            if int(pose["inl"]) > best_inl:
-                best_pose, best_inl, best_diag = pose, int(pose["inl"]), d
-        if best_pose is not None:
-            self._last_th = float(best_pose["th"])
-        else:
-            best_diag = fallback_diag
-        if debug:
-            return best_pose, best_diag
-        return best_pose
 
     def _base_diag(self, mm: np.ndarray, ui_mask: np.ndarray | None) -> dict[str, Any]:
         """Diagnostics skeleton shared by every localization pass."""
@@ -362,7 +242,6 @@ class MapLocator(IndexSearchMixin):
         max_kp: int,
         passes: list[Callable[[np.ndarray, np.ndarray | None], np.ndarray]],
         diag: dict[str, Any],
-        derotate_deg: float = 0.0,
         prev_th: float | None = None,
     ) -> dict[str, Any] | None:
         """Run the prep passes and the index search; fills diag, returns the pose."""
@@ -376,7 +255,7 @@ class MapLocator(IndexSearchMixin):
             if budget is not None and len(passes) > 1 and i < len(passes) - 1:
                 sub_budget = budget * FAST_BUDGET_FRAC
             mmf = prep(mm, ui_mask)
-            _kf, _df = self._detect(mmf, max_kp, derotate_deg)
+            _kf, _df = self._detect(mmf, max_kp)
             nfeat = 0 if _df is None else len(_df)
             if nfeat < 4:
                 continue
@@ -489,12 +368,9 @@ class MapLocator(IndexSearchMixin):
 # ==============================================================================
 
 _DEFAULT_STORE = MapStore()
-_DEFAULT_LOCATOR = MapLocator(_DEFAULT_STORE, kind="sift")
-_DEFAULT_ORB: MapLocator | None = None
-_DEFAULT_XFEAT: MapLocator | None = None
-_DEFAULT_HYBRID: Any = None
-_ENGINE = "sift"
-_ENGINES = ("sift", "orb", "xfeat", "hybrid")
+_DEFAULT_LOCATOR = MapLocator(_DEFAULT_STORE)
+_DEFAULT_HYBRID: Any = HybridLocalizer(_DEFAULT_LOCATOR, _DEFAULT_STORE)
+_ENGINE = "hybrid"
 
 # Legacy shared dict access (e.g. tools/map_match_debug.py -> locator._G["mu"])
 _G = _DEFAULT_STORE._g
@@ -506,47 +382,25 @@ RATIO = _DEFAULT_LOCATOR.ratio
 
 
 def engine() -> str:
-    """Active localization engine: 'sift', 'orb', 'xfeat' or 'hybrid'."""
+    """Active localization engine: only 'hybrid' ships."""
     return _ENGINE
 
 
 def set_engine(kind: str) -> None:
     """Select the localization engine used by the `global_pose` facade.
 
-    'orb'/'xfeat' lazily create their MapLocator (their index loads on the
-    first frame; xfeat also warms the ONNX GPU session); 'hybrid' reuses the
-    SIFT locator as the anchor and resets its inter-frame track on every
-    switch.
+    Only 'hybrid' (SIFT anchor + ECC tracking) ships; any other name keeps
+    hybrid and only resets its inter-frame track.
     """
-    global _ENGINE, _DEFAULT_ORB, _DEFAULT_XFEAT, _DEFAULT_HYBRID
-    if kind not in _ENGINES:
-        kind = "sift"
-    if kind == _ENGINE:
-        return
-    if kind == "orb" and _DEFAULT_ORB is None:
-        _DEFAULT_ORB = MapLocator(_DEFAULT_STORE, kind="orb")
-    if kind == "xfeat" and _DEFAULT_XFEAT is None:
-        _DEFAULT_XFEAT = MapLocator(_DEFAULT_STORE, kind="xfeat")
-    if kind == "hybrid":
-        if _DEFAULT_HYBRID is None:
-            from .hybrid import HybridLocalizer
-
-            _DEFAULT_HYBRID = HybridLocalizer(_DEFAULT_LOCATOR, _DEFAULT_STORE)
-        else:
-            _DEFAULT_HYBRID.reset()
-    _ENGINE = kind
-    logger.info("[locator] engine: %s", kind)
+    if str(kind) != "hybrid":
+        logger.warning("[locator] unknown engine %r; keeping hybrid", kind)
+    _DEFAULT_HYBRID.reset()
+    logger.info("[locator] engine: %s", _ENGINE)
 
 
 def _active_engine() -> Any:
     """The locator object the `global_pose` facade dispatches to."""
-    if _ENGINE == "orb" and _DEFAULT_ORB is not None:
-        return _DEFAULT_ORB
-    if _ENGINE == "xfeat" and _DEFAULT_XFEAT is not None:
-        return _DEFAULT_XFEAT
-    if _ENGINE == "hybrid" and _DEFAULT_HYBRID is not None:
-        return _DEFAULT_HYBRID
-    return _DEFAULT_LOCATOR
+    return _DEFAULT_HYBRID
 
 
 def reset_track() -> None:
