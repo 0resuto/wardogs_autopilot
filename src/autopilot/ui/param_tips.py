@@ -232,14 +232,15 @@ PARAM_TIPS: dict[str, str] = {
         "through click corners, may clip obstacles."
     ),
     "xte_m": (
-        "Inner corridor: lower = tight active line; higher = lazy line.\n"
-        "Lower (2-3 m): steers hard as soon as the line drifts. Higher (6+ m):\n"
-        "only corrects after a visible deviation."
+        "Centering dead band: below it the pose jitter gets no wheel command.\n"
+        "lower (0.3-0.8 m) = tighter line, slightly busier wheel; higher\n"
+        "(1.5+ m) = lets the car drift before correcting."
     ),
     "xte_outer_m": (
-        "Outer corridor: lower = reacts sooner; higher = tolerates wide lines.\n"
-        "Past it the driver slows down and steers hardest to rejoin. Lower:\n"
-        "frequent slow-downs; higher: calmer until far off the line."
+        "Centering reference: the wheel, urgency and speed response ramp from\n"
+        "the dead band up to this and saturate past it (one gradient corridor).\n"
+        "lower (2-3 m) = firm early corrections, slows sooner when off line;\n"
+        "higher (6+ m) = calmer, tolerates wide lines."
     ),
     "steer_look_s": (
         "Steering lookahead: lower = tight/active; higher = smooth/cuts bends.\n"

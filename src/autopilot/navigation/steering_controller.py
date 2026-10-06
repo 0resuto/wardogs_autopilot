@@ -35,6 +35,20 @@ URGENCY_SETTLE_CUT = 0.4
 #: Spin recovery holds the wheel twice as long: the truck must come around,
 #: not re-pulse every 2 s while it circles.
 RECOVERY_HOLD_SCALE = 2.0
+#: Above this speed an impulse never upgrades to a continuous hold: the
+#: reference manual drive taps the wheel at speed (p50 0.13 s, p90 0.25 s at
+#: 60+ km/h; its single 1.1 s press was a low-speed manoeuvre), while the
+#: 2026-10-04 14:58 run held a full lock for ~1 s and yawed 25-50 deg per
+#: correction - the weave that ended in the reported skid. Below the threshold
+#: the hold stays: it is the low-speed yaw-authority fight the crawl needs.
+HOLD_MAX_MPS = 10.0
+#: Road turn ahead (deg, `PathTracker.calc_road_turn`) from which the wheel may
+#: be held at any speed: through a bend the truck needs a sustained steer to
+#: reach the grip-limited yaw the route asks for. The 2026-10-04 15:54 run
+#: tapped through a 16 deg bend (~30% duty -> ~3 deg/s vs the route's 7-10),
+#: the heading fell 10 deg behind and the truck cut the curve to xte 16 m.
+#: A hold is only allowed here for an actual bend, not for a centering error.
+CURVE_HOLD_DEG = 8.0
 #: Rotation AGAINST the commanded direction by more than this (deg) sustained
 #: for `WRONG_WAY_S` seconds means the truck is sliding/spinning on the locked
 #: wheel (2026-10-03 02:19 run: half a minute of pinned lock while the heading
@@ -109,6 +123,7 @@ class SteeringController:
         self.micro_ticks = self.pulse_on  # length of the current micro-pulse
         self.micro = False  # micro-tap mode
         self.hold = False  # continuous steering on large errors
+        self.curve_hold = False  # hold allowed because the route bends ahead
         self.hold_err0 = 0.0  # |err| at hold-mode engagement
         self.big_n = 0  # consecutive big-error ticks (debounce)
         self.ang = 0.0  # heading angular velocity (deg/s)
@@ -229,6 +244,7 @@ class SteeringController:
         braking: bool = False,
         center_urgency: float = 0.0,
         recovery: bool = False,
+        curve: float | None = None,
     ) -> int:
         """Evaluate steering state machine and return active key command (-1=A, 0=None, +1=D).
 
@@ -258,6 +274,9 @@ class SteeringController:
         if recovery:
             impulse_scale *= RECOVERY_HOLD_SCALE
         settle_scale = 1.0 - URGENCY_SETTLE_CUT * urgency
+        curve_hold = curve is not None and curve >= CURVE_HOLD_DEG
+        self.curve_hold = curve_hold
+        hold_ok = recovery or curve_hold or mv_mps is None or mv_mps <= HOLD_MAX_MPS
 
         pose_stale = pose_age is not None and pose_age > self.pose_timeout
         if pose_stale:
@@ -281,7 +300,7 @@ class SteeringController:
                 if err > self.dead:
                     self.steer = 1
                     self.micro = False
-                    self.hold = self.big_n >= 2 or recovery
+                    self.hold = (self.big_n >= 2 or recovery) and hold_ok
                     self.hold_err0 = abs(err)
                     self.imp_end = self._impulse_end(now, err, yaw_rate_max, impulse_scale)
                     self.press_t0 = now
@@ -290,7 +309,7 @@ class SteeringController:
                 elif err < -self.dead:
                     self.steer = -1
                     self.micro = False
-                    self.hold = self.big_n >= 2 or recovery
+                    self.hold = (self.big_n >= 2 or recovery) and hold_ok
                     self.hold_err0 = abs(err)
                     self.imp_end = self._impulse_end(now, err, yaw_rate_max, impulse_scale)
                     self.press_t0 = now
@@ -299,7 +318,7 @@ class SteeringController:
         else:
             # Upgrade an in-progress impulse to continuous steering once a
             # big error persists across the debounce window (~2 poses).
-            if not self.hold and (self.big_n >= 2 or recovery):
+            if not self.hold and (self.big_n >= 2 or recovery) and hold_ok:
                 self.hold = True
                 self.imp_end = now + self.hold_max * impulse_scale
 
@@ -327,10 +346,19 @@ class SteeringController:
                 released = opposite or wrong_way
             elif self.hold:
                 # Continuous steering: keep turning until the heading really
-                # aligns with the bearing (not an impulse timeout).
+                # aligns with the bearing (not an impulse timeout). In a bend
+                # the `turned` release would cut the hold every time the truck
+                # catches up with the aim, which re-taps instead of tracking
+                # the bend: the wheel stays pressed while the bend lasts.
                 aligned = abs(pred_err) < self.dead
                 turned = rotated_eff >= min(abs(pred_err), self.hold_err0) * 0.8 + self.dead_off
-                released = aligned or turned or opposite or wrong_way or now >= self.imp_end
+                released = (
+                    aligned
+                    or (turned and not self.curve_hold)
+                    or opposite
+                    or wrong_way
+                    or now >= self.imp_end
+                )
             else:
                 released = (
                     rotated_eff >= abs(pred_err) * 0.85 + self.dead_off

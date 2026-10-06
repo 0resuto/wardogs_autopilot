@@ -216,12 +216,12 @@ class TestStaleMeasuredPose(unittest.TestCase):
         nav = NavigatorConfig(arrive_r=25.0, poll=0.01, settle_s=0.1)
         driver = FollowDriver(loc=loc, pts=[(0.0, 0.0), (100000.0, 0.0)], nav_cfg=nav, kb=kb)
 
-        def publish(x: float, th: float, good: bool) -> None:
+        def publish(x: float, th: float, good: bool, y: float = 0.0) -> None:
             now = time.time()
             loc.latest = dict(
                 ts=now,
                 pose=dict(th=th, s=1.0, inl=20),
-                map_px=(x, 0.0),
+                map_px=(x, y),
                 good=good,
             )
 
@@ -231,12 +231,11 @@ class TestStaleMeasuredPose(unittest.TestCase):
             while time.time() - t0 < 2.0:
                 publish(100.0 + 40.0 * (time.time() - t0), 90.0, True)
                 time.sleep(0.005)
-            # drive against the route -> the motion course gives a big error.
-            # The pose heading stays constant: a synthetic 90 -> 210 flip is
-            # (correctly) rejected by the pose heading-rate gate.
+            # drive off the route line (a real xte) -> the wheel must be
+            # active; the frozen pose below must then release it
             hold_start = time.time()
             while time.time() - hold_start < 1.2:
-                publish(200.0 - 40.0 * (time.time() - hold_start), 90.0, True)
+                publish(200.0 - 40.0 * (time.time() - hold_start), 90.0, True, y=60.0)
                 time.sleep(0.005)
             steered = any(e[0] == "keys" and ("A" in e[1] or "D" in e[1]) for e in kb.events)
             self.assertTrue(steered)
@@ -804,10 +803,10 @@ class TestProgressiveRejoin(unittest.TestCase):
         speed for it braked through normal cornering (the "brakes for no
         reason" report from the 2026-10-01 22:19 run).
         """
-        driver = self._driver()  # xte_m = 4.0
+        driver = self._driver()  # xte_m = 0.5 (dead band)
 
-        self.assertIsNone(driver._recovery_speed_cap_kmh(1.0, 45.0, False))
-        self.assertIsNone(driver._recovery_speed_cap_kmh(4.0, 25.0, False))
+        self.assertIsNone(driver._recovery_speed_cap_kmh(0.3, 45.0, False))
+        self.assertIsNone(driver._recovery_speed_cap_kmh(0.5, 25.0, False))
 
     def test_misaligned_cap_eases_down_with_the_error(self):
         driver = self._driver(xte_m=1.0, xte_outer_m=5.0)

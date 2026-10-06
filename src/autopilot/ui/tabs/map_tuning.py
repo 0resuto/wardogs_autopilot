@@ -76,10 +76,10 @@ _TUNE_GROUPS: list[tuple[str, list[tuple[Any, ...]]]] = [
         ],
     ),
     (
-        "Corridors",
+        "Centering",
         [
-            ("inner m", "xte_m", 4.0, False, "navigator"),
-            ("outer m", "xte_outer_m", 12.0, False, "navigator"),
+            ("dead m", "xte_m", 0.5, False, "navigator"),
+            ("ref m", "xte_outer_m", 4.0, False, "navigator"),
             ("look s", "steer_look_s", 1.6, False, "navigator"),
             ("settle s", "settle_s", 0.6, False, "navigator"),
             ("lead s", "steer_lead_s", 0.25, False, "navigator"),
@@ -263,8 +263,8 @@ class MapTuningMixin(MapTabBase):
             "corner_max_kmh": ("navigator", 0.0, 79.0, float, "VEH max km/h in [0 .. 79]"),
             "plan_ahead_m": ("navigator", 20.0, 1000.0, float, "VEH ahead m in [20 .. 1000]"),
             "corner_cut_m": ("navigator", 4.0, 60.0, float, "VEH cut m in [4 .. 60]"),
-            "xte_m": ("navigator", 1.0, 30.0, float, "COR inner m in [1 .. 30]"),
-            "xte_outer_m": ("navigator", 4.0, 60.0, float, "COR outer m in [4 .. 60]"),
+            "xte_m": ("navigator", 0.0, 10.0, float, "CEN dead m in [0 .. 10]"),
+            "xte_outer_m": ("navigator", 0.5, 20.0, float, "CEN ref m in [0.5 .. 20]"),
             "steer_look_s": ("navigator", 0.4, 4.0, float, "COR look s in [0.4 .. 4.0]"),
             "settle_s": ("navigator", 0.1, 2.0, float, "COR settle s in [0.1 .. 2.0]"),
             "steer_lead_s": ("navigator", 0.0, 1.0, float, "COR lead s in [0.0 .. 1.0]"),
@@ -288,7 +288,7 @@ class MapTuningMixin(MapTabBase):
             parsed[section][name] = v
 
         if parsed["navigator"]["xte_outer_m"] <= parsed["navigator"]["xte_m"]:
-            self.tune_status.setText("Invalid COR outer m must be greater than inner m")
+            self.tune_status.setText("Invalid CEN ref m must be greater than dead m")
             self.tune_status.setStyleSheet(f"color: {RED};")
             return
 

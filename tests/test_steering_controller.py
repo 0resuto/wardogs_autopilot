@@ -330,5 +330,83 @@ class TestInputJitter(unittest.TestCase):
         self.assertAlmostEqual(end, 10.0 + ctrl.hold_max, delta=1e-9)
 
 
+class TestHoldIsSpeedGated(unittest.TestCase):
+    """At speed the controller taps the wheel; a held full lock over-rotates.
+
+    The reference manual drive taps 0.13-0.25 s at 60+ km/h, while the
+    2026-10-04 14:58 run held ~1 s and yawed 25-50 deg per correction.
+    """
+
+    @staticmethod
+    def _two_big_steps(mv_mps: float) -> SteeringController:
+        ctrl = SteeringController()
+        for i in range(2):
+            ctrl.step(
+                now=100.0 + 0.05 * i,
+                err=40.0,
+                heading=0.0,
+                mh=0.0,
+                mh_t=1.0,
+                mv_mps=mv_mps,
+            )
+        return ctrl
+
+    def test_no_hold_at_speed(self):
+        ctrl = self._two_big_steps(20.0)
+
+        self.assertFalse(ctrl.hold)
+        self.assertEqual(ctrl.steer, 1)
+
+    def test_hold_at_low_speed(self):
+        ctrl = self._two_big_steps(5.0)
+
+        self.assertTrue(ctrl.hold)
+
+    def test_recovery_still_holds_at_speed(self):
+        ctrl = SteeringController()
+        ctrl.step(
+            now=100.0,
+            err=150.0,
+            heading=0.0,
+            mh=0.0,
+            mh_t=1.0,
+            mv_mps=20.0,
+            recovery=True,
+        )
+
+        self.assertTrue(ctrl.hold)
+
+    def test_bend_allows_the_hold_at_speed(self):
+        """A route bend needs a sustained steer: the wheel stays pressed."""
+        ctrl = SteeringController()
+        for i in range(2):
+            ctrl.step(
+                now=100.0 + 0.05 * i,
+                err=40.0,
+                heading=0.0,
+                mh=0.0,
+                mh_t=1.0,
+                mv_mps=20.0,
+                curve=16.0,
+            )
+
+        self.assertTrue(ctrl.hold)
+
+    def test_straight_does_not_allow_the_hold(self):
+        ctrl = SteeringController()
+        for i in range(2):
+            ctrl.step(
+                now=100.0 + 0.05 * i,
+                err=40.0,
+                heading=0.0,
+                mh=0.0,
+                mh_t=1.0,
+                mv_mps=20.0,
+                curve=3.0,
+            )
+
+        self.assertFalse(ctrl.hold)
+
+
 if __name__ == "__main__":
     unittest.main()

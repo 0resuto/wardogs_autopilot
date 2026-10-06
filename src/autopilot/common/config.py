@@ -166,7 +166,10 @@ class LocatorConfig(BaseModel):
         description="Hybrid engine: align every frame directly against the map "
         "patch rendered at the predicted pose instead of the previous frame. "
         "Absolute per-frame measurement: no drift accumulation (the "
-        "frame-to-frame track wanders 3-10 m between anchors)",
+        "frame-to-frame track wanders 3-10 m between anchors). Measured cc on "
+        "the coarse working map is only ~0.42 (frame-to-frame: 0.94+), so the "
+        "pose jitters; keep off until the patch is rendered from a sharper "
+        "map source",
     )
     hybrid_map_min_cc: float = Field(
         default=0.35,
@@ -319,11 +322,17 @@ class NavigatorConfig(BaseModel):
         le=60.0,
         description="Distance over which a sharp vertex is rounded (meters)",
     )
-    xte_m: float = Field(default=4.0, ge=0.0, description="Inner corridor half-width (meters)")
+    xte_m: float = Field(
+        default=0.5,
+        ge=0.0,
+        description="Centering dead band (m): below it the pose jitter gets no wheel command",
+    )
     xte_outer_m: float = Field(
-        default=12.0,
-        ge=4.0,
-        description="Outer corridor half-width: past it the driver slows down and steers firmly",
+        default=4.0,
+        ge=0.5,
+        description="Centering reference (m): the wheel, urgency and speed response ramps "
+        "smoothly from the dead band up to this and saturates past it (single gradient "
+        "corridor instead of the old inner/outer tier steps)",
     )
     steer_look_s: float = Field(
         default=1.6,

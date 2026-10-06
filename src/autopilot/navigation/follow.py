@@ -514,7 +514,11 @@ class FollowDriver(FinalStopMixin, threading.Thread):
             return False
         if now - self._stuck_t0 >= STUCK_WINDOW_S:
             progress_m = self._m(self._stuck_dist - dist)  # positive = closer
-            off = abs(xte) > self.xte_m * self._px_per_m_now() and abs(err) > ESCAPE_ERR_DEG
+            # genuinely off the route (not merely outside the centering band)
+            off = (
+                abs(xte) > self.xte_outer_m * 1.5 * self._px_per_m_now()
+                and abs(err) > ESCAPE_ERR_DEG
+            )
             self._stuck_active = progress_m < STUCK_MIN_PROGRESS_M and off
             self._stuck_t0 = now
             self._stuck_dist = dist
@@ -1081,6 +1085,7 @@ class FollowDriver(FinalStopMixin, threading.Thread):
             braking=bool(self.speed_ctrl.is_braking),
             center_urgency=center_urgency,
             recovery=spin,
+            curve=road_turn,
         )
         keys: dict[str, bool] = {}
         gas_w = brake_space = False

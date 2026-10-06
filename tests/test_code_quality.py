@@ -162,7 +162,7 @@ class TestTuningValidation(unittest.TestCase):
         self.tab.tune_inputs["xte_outer_m"].setText("5")
         self.tab.apply_tune()
 
-        self.assertIn("Invalid COR outer", self.tab.tune_status.text())
+        self.assertIn("Invalid CEN ref", self.tab.tune_status.text())
 
     def test_corner_window_requires_max_above_min(self):
         self.tab.tune_inputs["corner_min_kmh"].setText("12")

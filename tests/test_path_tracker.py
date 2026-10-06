@@ -333,6 +333,27 @@ class TestCorridorGainRamp(unittest.TestCase):
             abs(wrap180(bearing_flat - 90.0)),
         )
 
+    def test_noisy_drift_does_not_oscillate_the_aim(self):
+        """A 1 Hz lateral wobble must not swing the aim bearing.
+
+        The 0.7 s trend horizon on the raw rate amplified the pose noise and
+        the aim swung +-40 deg every 0.2-0.4 s (2026-10-04 15:31 run): the
+        driver chased the swinging aim and the truck weaved.
+        """
+        route = [(0.0, 0.0), (1000.0, 0.0), (2000.0, 0.0)]
+        tracker = PathTracker(route, xte_m=2.0, xte_outer_m=6.0)
+        tracker.idx = 1
+        tracker._mv = 20.0
+        bearings = []
+        for i in range(80):
+            t = 100.0 + 0.04 * i
+            y = 6.0 * math.sin(2.0 * math.pi * (t - 100.0)) + 0.5 * ((-1) ** i)
+            _xte, _lim, bearing = tracker.calc_xte_and_bearing((990.0, y), 2.0, now=t)
+            bearings.append(bearing)
+
+        steps = [abs(wrap180(bearings[i] - bearings[i - 1])) for i in range(1, len(bearings))]
+        self.assertLess(max(steps), 10.0)
+
 
 class TestCrossTrack(unittest.TestCase):
     def test_bearing_is_continuous_across_the_corridor_limit(self):

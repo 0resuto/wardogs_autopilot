@@ -12,12 +12,14 @@ from .steering_controller import wrap180
 #: pursuit look (~30 m at speed) whose bearing deviation stays under the dead
 #: zone until the car is at the corridor edge.
 XTE_AIM_M = 12.0
-#: Trend prediction horizon (s): the centering term aims where the car will be
-#: if the current lateral rate continues, so a drift toward the edge is
-#: corrected before it becomes large.
-XTE_TREND_S = 0.7
+#: Trend prediction horizon (s): the centering term aims slightly where the
+#: car will be if the current lateral rate continues. Kept short and with a
+#: slow rate filter: the 0.7 s horizon on the raw ~24 Hz rate amplified the
+#: position noise, the predicted xte flipped sign every few samples and the
+#: aim bearing swung +-40 deg at 0.2-0.4 s (2026-10-04 15:31 run, the weave).
+XTE_TREND_S = 0.2
 #: Base centering gain applied from the centre (not only past the inner edge).
-XTE_GAIN = 0.7
+XTE_GAIN = 0.4
 
 
 class PathTracker:
@@ -396,7 +398,10 @@ class PathTracker:
                 dt = now - self._xte_last_t
                 if 1e-3 < dt < 1.0:
                     inst = (xte - self._xte_last) / dt
-                    self._xte_rate = self._xte_rate * 0.5 + inst * 0.5
+                    # slow filter (~0.4 s): the raw rate is dominated by pose
+                    # noise at the ~24 Hz loop and a fast filter made the
+                    # centering term oscillate
+                    self._xte_rate = self._xte_rate * 0.9 + inst * 0.1
                     xte_rate = self._xte_rate
             self._xte_last = xte
             self._xte_last_t = now
@@ -441,13 +446,13 @@ class PathTracker:
 
         The aim deviation relative to the segment direction mixes the
         curvature lead over the lookahead with an explicit centering term:
-        the cross-track error is predicted `XTE_TREND_S` ahead from its rate
-        and aimed at the near point `XTE_AIM_M` away, so 1-2 m of drift is
-        already a wheel command instead of a one-tick tap under the dead zone.
-        The gain ramps continuously from the centre to the outer edge - the
-        old hard steps let the loop ping-pong across the boundary - and the
-        result stays clamped short of perpendicular. The speed side of the
-        outer corridor is handled by the driver.
+        the cross-track error is predicted `XTE_TREND_S` ahead from its slowly
+        filtered rate and aimed at the near point `XTE_AIM_M` away, so 1-2 m of
+        drift is already a wheel command instead of a one-tick tap under the
+        dead zone. The gain ramps continuously from the centre to the outer
+        edge - the old hard steps let the loop ping-pong across the boundary -
+        and the result stays clamped short of perpendicular. The speed side of
+        the outer corridor is handled by the driver.
         """
         corr = wrap180(bearing - seg_dir)
         xte_m = abs(xte) / px_per_m if px_per_m > 0 else 0.0
@@ -460,7 +465,7 @@ class PathTracker:
             min(3.0 * self.xte_outer_m * px_per_m, xte_pred),
         )
         corr_xte = math.degrees(math.atan2(xte_pred, max(XTE_AIM_M * px_per_m, 1.0)))
-        corr += (XTE_GAIN + 1.2 * frac) * corr_xte
+        corr += (XTE_GAIN + 0.6 * frac) * corr_xte
         corr = max(-cap, min(cap, corr))
         return (seg_dir + corr) % 360.0
 
