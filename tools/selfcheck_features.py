@@ -78,7 +78,9 @@ def _synthetic_mm(mu, cx, cy):
 def _pose_ok(pose, diag, expected):
     if pose is None:
         return False, "pose is None (reject=%s %s)" % (diag.get("reject"), diag.get("detail"))
-    if pose["inl"] < 4:
+    # the hybrid ECC track carries no feature inliers, only a correlation
+    # coefficient; the inlier floor applies to feature matches
+    if pose.get("inl", 0) < 4 and "cc" not in pose:
         return False, "inl=%d < 4" % pose["inl"]
     err = math.hypot(pose["map_x"] - expected[0], pose["map_y"] - expected[1])
     if err >= TOL_NATIVE_PX:
@@ -88,14 +90,6 @@ def _pose_ok(pose, diag, expected):
 
 def _run_mode(mu, cx, cy, mm, expected, engine="sift"):
     print("--- %s run ---" % engine)
-    locator._loc_cfg = lambda: dict(
-        local_radius=450.0,
-        radius_growth=1.6,
-        global_max_features=60000,
-        ratio=0.80,
-        min_inl=4,
-        min_inl_rate=0.0,
-    )
     ui = np.zeros(mm.shape[:2], bool)
 
     pose, diag = locator.global_pose(mm, ui, prev_xy=None, debug=True, budget=30.0)

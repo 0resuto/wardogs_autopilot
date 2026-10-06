@@ -19,7 +19,7 @@ from autopilot.common.config import AppConfig  # noqa: E402
 from autopilot.vision import featureindex, locator  # noqa: E402
 from autopilot.vision import tracker as tracker_mod  # noqa: E402
 from autopilot.vision import xfeat as xfeat_mod  # noqa: E402
-from autopilot.vision.hybrid import HybridLocalizer  # noqa: E402
+from autopilot.vision.hybrid import MAX_ANCHOR_MISSES, HybridLocalizer  # noqa: E402
 from autopilot.vision.tracker import LiveLocator  # noqa: E402
 
 
@@ -357,6 +357,53 @@ class TestHybridFlow(unittest.TestCase):
         self.assertIsNone(h._M)
         self.assertTrue(diag.get("anchor"))
         self.assertEqual(diag.get("engine"), "hybrid")
+
+    def test_anchor_miss_keeps_a_healthy_track(self):
+        anchor = _FakeAnchor(dict(self.ANCHOR_POSE))
+        h = HybridLocalizer(anchor=anchor, store=_FakeStore({"hybrid_reanchor_s": 10.0}))
+        frame = _texture(seed=8)
+        _hybrid_step(h, frame)
+        anchor.pose = None  # type: ignore[assignment]
+        h._anchor_t -= 20.0  # force the periodic anchor
+
+        pose, diag = _hybrid_step(h, frame, prev=(1000.0, 2000.0))
+
+        self.assertIsNotNone(pose)
+        self.assertFalse(diag.get("anchor"))
+        self.assertEqual(diag.get("mode"), "hybrid")
+        self.assertIsNotNone(h._M)
+        self.assertIsNotNone(h._prev_pp)
+
+    def test_anchor_misses_are_bounded(self):
+        anchor = _FakeAnchor(dict(self.ANCHOR_POSE))
+        h = HybridLocalizer(anchor=anchor, store=_FakeStore({"hybrid_reanchor_s": 10.0}))
+        frame = _texture(seed=9)
+        _hybrid_step(h, frame)
+        anchor.pose = None  # type: ignore[assignment]
+
+        for miss in range(MAX_ANCHOR_MISSES):
+            h._anchor_t -= 20.0
+            pose, _diag = _hybrid_step(h, frame, prev=(1000.0, 2000.0))
+            self.assertIsNotNone(pose, "the track must bridge miss %d" % (miss + 1))
+
+        h._anchor_t -= 20.0
+        pose, diag = _hybrid_step(h, frame, prev=(1000.0, 2000.0))
+        self.assertIsNone(pose)
+        self.assertIsNone(h._M)
+        self.assertIsNone(h._prev_pp)
+
+    def test_track_drift_past_the_cap_forces_an_anchor(self):
+        anchor = _FakeAnchor(self.ANCHOR_POSE)
+        h = HybridLocalizer(anchor=anchor, store=_FakeStore({"hybrid_reanchor_s": 10.0}))
+        frame = _texture(seed=10)
+        _hybrid_step(h, frame)
+        h._anchor_th = 180.0  # the ECC heading (0) now contradicts the anchor
+
+        pose, diag = _hybrid_step(h, frame, prev=(1000.0, 2000.0))
+
+        self.assertEqual(anchor.calls, 2)
+        self.assertTrue(diag.get("anchor"))
+        self.assertIsNotNone(pose)
 
 
 if __name__ == "__main__":

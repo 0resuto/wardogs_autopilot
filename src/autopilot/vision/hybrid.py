@@ -36,11 +36,27 @@ logger = get_logger("hybrid")
 #: the minimap's rendering aliasing.
 ECC_CRITERIA = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 1e-4)
 
+#: Consecutive failed anchors after which the ECC track is dropped. A healthy
+#: track bridges a short anchor outage (blind frames), but an uncorrected track
+#: must not outlive a few misses.
+MAX_ANCHOR_MISSES = 3
+
+#: ECC heading drift (deg) from the last successful anchor beyond which the
+#: track is not published: the tracker feeds the published heading back as the
+#: anchor rotation prior, and a prior no correct anchor can match would lock
+#: the anchor rotation gate (locator.anchor_rot_gate_deg) indefinitely.
+MAX_TRACK_DRIFT_DEG = 45.0
+
 
 def _inv3(m: np.ndarray) -> np.ndarray:
     """Inverse of a 2x3 affine as a full 3x3 matrix."""
     full = np.vstack([m, [0.0, 0.0, 1.0]]).astype(np.float64)
     return np.linalg.inv(full)
+
+
+def _ang_diff(a: float, b: float) -> float:
+    """Smallest angular difference in degrees between two headings."""
+    return abs((a - b + 540.0) % 360.0 - 180.0)
 
 
 class HybridLocalizer:
@@ -55,11 +71,15 @@ class HybridLocalizer:
         self._anchor_map: str | None = None
         self._anchor_inl = 0
         self._anchor_n = 0
+        self._anchor_miss = 0
+        self._anchor_th: float | None = None
 
     def reset(self) -> None:
         """Forget the track: the next frame runs a full SIFT anchor."""
         self._prev_pp = None
         self._M = None
+        self._anchor_miss = 0
+        self._anchor_th = None
 
     def global_pose(
         self,
@@ -76,7 +96,6 @@ class HybridLocalizer:
         """One hybrid step: ECC update when fresh, else a SIFT anchor."""
         cfg = self.store.loc_cfg()
         period = float(cfg.get("hybrid_reanchor_s", 1.0) or 0.0)
-        min_cc = float(cfg.get("hybrid_min_cc", 0.5) or 0.0)
         map_now = self.store.map_name()
         if self._anchor_map != map_now:
             self.reset()
@@ -93,32 +112,9 @@ class HybridLocalizer:
         diag: dict[str, Any] = dict(
             mode="hybrid", engine="hybrid", anchor=False, reject=None, detail="OK (hybrid track)"
         )
-        map_ecc = bool(cfg.get("hybrid_map_ecc", False))
-        map_cc = float(cfg.get("hybrid_map_min_cc", 0.35) or 0.0)
         if not need_anchor:
-            M_prev = self._M
-            assert M_prev is not None
-            if map_ecc:
-                # Absolute measurement: the frame is aligned against the map
-                # itself, so the position error cannot accumulate between
-                # anchors (the frame-to-frame track wandered 3-10 m per second).
-                ok, warp, cc, why = self._track_map(pp, M_prev, mm.shape[:2])
-                cc_floor = map_cc
-            else:
-                ok, warp, cc, why = self._track(pp)
-                cc_floor = min_cc
-            if ok and warp is not None and cc >= cc_floor:
-                M = M_prev @ _inv3(warp)
-                pose = self._pose_from_M(M, mm, cfg)
-                # ECC is not a feature match: reporting the last anchor's
-                # inliers let the vote's strong-candidate bypass trust stale
-                # evidence. The correlation coefficient is its real quality.
-                pose["inl"] = 0
-                pose["n_match"] = 0
-                pose["cc"] = round(float(cc), 4)
-                pose["anchor_inl"] = self._anchor_inl
-                self._M = M
-                self._prev_pp = pp
+            pose, cc, why = self._track_step(pp, mm, cfg)
+            if pose is not None:
                 diag["cc"] = round(cc, 4)
                 diag["anchor_age"] = round(now - self._anchor_t, 2)
                 return (pose, diag) if debug else pose
@@ -145,7 +141,32 @@ class HybridLocalizer:
         if diag.get("reject"):
             adiag["reanchor"] = diag.get("detail", "")
         if pose is None:
-            # no anchor: do not keep tracking from a stale track
+            self._anchor_miss += 1
+            # A short anchor outage must not kill a healthy track: a blind
+            # frame keeps the ECC pose until the misses pile up.
+            if (
+                self._anchor_miss <= MAX_ANCHOR_MISSES
+                and self._M is not None
+                and self._prev_pp is not None
+                and self._prev_pp.shape == pp.shape
+            ):
+                tpose, cc, why = self._track_step(pp, mm, cfg)
+                if tpose is not None:
+                    age = round(now - self._anchor_t, 2)
+                    self._anchor_t = now  # retry the anchor in one period
+                    tdiag = dict(
+                        mode="hybrid",
+                        engine="hybrid",
+                        anchor=False,
+                        reject=None,
+                        detail="OK (hybrid track after anchor miss)",
+                        cc=round(cc, 4),
+                        anchor_age=age,
+                        anchor_miss=self._anchor_miss,
+                        anchor_reject=adiag.get("reject") or "anchor_failed",
+                    )
+                    return (tpose, tdiag) if debug else tpose
+            # no usable track left: do not keep tracking from a stale one
             self._prev_pp = None
             self._M = None
             return (None, adiag) if debug else None
@@ -155,7 +176,49 @@ class HybridLocalizer:
         self._anchor_map = map_now
         self._anchor_inl = int(pose.get("inl", 0))
         self._anchor_n = int(pose.get("n_match", 0))
+        self._anchor_th = float(pose["th"])
+        self._anchor_miss = 0
         return (pose, adiag) if debug else pose
+
+    def _track_step(
+        self, pp: np.ndarray, mm: np.ndarray, cfg: dict[str, Any]
+    ) -> tuple[dict[str, Any] | None, float, str]:
+        """One ECC update; (pose, cc, why) with pose None when it is rejected.
+
+        The pose is dropped when the correlation is under its floor or the
+        heading has drifted past MAX_TRACK_DRIFT_DEG from the last anchor.
+        """
+        M_prev = self._M
+        assert M_prev is not None
+        if bool(cfg.get("hybrid_map_ecc", False)):
+            # Absolute measurement: the frame is aligned against the map
+            # itself, so the position error cannot accumulate between
+            # anchors (the frame-to-frame track wandered 3-10 m per second).
+            cc_floor = float(cfg.get("hybrid_map_min_cc", 0.35) or 0.0)
+            ok, warp, cc, why = self._track_map(pp, M_prev, mm.shape[:2])
+        else:
+            cc_floor = float(cfg.get("hybrid_min_cc", 0.5) or 0.0)
+            ok, warp, cc, why = self._track(pp)
+        if not ok or warp is None or cc < cc_floor:
+            return None, float(cc), why
+        M = M_prev @ _inv3(warp)
+        pose = self._pose_from_M(M, mm, cfg)
+        if (
+            self._anchor_th is not None
+            and _ang_diff(float(pose["th"]), self._anchor_th) > MAX_TRACK_DRIFT_DEG
+        ):
+            drift = _ang_diff(float(pose["th"]), self._anchor_th)
+            return None, float(cc), "heading drift %.0f deg from the anchor" % drift
+        # ECC is not a feature match: reporting the last anchor's inliers let
+        # the vote's strong-candidate bypass trust stale evidence. The
+        # correlation coefficient is its real quality.
+        pose["inl"] = 0
+        pose["n_match"] = 0
+        pose["cc"] = round(float(cc), 4)
+        pose["anchor_inl"] = self._anchor_inl
+        self._M = M
+        self._prev_pp = pp
+        return pose, float(cc), why
 
     def _track(self, pp: np.ndarray) -> tuple[bool, np.ndarray | None, float, str]:
         """ECC euclidean step from the previous frame to `pp`."""

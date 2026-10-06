@@ -3,7 +3,9 @@
 import collections
 import os
 import sys
+import time
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
@@ -13,6 +15,8 @@ if os.path.join(ROOT, "src") not in sys.path:
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
+from autopilot.common.config import AppConfig  # noqa: E402
+from autopilot.vision import tracker as tracker_mod  # noqa: E402
 from autopilot.vision.tracker import (  # noqa: E402
     LiveLocator,
     _course_from_hist,
@@ -174,6 +178,75 @@ class TestAnchorPrevTh(unittest.TestCase):
         loc._speed_t = 100.0
 
         self.assertIsNone(loc._anchor_prev_th(100.2))
+
+
+class TestMapSwitchReset(unittest.TestCase):
+    """A map switch must not keep seeding searches with the old map's pose."""
+
+    def test_map_change_drops_the_pose_state(self):
+        loc = LiveLocator({}, np.zeros((4, 4), bool))
+        loc._prev_xy = (1.0, 2.0)
+        loc._last_accepted = (1.0, 2.0)
+        loc._vote_buf.append((1.0, 2.0, None))
+
+        with patch.object(tracker_mod.locator, "map_name", lambda: "other-map"):
+            loc._sync_map()
+
+        self.assertIsNone(loc._prev_xy)
+        self.assertIsNone(loc._last_accepted)
+        self.assertEqual(len(loc._vote_buf), 0)
+
+    def test_same_map_keeps_the_pose_state(self):
+        loc = LiveLocator({}, np.zeros((4, 4), bool))
+        loc._prev_xy = (1.0, 2.0)
+
+        with patch.object(tracker_mod.locator, "map_name", lambda: loc._map):
+            loc._sync_map()
+
+        self.assertEqual(loc._prev_xy, (1.0, 2.0))
+
+
+class TestVoteRejectResetsTrack(unittest.TestCase):
+    """A rejected relocation candidate must not survive inside the engine."""
+
+    def test_vote_reject_resets_the_engine_track(self):
+        calls = {"n": 0}
+
+        def fake_pose(_mm, _mask, **_kwargs):
+            jumped = calls["n"] > 0
+            calls["n"] += 1
+            inl = 5 if jumped else 50
+            x = 4000.0 if jumped else 0.0
+            return (
+                dict(map_x=x, map_y=0.0, th=0.0, s=1.0, inl=inl),
+                dict(reject=None, detail="OK (fake)"),
+            )
+
+        cfg = AppConfig()
+        cfg.capture.fps = 100
+        loc = LiveLocator(
+            cfg=cfg,
+            mask=np.zeros((64, 64), bool),
+            frame_source=lambda: np.zeros((64, 64, 3), np.uint8),
+        )
+        reset_calls = {"n": 0}
+
+        def fake_reset():
+            reset_calls["n"] += 1
+
+        with (
+            patch.object(tracker_mod.locator, "load_global_map", lambda: None),
+            patch.object(tracker_mod.locator, "global_pose", fake_pose),
+            patch.object(tracker_mod.locator, "reset_track", fake_reset),
+        ):
+            loc.start()
+            deadline = time.time() + 5.0
+            while reset_calls["n"] < 1 and time.time() < deadline:
+                time.sleep(0.01)
+            loc.stop()
+            loc.join(timeout=2.0)
+
+        self.assertGreaterEqual(reset_calls["n"], 1, "vote rejection did not reset the track")
 
 
 if __name__ == "__main__":

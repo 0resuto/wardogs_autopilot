@@ -191,6 +191,7 @@ class LiveLocator(threading.Thread):
         self._counts: collections.Counter[str] = collections.Counter()  # reject reason tally
         self._last_frame_error: str | None = None  # dedup for per-frame error logging
         self._engine = locator.engine()  # synced to locator.engine config on first frame
+        self._map = locator.map_name()  # synced to locator.map_name on every frame
         self.search_now: tuple[Any, ...] | str | None = (
             None  # sector being searched right now ('disc'/'global')
         )
@@ -283,7 +284,21 @@ class LiveLocator(threading.Thread):
         self._motion_hist.clear()
         self._course = None
         self._course_t = 0.0
+        self._local_timeouts = 0
         self._smoother.reset()
+
+    def _sync_map(self) -> None:
+        """Drop the pose state when the active map changed under the thread.
+
+        The hybrid resets its own track on a map switch, but the stale
+        `_prev_xy`/vote buffer/smoother of the old map would still seed a
+        wrong local search on the new one.
+        """
+        name = locator.map_name()
+        if name != self._map:
+            self._map = str(name)
+            self._reset_engine_state()
+            self.phase = "map: %s..." % name
 
     def _motion_course(self, now: float) -> float | None:
         """Direction of travel from the accepted positions (None = not moving)."""
@@ -447,6 +462,7 @@ class LiveLocator(threading.Thread):
                     self._speed_kmh = float(item["speed_kmh"])
                     self._speed_t = t0
                 self.error = None
+                self._sync_map()
                 # engine switch (Map -> Tracking combo): reconfigure the
                 # locator facade and drop every prior-track state so the new
                 # engine cold-starts instead of inheriting a stale pose
@@ -480,6 +496,7 @@ class LiveLocator(threading.Thread):
                         self._prev_xy = None
                         self._vote_buf.clear()
                         self._local_timeouts = 0
+                        locator.reset_track()
                 else:
                     self._local_timeouts = 0
 
@@ -572,6 +589,11 @@ class LiveLocator(threading.Thread):
                                     accepted=False,
                                     inl=cand[3],
                                 )
+                                # the engine (hybrid) may have committed its
+                                # track to this rejected candidate; without
+                                # the reset, self-consistent ECC frames would
+                                # confirm their own wrong lock through the vote
+                                locator.reset_track()
                                 self.latest = dict(
                                     ts=t0,
                                     pose=None,

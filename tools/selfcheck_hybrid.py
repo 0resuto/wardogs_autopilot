@@ -34,6 +34,22 @@ def _check(name, cond, extra=""):
         _FAILED.append(name)
 
 
+def _center_offset(cfg, ms, heading_deg):
+    """Native-px offset of the calibrated player centre from the frame centre.
+
+    The matcher reports the player at frame centre + (center_dx, center_dy)
+    rotated by the heading; the synthetic frames here are built around the
+    frame centre, so their expected reading carries this offset.
+    """
+    dx = float(cfg.get("center_dx", 0.0) or 0.0)
+    dy = float(cfg.get("center_dy", 0.0) or 0.0)
+    a = math.radians(heading_deg)
+    return (
+        ms * (dx * math.cos(a) - dy * math.sin(a)),
+        ms * (dx * math.sin(a) + dy * math.cos(a)),
+    )
+
+
 def _build_frame(preview, native_xy, heading_deg, ms):
     """Player-up minimap frame around native_xy with the given compass heading."""
     px, py = native_xy[0] / 2.0, native_xy[1] / 2.0  # preview = native / 2
@@ -65,6 +81,7 @@ def main():
     locator.set_map("zestafona")
     mu = locator.load_global_map()
     ms = locator._mini_scale("zestafona")
+    cfg = locator.get_store().loc_cfg()
     px_per_m = locator.get_store().px_per_m("zestafona")
     preview = np.load(os.path.join(ROOT, "data", "maps", "zestafona_preview_16384.npy"))
     center = _pick_center(mu)
@@ -115,7 +132,8 @@ def main():
         else:
             ecc_ms.append(dt_ms)
         gx, gy, gh = truth[k]
-        pos_err = math.hypot(pose["map_x"] - gx, pose["map_y"] - gy)
+        ox, oy = _center_offset(cfg, ms, gh)
+        pos_err = math.hypot(pose["map_x"] - (gx + ox), pose["map_y"] - (gy + oy))
         th_err = abs((pose["th"] - gh + 540.0) % 360.0 - 180.0)
         pos_errs.append(pos_err)
         th_errs.append(th_err)
